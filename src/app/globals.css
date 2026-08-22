@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+:root {
+  --ground: #f2f5f2;
+  --surface: #ffffff;
+  --surface-2: #f4f7f4;
+  --ink: #132420;
+  --ink-soft: #41544d;
+  --ink-faint: #6a7c74;
+  --line: #dde5e0;
+  --line-strong: #c4d0c9;
+  --primary: #0f5a4e;
+  --primary-hover: #0c4a40;
+  --primary-soft: #e2efeb;
+  --accent: #a9791f;
+  --good: #1f7a54;
+  --good-soft: #e0f0e8;
+  --warn: #96610e;
+  --warn-soft: #f6ecd7;
+  --crit: #a13636;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+/* ---- Componentklassen (lichte eigen UI-kit, shadcn kan later) ---- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(19, 36, 32, 0.04);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.55rem 1rem;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.btn-primary:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+  color: #fff;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 0.3rem;
+}
+
+.input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+.input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.badge-klein {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.badge-midden {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.badge-groot {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.badge-audit {
+  background: #f6e3e1;
+  color: var(--crit);
+}
+
+.muted {
+  color: var(--ink-faint);
+}
