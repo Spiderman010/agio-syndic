@@ -104,7 +104,9 @@ export default async function FiscalYearDetail({
 
   const eigenaarMap = new Map<string, string>();
   for (const row of ownershipData ?? []) {
-    const o = row.owners as { id: string; full_name: string } | null;
+    // Supabase typt to-one FK-joins soms als array; normaliseer naar enkel object
+    const rawOwner = row.owners as { id: string; full_name: string }[] | { id: string; full_name: string } | null;
+    const o = Array.isArray(rawOwner) ? (rawOwner[0] ?? null) : rawOwner;
     if (o) eigenaarMap.set(o.id, o.full_name);
   }
   const eigenaars = Array.from(eigenaarMap.entries()).map(([id, full_name]) => ({ id, full_name }));
@@ -148,9 +150,12 @@ export default async function FiscalYearDetail({
 
     const saldoMap = new Map<string, { naam: string; opgeroepen: number; voldaan: number; teLaat: number }>();
     for (const row of allocData ?? []) {
-      const owner = row.owners as { id: string; full_name: string } | null;
+      // Supabase typt to-one FK-joins soms als array; normaliseer naar enkel object
+      const rawOwner = row.owners as { id: string; full_name: string }[] | { id: string; full_name: string } | null;
+      const owner = Array.isArray(rawOwner) ? (rawOwner[0] ?? null) : rawOwner;
       if (!owner) continue;
-      const cc = row.charge_calls as { due_date: string | null } | null;
+      const rawCc = row.charge_calls as { due_date: string | null }[] | { due_date: string | null } | null;
+      const cc = Array.isArray(rawCc) ? (rawCc[0] ?? null) : rawCc;
       const open = Number(row.amount) - Number(row.settled_amount);
       const teLaat =
         cc?.due_date && new Date(cc.due_date) < new Date() && open > 0 ? open : 0;
