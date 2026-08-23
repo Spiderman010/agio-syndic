@@ -1,0 +1,151 @@
+{
+  "common": {
+    "signOut": "Uitloggen",
+    "back": "Terug",
+    "add": "Toevoegen",
+    "create": "Aanmaken",
+    "save": "Opslaan",
+    "optional": "optioneel",
+    "paid": "betaald",
+    "open": "open",
+    "late": "te laat"
+  },
+  "lang": {
+    "fr": "FR",
+    "ar": "AR",
+    "nl": "NL"
+  },
+  "auth": {
+    "title": "Agio Syndic",
+    "subtitle": "Log in of maak een beheerdersaccount aan.",
+    "email": "E-mail",
+    "password": "Wachtwoord",
+    "signIn": "Inloggen",
+    "signUp": "Account aanmaken",
+    "emailConfirm": "Account aangemaakt. Bevestig je e-mail en log daarna in."
+  },
+  "home": {
+    "tagline": "Syndic-software voor de Marokkaanse markt — conform Décret 2.23.700.",
+    "cta": "Inloggen / account aanmaken"
+  },
+  "onboarding": {
+    "title": "Welkom bij Agio Syndic",
+    "subtitle": "Maak je organisatie (syndickantoor) aan om te beginnen.",
+    "orgName": "Naam organisatie",
+    "orgPlaceholder": "bv. Agio Syndic Tanger",
+    "createBtn": "Aanmaken en starten"
+  },
+  "buildings": {
+    "title": "Gebouwen",
+    "subtitle": "Beheer je copropriétés. Het tier bepaalt welke bijlagen en boekhouding gelden.",
+    "noBuildings": "Nog geen gebouwen. Maak er rechts een aan.",
+    "newBuilding": "Nieuw gebouw",
+    "name": "Naam",
+    "address": "Adres",
+    "tier": "Tier",
+    "tantiemesTotal": "Tantièmes",
+    "language": "Taal",
+    "createBtn": "Gebouw aanmaken",
+    "tierNote": "Later leidt het systeem het tier automatisch af uit de opgeroepen lasten.",
+    "auditRequired": "Audit vereist",
+    "boekjarenLink": "Boekjaren →",
+    "annexes": "Verplichte bijlagen",
+    "tantiemesStatus": "Tantièmes verdeeld",
+    "units": "Units",
+    "owners": "Eigenaars",
+    "noUnits": "Nog geen units.",
+    "noOwners": "Nog geen eigenaars.",
+    "addUnit": "Unit toevoegen",
+    "addOwner": "Eigenaar toevoegen",
+    "unitLabel": "Label",
+    "unitType": "Type",
+    "noOwner": "geen eigenaar",
+    "linkBtn": "Koppel",
+    "mre": "Woont in het buitenland (MRE)",
+    "fullName": "Naam",
+    "email": "E-mail",
+    "unitTypes": {
+      "appartement": "Appartement",
+      "commerce": "Commerce",
+      "parking": "Parking",
+      "cave": "Cave",
+      "autre": "Autre"
+    },
+    "langs": {
+      "fr": "Frans",
+      "ar": "Arabisch",
+      "nl": "Nederlands",
+      "en": "Engels"
+    }
+  },
+  "boekjaren": {
+    "title": "Boekjaren",
+    "crumb": "Boekjaren",
+    "noBoekjaren": "Nog geen boekjaren aangemaakt.",
+    "newBoekjaar": "Nieuw boekjaar aanmaken",
+    "year": "Jaar",
+    "startDate": "Startdatum",
+    "endDate": "Einddatum",
+    "createBtn": "Boekjaar aanmaken",
+    "called": "MAD opgeroepen",
+    "status": {
+      "open": "Open",
+      "closed": "Gesloten"
+    }
+  },
+  "fy": {
+    "crumb": "Boekjaar",
+    "title": "Boekjaar",
+    "closed": "Gesloten"
+  },
+  "charges": {
+    "title": "Lastenoproepen",
+    "noCharges": "Nog geen lastenoproepen.",
+    "addCharge": "Lastenoproep toevoegen",
+    "type": "Type",
+    "period": "Periode",
+    "periodPlaceholder": "bv. Q1 2026",
+    "labelField": "Label",
+    "labelPlaceholder": "Onderhoud lift Q2",
+    "amount": "Bedrag (MAD)",
+    "callDate": "Oproepdatum",
+    "dueDate": "Vervaldatum",
+    "createBtn": "Lastenoproep aanmaken",
+    "verdeling": "Verdeling per unit",
+    "late": "⚠ te laat",
+    "date": "Datum",
+    "dueLabel": "Vervaldatum",
+    "types": {
+      "regulier": "Regulier",
+      "exceptionnel": "Uitzonderlijk"
+    }
+  },
+  "payments": {
+    "title": "Betalingen",
+    "noPayments": "Nog geen betalingen.",
+    "registerPayment": "Betaling registreren",
+    "owner": "Eigenaar",
+    "amount": "Bedrag (MAD)",
+    "date": "Datum",
+    "method": "Methode",
+    "reference": "Referentie",
+    "referencePlaceholder": "VIR-2026-001",
+    "registerBtn": "Betaling registreren",
+    "methods": {
+      "virement": "Virement",
+      "especes": "Espèces",
+      "cheque": "Chèque",
+      "carte": "Carte"
+    }
+  },
+  "saldo": {
+    "title": "Saldo per eigenaar",
+    "noData": "Nog geen lastenoproepen of geen eigenaars gekoppeld.",
+    "owner": "Eigenaar",
+    "called": "Opgeroepen",
+    "paid": "Voldaan",
+    "open": "Open",
+    "lateSuffix": "MAD te laat",
+    "total": "Totaal"
+  }
+}

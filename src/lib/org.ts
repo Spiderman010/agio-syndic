@@ -1,10 +1,9 @@
-import { redirect } from "next/navigation";
+import { redirect } from "@/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { OrgRole, Organization } from "@/lib/types";
 
 export type ActiveOrg = { role: OrgRole; org: Organization };
 
-// Haalt de (eerste) organisatie van de ingelogde gebruiker op.
 export async function getActiveOrg(): Promise<ActiveOrg | null> {
   const supabase = await createClient();
   const {
@@ -25,7 +24,6 @@ export async function getActiveOrg(): Promise<ActiveOrg | null> {
   return { role: data.role as OrgRole, org };
 }
 
-// Vereist een organisatie; stuurt anders naar onboarding.
 export async function requireOrg(): Promise<ActiveOrg> {
   const active = await getActiveOrg();
   if (!active) redirect("/onboarding");

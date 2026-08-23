@@ -1,0 +1,151 @@
+{
+  "common": {
+    "signOut": "Déconnexion",
+    "back": "Retour",
+    "add": "Ajouter",
+    "create": "Créer",
+    "save": "Enregistrer",
+    "optional": "optionnel",
+    "paid": "payé",
+    "open": "ouvert",
+    "late": "en retard"
+  },
+  "lang": {
+    "fr": "FR",
+    "ar": "AR",
+    "nl": "NL"
+  },
+  "auth": {
+    "title": "Agio Syndic",
+    "subtitle": "Connectez-vous ou créez un compte administrateur.",
+    "email": "E-mail",
+    "password": "Mot de passe",
+    "signIn": "Se connecter",
+    "signUp": "Créer un compte",
+    "emailConfirm": "Compte créé. Confirmez votre e-mail et connectez-vous."
+  },
+  "home": {
+    "tagline": "Logiciel syndic pour le marché marocain — conforme au Décret 2.23.700.",
+    "cta": "Se connecter / créer un compte"
+  },
+  "onboarding": {
+    "title": "Bienvenue sur Agio Syndic",
+    "subtitle": "Créez votre organisation (cabinet syndic) pour commencer.",
+    "orgName": "Nom de l'organisation",
+    "orgPlaceholder": "ex. Agio Syndic Tanger",
+    "createBtn": "Créer et démarrer"
+  },
+  "buildings": {
+    "title": "Immeubles",
+    "subtitle": "Gérez vos copropriétés. Le tier détermine les annexes et la comptabilité applicables.",
+    "noBuildings": "Aucun immeuble. Créez-en un à droite.",
+    "newBuilding": "Nouvel immeuble",
+    "name": "Nom",
+    "address": "Adresse",
+    "tier": "Tier",
+    "tantiemesTotal": "Tantièmes",
+    "language": "Langue",
+    "createBtn": "Créer l'immeuble",
+    "tierNote": "Plus tard, le système déduira automatiquement le tier à partir des charges appelées.",
+    "auditRequired": "Audit requis",
+    "boekjarenLink": "Exercices →",
+    "annexes": "Annexes requises",
+    "tantiemesStatus": "Tantièmes attribués",
+    "units": "Unités",
+    "owners": "Copropriétaires",
+    "noUnits": "Aucune unité.",
+    "noOwners": "Aucun copropriétaire.",
+    "addUnit": "Ajouter une unité",
+    "addOwner": "Ajouter un copropriétaire",
+    "unitLabel": "Libellé",
+    "unitType": "Type",
+    "noOwner": "sans propriétaire",
+    "linkBtn": "Lier",
+    "mre": "Résident à l'étranger (MRE)",
+    "fullName": "Nom complet",
+    "email": "E-mail",
+    "unitTypes": {
+      "appartement": "Appartement",
+      "commerce": "Commerce",
+      "parking": "Parking",
+      "cave": "Cave",
+      "autre": "Autre"
+    },
+    "langs": {
+      "fr": "Français",
+      "ar": "Arabe",
+      "nl": "Néerlandais",
+      "en": "Anglais"
+    }
+  },
+  "boekjaren": {
+    "title": "Exercices",
+    "crumb": "Exercices",
+    "noBoekjaren": "Aucun exercice créé.",
+    "newBoekjaar": "Créer un exercice",
+    "year": "Année",
+    "startDate": "Date de début",
+    "endDate": "Date de fin",
+    "createBtn": "Créer l'exercice",
+    "called": "MAD appelés",
+    "status": {
+      "open": "Ouvert",
+      "closed": "Clôturé"
+    }
+  },
+  "fy": {
+    "crumb": "Exercice",
+    "title": "Exercice",
+    "closed": "Clôturé"
+  },
+  "charges": {
+    "title": "Appels de charges",
+    "noCharges": "Aucun appel de charges.",
+    "addCharge": "Ajouter un appel",
+    "type": "Type",
+    "period": "Période",
+    "periodPlaceholder": "ex. T1 2026",
+    "labelField": "Libellé",
+    "labelPlaceholder": "Entretien ascenseur T2",
+    "amount": "Montant (MAD)",
+    "callDate": "Date d'appel",
+    "dueDate": "Date d'échéance",
+    "createBtn": "Créer l'appel",
+    "verdeling": "Répartition par unité",
+    "late": "⚠ en retard",
+    "date": "Date",
+    "dueLabel": "Échéance",
+    "types": {
+      "regulier": "Régulier",
+      "exceptionnel": "Exceptionnel"
+    }
+  },
+  "payments": {
+    "title": "Paiements",
+    "noPayments": "Aucun paiement.",
+    "registerPayment": "Enregistrer un paiement",
+    "owner": "Copropriétaire",
+    "amount": "Montant (MAD)",
+    "date": "Date",
+    "method": "Mode",
+    "reference": "Référence",
+    "referencePlaceholder": "VIR-2026-001",
+    "registerBtn": "Enregistrer",
+    "methods": {
+      "virement": "Virement",
+      "especes": "Espèces",
+      "cheque": "Chèque",
+      "carte": "Carte"
+    }
+  },
+  "saldo": {
+    "title": "Solde par copropriétaire",
+    "noData": "Aucun appel de charges ou aucun copropriétaire lié.",
+    "owner": "Copropriétaire",
+    "called": "Appelé",
+    "paid": "Payé",
+    "open": "Solde",
+    "lateSuffix": "MAD en retard",
+    "total": "Total"
+  }
+}

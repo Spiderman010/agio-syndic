@@ -1,14 +1,10 @@
-import Link from "next/link";
-import { signOut } from "@/app/login/actions";
+import { Link } from "@/navigation";
+import { signOut } from "@/app/[locale]/login/actions";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 export default function TopBar({ orgName }: { orgName: string }) {
   return (
-    <header
-      style={{
-        borderBottom: "1px solid var(--line)",
-        background: "var(--surface)",
-      }}
-    >
+    <header style={{ borderBottom: "1px solid var(--line)", background: "var(--surface)" }}>
       <div
         style={{
           maxWidth: 1000,
@@ -38,13 +34,13 @@ export default function TopBar({ orgName }: { orgName: string }) {
           </span>
           <strong style={{ color: "var(--ink)" }}>Agio Syndic</strong>
         </Link>
+
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <span className="muted" style={{ fontSize: "0.85rem" }}>
-            {orgName}
-          </span>
+          <LanguageSwitcher />
+          <span className="muted" style={{ fontSize: "0.85rem" }}>{orgName}</span>
           <form action={signOut}>
             <button className="btn" style={{ padding: "0.4rem 0.8rem", fontSize: "0.82rem" }}>
-              Uitloggen
+              Déconnexion
             </button>
           </form>
         </div>
