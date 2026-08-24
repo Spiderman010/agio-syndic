@@ -91,6 +91,28 @@ export type Payment = {
   created_at: string;
 };
 
+export type ExpenseCategory = {
+  id: string;
+  organization_id: string;
+  name: string;
+  default_account_id: string | null;
+};
+
+export type Expense = {
+  id: string;
+  organization_id: string;
+  building_id: string;
+  fiscal_year_id: string | null;
+  category_id: string | null;
+  account_id: string | null;
+  supplier: string | null;
+  description: string | null;
+  amount: number;
+  expense_date: string;
+  receipt_url: string | null;
+  created_at: string;
+};
+
 export type Owner = {
   id: string;
   organization_id: string;

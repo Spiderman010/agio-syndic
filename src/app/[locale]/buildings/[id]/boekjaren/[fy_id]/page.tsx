@@ -48,10 +48,11 @@ function fmt(n: number) {
   return n.toLocaleString("fr-MA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function statusKleur(open: number, dueDate: string | null): string {
-  if (open <= 0) return "var(--good)";
-  if (dueDate && new Date(dueDate) < new Date()) return "var(--crit)";
-  return "var(--warn)";
+function allocBadge(settled: number, amount: number, dueDate: string | null) {
+  if (settled >= amount - 0.005) return <span className="badge badge-betaald">payé</span>;
+  if (dueDate && new Date(dueDate) < new Date()) return <span className="badge badge-telaat">en retard</span>;
+  if (settled > 0) return <span className="badge badge-deels">partiel</span>;
+  return <span className="badge badge-openstaand">en attente</span>;
 }
 
 export default async function FiscalYearDetail({
@@ -246,13 +247,7 @@ export default async function FiscalYearDetail({
                                   </span>
                                   <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                     <span style={{ fontWeight: 600 }}>{fmt(Number(ca.amount))} MAD</span>
-                                    {open <= 0 ? (
-                                      <span style={{ color: "var(--good)", fontSize: "0.72rem", fontWeight: 600 }}>✓ payé</span>
-                                    ) : (
-                                      <span style={{ color: statusKleur(open, cc.due_date), fontSize: "0.72rem", fontWeight: 600 }}>
-                                        {fmt(open)} restant
-                                      </span>
-                                    )}
+                                    {allocBadge(Number(ca.settled_amount), Number(ca.amount), cc.due_date)}
                                   </span>
                                 </div>
                               );

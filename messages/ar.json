@@ -81,13 +81,14 @@
   "boekjaren": {
     "title": "السنوات المالية",
     "crumb": "السنوات المالية",
-    "noBoekjaren": "لا توجد سنوات مالية.",
+    "noBoekjaren": "لا توجد سنوات مالية. أنشئ أول سنة مالية أدناه.",
     "newBoekjaar": "إنشاء سنة مالية",
     "year": "السنة",
     "startDate": "تاريخ البداية",
     "endDate": "تاريخ النهاية",
     "createBtn": "إنشاء السنة المالية",
     "called": "MAD مستدعى",
+    "yearExists": "توجد سنة مالية للعام {year} بالفعل.",
     "status": {
       "open": "مفتوح",
       "closed": "مغلق"
@@ -137,6 +138,37 @@
       "cheque": "شيك",
       "carte": "بطاقة"
     }
+  },
+  "expenses": {
+    "title": "المصاريف",
+    "subtitle": "سجّل مصاريف العمارة ووثائقها.",
+    "noExpenses": "لا توجد مصاريف مسجّلة. أضف مصروفاً أدناه.",
+    "addExpense": "إضافة مصروف",
+    "supplier": "المورد",
+    "supplierPlaceholder": "مثال: كهرباء المغرب",
+    "description": "الوصف",
+    "descPlaceholder": "مثال: فاتورة صيانة المصعد",
+    "amount": "المبلغ (MAD)",
+    "date": "التاريخ",
+    "category": "الفئة",
+    "noCategory": "بدون فئة",
+    "fiscalYear": "السنة المالية",
+    "noFiscalYear": "غير مرتبط بسنة مالية",
+    "receipt": "الوثيقة المبررة",
+    "createBtn": "تسجيل المصروف",
+    "categories": "فئات المصاريف",
+    "noCategories": "لا توجد فئات. أنشئ فئة لربط المصاريف بحساب.",
+    "categoryName": "اسم الفئة",
+    "addCategory": "إضافة",
+    "expensesLink": "المصاريف ←",
+    "viewReceipt": "عرض الوثيقة",
+    "uploadHint": "صورة أو PDF، الحد الأقصى 10 ميغابايت"
+  },
+  "bank": {
+    "title": "البيانات البنكية",
+    "bankName": "البنك",
+    "rib": "RIB / IBAN",
+    "saveBtn": "حفظ"
   },
   "saldo": {
     "title": "الرصيد لكل مالك",

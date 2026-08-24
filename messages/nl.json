@@ -81,13 +81,14 @@
   "boekjaren": {
     "title": "Boekjaren",
     "crumb": "Boekjaren",
-    "noBoekjaren": "Nog geen boekjaren aangemaakt.",
+    "noBoekjaren": "Nog geen boekjaren aangemaakt. Maak het eerste boekjaar hieronder aan.",
     "newBoekjaar": "Nieuw boekjaar aanmaken",
     "year": "Jaar",
     "startDate": "Startdatum",
     "endDate": "Einddatum",
     "createBtn": "Boekjaar aanmaken",
     "called": "MAD opgeroepen",
+    "yearExists": "Er bestaat al een boekjaar voor {year}.",
     "status": {
       "open": "Open",
       "closed": "Gesloten"
@@ -137,6 +138,37 @@
       "cheque": "Chèque",
       "carte": "Carte"
     }
+  },
+  "expenses": {
+    "title": "Uitgaven",
+    "subtitle": "Registreer de uitgaven van het gebouw en hun bewijsstukken.",
+    "noExpenses": "Nog geen uitgaven geregistreerd. Voeg er hieronder een toe.",
+    "addExpense": "Uitgave toevoegen",
+    "supplier": "Leverancier",
+    "supplierPlaceholder": "bv. LYDEC",
+    "description": "Omschrijving",
+    "descPlaceholder": "bv. Liftonderhoud Q2",
+    "amount": "Bedrag (MAD)",
+    "date": "Datum",
+    "category": "Categorie",
+    "noCategory": "Geen categorie",
+    "fiscalYear": "Boekjaar",
+    "noFiscalYear": "Niet gekoppeld aan boekjaar",
+    "receipt": "Bewijsstuk",
+    "createBtn": "Uitgave registreren",
+    "categories": "Uitgavecategorieën",
+    "noCategories": "Geen categorieën. Voeg er een toe om uitgaven aan een rekening te koppelen.",
+    "categoryName": "Naam categorie",
+    "addCategory": "Toevoegen",
+    "expensesLink": "Uitgaven →",
+    "viewReceipt": "Bewijsstuk bekijken",
+    "uploadHint": "Afbeelding of PDF, max 10 MB"
+  },
+  "bank": {
+    "title": "Bankgegevens",
+    "bankName": "Bank",
+    "rib": "RIB / IBAN",
+    "saveBtn": "Opslaan"
   },
   "saldo": {
     "title": "Saldo per eigenaar",

@@ -3,7 +3,7 @@ import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
 import TopBar from "@/components/TopBar";
 import { Link } from "@/navigation";
-import { createUnit, createOwner, assignOwner } from "./actions";
+import { createUnit, createOwner, assignOwner, updateBankInfo } from "./actions";
 import { TIER_LABELS, TIER_ANNEXES } from "@/lib/tier";
 import type { Building, Owner } from "@/lib/types";
 
@@ -64,6 +64,9 @@ export default async function BuildingDetail({
               {b.address && <div className="muted" style={{ fontSize: "0.9rem" }}>{b.address}</div>}
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <Link href={`/buildings/${id}/expenses`} className="btn" style={{ fontSize: "0.82rem", padding: "0.3rem 0.7rem" }}>
+                Dépenses →
+              </Link>
               <Link href={`/buildings/${id}/boekjaren`} className="btn" style={{ fontSize: "0.82rem", padding: "0.3rem 0.7rem" }}>
                 Exercices →
               </Link>
@@ -84,6 +87,23 @@ export default async function BuildingDetail({
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Bankgegevens */}
+        <div className="card" style={{ padding: "1.1rem 1.4rem", marginBottom: "1.4rem" }}>
+          <h2 style={{ fontSize: "1rem", margin: "0 0 0.8rem" }}>Coordonnées bancaires</h2>
+          <form action={updateBankInfo} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: "0.7rem", alignItems: "end" }}>
+            <input type="hidden" name="building_id" value={b.id} />
+            <div>
+              <label className="label" htmlFor="bank_name">Banque</label>
+              <input className="input" id="bank_name" name="bank_name" defaultValue={b.bank_name ?? ""} placeholder="ex. Attijariwafa Bank" />
+            </div>
+            <div>
+              <label className="label" htmlFor="bank_rib">RIB / IBAN</label>
+              <input className="input" id="bank_rib" name="bank_rib" defaultValue={b.bank_rib ?? ""} placeholder="007 780 0001234567890123 56" />
+            </div>
+            <button className="btn btn-primary" style={{ whiteSpace: "nowrap" }}>Enregistrer</button>
+          </form>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "1.4rem", alignItems: "start" }}>

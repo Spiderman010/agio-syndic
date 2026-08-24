@@ -44,6 +44,25 @@ export async function createOwner(formData: FormData) {
   redirect(`/buildings/${buildingId}`);
 }
 
+export async function updateBankInfo(formData: FormData) {
+  await requireOrg();
+  const buildingId = String(formData.get("building_id") ?? "");
+  const bank_name = String(formData.get("bank_name") ?? "").trim() || null;
+  const bank_rib = String(formData.get("bank_rib") ?? "").trim() || null;
+
+  if (!buildingId) return { error: "Gebouw-ID ontbreekt." };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("buildings")
+    .update({ bank_name, bank_rib })
+    .eq("id", buildingId);
+
+  if (error) return { error: error.message };
+  revalidatePath(`/buildings/${buildingId}`);
+  redirect(`/buildings/${buildingId}`);
+}
+
 export async function assignOwner(formData: FormData) {
   await requireOrg();
   const buildingId = String(formData.get("building_id") ?? "");

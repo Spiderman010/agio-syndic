@@ -81,13 +81,14 @@
   "boekjaren": {
     "title": "Exercices",
     "crumb": "Exercices",
-    "noBoekjaren": "Aucun exercice créé.",
+    "noBoekjaren": "Aucun exercice créé. Créez le premier exercice fiscal ci-dessous.",
     "newBoekjaar": "Créer un exercice",
     "year": "Année",
     "startDate": "Date de début",
     "endDate": "Date de fin",
     "createBtn": "Créer l'exercice",
     "called": "MAD appelés",
+    "yearExists": "Il existe déjà un exercice pour l'année {year}.",
     "status": {
       "open": "Ouvert",
       "closed": "Clôturé"
@@ -137,6 +138,37 @@
       "cheque": "Chèque",
       "carte": "Carte"
     }
+  },
+  "expenses": {
+    "title": "Dépenses",
+    "subtitle": "Enregistrez les dépenses du bâtiment et leurs justificatifs.",
+    "noExpenses": "Aucune dépense enregistrée. Ajoutez-en une ci-dessous.",
+    "addExpense": "Ajouter une dépense",
+    "supplier": "Fournisseur",
+    "supplierPlaceholder": "ex. Électricité Maroc",
+    "description": "Description",
+    "descPlaceholder": "ex. Facture entretien ascenseur",
+    "amount": "Montant (MAD)",
+    "date": "Date",
+    "category": "Catégorie",
+    "noCategory": "Sans catégorie",
+    "fiscalYear": "Exercice",
+    "noFiscalYear": "Non lié à un exercice",
+    "receipt": "Justificatif",
+    "createBtn": "Enregistrer la dépense",
+    "categories": "Catégories de dépenses",
+    "noCategories": "Aucune catégorie. Créez-en une pour lier les dépenses à un compte.",
+    "categoryName": "Nom de la catégorie",
+    "addCategory": "Ajouter",
+    "expensesLink": "Dépenses →",
+    "viewReceipt": "Voir le justificatif",
+    "uploadHint": "Image ou PDF, max 10 Mo"
+  },
+  "bank": {
+    "title": "Coordonnées bancaires",
+    "bankName": "Banque",
+    "rib": "RIB / IBAN",
+    "saveBtn": "Enregistrer"
   },
   "saldo": {
     "title": "Solde par copropriétaire",

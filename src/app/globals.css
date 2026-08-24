@@ -136,6 +136,23 @@ a {
   background: #f6e3e1;
   color: var(--crit);
 }
+.badge-betaald {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.badge-deels {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.badge-openstaand {
+  background: var(--surface-2);
+  color: var(--ink-soft);
+  border-color: var(--line-strong);
+}
+.badge-telaat {
+  background: #f6e3e1;
+  color: var(--crit);
+}
 
 .muted {
   color: var(--ink-faint);

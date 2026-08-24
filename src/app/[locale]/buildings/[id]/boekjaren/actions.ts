@@ -21,7 +21,12 @@ export async function createFiscalYear(formData: FormData) {
     .select("id")
     .single();
 
-  if (error || !data) return { error: error?.message ?? "Aanmaken mislukt." };
+  if (error || !data) {
+    if (error?.code === "23505" || error?.message?.includes("fiscal_years_building_id_year_key")) {
+      return { error: `__duplicate_year__${year}` };
+    }
+    return { error: error?.message ?? "Aanmaken mislukt." };
+  }
   revalidatePath(`/buildings/${buildingId}/boekjaren`);
   redirect(`/buildings/${buildingId}/boekjaren/${data.id}`);
 }

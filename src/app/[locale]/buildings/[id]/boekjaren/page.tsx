@@ -3,8 +3,9 @@ import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
 import TopBar from "@/components/TopBar";
 import { Link } from "@/navigation";
-import { createFiscalYear } from "./actions";
+import { getTranslations } from "next-intl/server";
 import type { Building, FiscalYear } from "@/lib/types";
+import BoekjaarForm from "./BoekjaarForm";
 
 export default async function BoekjarenPage({
   params,
@@ -14,6 +15,7 @@ export default async function BoekjarenPage({
   const { id } = await params;
   const { org } = await requireOrg();
   const supabase = await createClient();
+  const t = await getTranslations("boekjaren");
 
   const { data: buildingData } = await supabase.from("buildings").select("*").eq("id", id).maybeSingle();
   if (!buildingData) notFound();
@@ -39,6 +41,7 @@ export default async function BoekjarenPage({
   }
 
   const huidigJaar = new Date().getFullYear();
+  const existingYears = fiscalYears.map((fy) => fy.year);
 
   return (
     <>
@@ -48,11 +51,14 @@ export default async function BoekjarenPage({
           ← {b.name}
         </Link>
 
-        <h1 style={{ margin: "0.7rem 0 0", fontSize: "1.4rem" }}>Exercices fiscaux</h1>
+        <h1 style={{ margin: "0.7rem 0 0", fontSize: "1.4rem" }}>{t("title")}</h1>
 
         <section style={{ marginTop: "1.2rem" }}>
           {fiscalYears.length === 0 && (
-            <p className="muted" style={{ fontSize: "0.9rem" }}>Aucun exercice créé.</p>
+            <div className="card" style={{ padding: "1.6rem", textAlign: "center" }}>
+              <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>📅</div>
+              <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>{t("noBoekjaren")}</div>
+            </div>
           )}
           <div style={{ display: "grid", gap: "0.6rem" }}>
             {fiscalYears.map((fy) => {
@@ -61,7 +67,7 @@ export default async function BoekjarenPage({
                 <Link key={fy.id} href={`/buildings/${id}/boekjaren/${fy.id}`} style={{ textDecoration: "none" }}>
                   <div className="card" style={{ padding: "1rem 1.2rem", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
                     <div>
-                      <strong style={{ fontSize: "1.05rem" }}>Exercice {fy.year}</strong>
+                      <strong style={{ fontSize: "1.05rem" }}>{t("title")} {fy.year}</strong>
                       <div className="muted" style={{ fontSize: "0.8rem", marginTop: 2 }}>
                         {fy.start_date} → {fy.end_date}
                       </div>
@@ -69,11 +75,11 @@ export default async function BoekjarenPage({
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {totaal > 0 && (
                         <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>
-                          {totaal.toLocaleString("fr-MA", { minimumFractionDigits: 2 })} MAD
+                          {totaal.toLocaleString("fr-MA", { minimumFractionDigits: 2 })} {t("called")}
                         </span>
                       )}
                       <span className={`badge ${fy.status === "open" ? "badge-klein" : "badge-midden"}`}>
-                        {fy.status === "open" ? "Ouvert" : "Clôturé"}
+                        {fy.status === "open" ? t("status.open") : t("status.closed")}
                       </span>
                       <span className="muted" style={{ fontSize: "0.85rem" }}>→</span>
                     </div>
@@ -84,25 +90,7 @@ export default async function BoekjarenPage({
           </div>
         </section>
 
-        <form action={createFiscalYear} className="card" style={{ padding: "1.2rem 1.4rem", marginTop: "1.2rem" }}>
-          <input type="hidden" name="building_id" value={b.id} />
-          <h2 style={{ fontSize: "1rem", margin: "0 0 1rem" }}>Créer un exercice</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.8rem" }}>
-            <div>
-              <label className="label" htmlFor="year">Année</label>
-              <input className="input" id="year" name="year" type="number" min={2000} max={2100} defaultValue={huidigJaar} required />
-            </div>
-            <div>
-              <label className="label" htmlFor="start_date">Début</label>
-              <input className="input" id="start_date" name="start_date" type="date" defaultValue={`${huidigJaar}-01-01`} required />
-            </div>
-            <div>
-              <label className="label" htmlFor="end_date">Fin</label>
-              <input className="input" id="end_date" name="end_date" type="date" defaultValue={`${huidigJaar}-12-31`} required />
-            </div>
-          </div>
-          <button className="btn btn-primary" style={{ marginTop: "1rem" }}>Créer l'exercice</button>
-        </form>
+        <BoekjaarForm buildingId={b.id} existingYears={existingYears} huidigJaar={huidigJaar} />
       </main>
     </>
   );
