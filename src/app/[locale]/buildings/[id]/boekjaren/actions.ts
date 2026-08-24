@@ -56,15 +56,21 @@ export async function createChargeCall(formData: FormData) {
 
   const supabase = await createClient();
 
-  // Boekjaar moet bij de organisatie horen én open zijn.
-  const guard = await assertFiscalYearWritable(supabase, fiscal_year_id, org.id);
-  if (guard) return { error: guard };
-
-  const { data: fy } = await supabase
+  // Eén lookup die zowel de tenant-check, de statuscheck als het gebouw levert;
+  // een tweede query zou bij een lege uitkomst een /buildings/undefined-redirect
+  // opleveren.
+  const { data: fy, error: fyError } = await supabase
     .from("fiscal_years")
-    .select("building_id")
+    .select("organization_id, building_id, status")
     .eq("id", fiscal_year_id)
-    .single();
+    .maybeSingle();
+
+  if (fyError || !fy || fy.organization_id !== org.id) {
+    return { error: "Boekjaar bestaat niet binnen deze organisatie." };
+  }
+  if (fy.status === "closed") {
+    return { error: "Dit boekjaar is afgesloten en kan niet meer worden gewijzigd." };
+  }
 
   const { error } = await supabase.from("charge_calls").insert({
     organization_id: org.id, // P1-1: was ontbrekend
@@ -75,8 +81,8 @@ export async function createChargeCall(formData: FormData) {
 
   if (error) return { error: toUserError(error, "Aanmaken van de lastenoproep is mislukt.") };
 
-  revalidatePath(`/buildings/${fy?.building_id}/boekjaren/${fiscal_year_id}`);
-  redirect(`/buildings/${fy?.building_id}/boekjaren/${fiscal_year_id}`);
+  revalidatePath(`/buildings/${fy.building_id}/boekjaren/${fiscal_year_id}`);
+  redirect(`/buildings/${fy.building_id}/boekjaren/${fiscal_year_id}`);
 }
 
 export async function createPayment(formData: FormData) {

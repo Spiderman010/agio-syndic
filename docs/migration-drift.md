@@ -18,6 +18,7 @@ Bijgewerkt: 24-08-2026, na `m9_financial_integrity`.
 | 10 | `20260824190417_m8_security_tenant_isolation` | ✅ exact | in orde |
 | 11 | `20260824190547_m9_financial_integrity` | ✅ exact | in orde |
 | 12 | `20260824195222_m10_function_exposure_hardening` | ✅ exact | in orde |
+| 13 | `20260824202502_m11_integrity_gaps` | ✅ exact | in orde |
 
 **Opgelost in deze ronde**
 
@@ -74,8 +75,8 @@ supabase migration repair --status applied 20260822204127
 supabase migration repair --status applied 20260824161924
 ```
 
-`m6`, `m7`, `m8`, `m9` en `m10` hoeven niet gerepareerd te worden: hun
-bestandsnamen komen na de hernoeming exact overeen met de live versies.
+`m6` tot en met `m11` hoeven niet gerepareerd te worden: hun bestandsnamen komen
+na de hernoeming exact overeen met de live versies.
 
 ### Stap 3 — controleren
 

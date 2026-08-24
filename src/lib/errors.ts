@@ -12,10 +12,19 @@ export type DbError = {
   details?: string | null;
 } | null;
 
-/** Herkenningspunten voor unieke constraints met een eigen boodschap. */
+/**
+ * Unieke constraints met een eigen boodschap.
+ *
+ * fiscal_years_building_id_year_key staat hier bewust NIET in: die wordt door
+ * de aanroeper met isDuplicateYear() afgevangen om het jaartal in de vertaalde
+ * melding te kunnen invullen.
+ */
 const UNIQUE_MESSAGES: Record<string, string> = {
-  fiscal_years_building_id_year_key: "__duplicate_year__",
   accounts_org_code_key: "Deze grootboekrekening bestaat al.",
+  memberships_organization_id_user_id_key:
+    "Deze gebruiker is al lid van de organisatie.",
+  fiscal_years_building_id_year_key:
+    "Er bestaat al een boekjaar voor dit jaar en gebouw.",
 };
 
 export function toUserError(error: DbError, fallback: string): string {
@@ -24,9 +33,16 @@ export function toUserError(error: DbError, fallback: string): string {
   const code = error.code ?? "";
   const message = error.message ?? "";
 
-  // Row Level Security geweigerd -> onvoldoende rechten voor deze rol.
+  // 42501 komt uit twee bronnen:
+  //  - RLS weigert de rij; die melding van Postgres is technisch van aard;
+  //  - onze eigen guard-triggers (bv. heropenen van een boekjaar), die al een
+  //    bewust geformuleerde Nederlandse boodschap dragen.
   if (code === "42501" || message.includes("row-level security")) {
-    return "Je hebt niet de juiste rechten voor deze actie.";
+    if (!message || message.includes("row-level security") ||
+        message.includes("permission denied")) {
+      return "Je hebt niet de juiste rechten voor deze actie.";
+    }
+    return message;
   }
 
   // Unieke constraint.
@@ -50,9 +66,16 @@ export function toUserError(error: DbError, fallback: string): string {
     return "Er ontbreekt een verplicht veld.";
   }
 
-  // CHECK-constraint of onze eigen RAISE EXCEPTION: boodschap is al Nederlands.
+  // 23514 dekt twee dingen:
+  //  - onze eigen RAISE EXCEPTION uit de guard-triggers; die dragen al een
+  //    bewust geformuleerde Nederlandse boodschap en gaan door;
+  //  - een kale CHECK-constraint van Postgres, met een constraintnaam erin.
+  //    Die tekst hoort niet in de UI.
   if (code === "23514") {
-    return message || fallback;
+    if (!message || /violates check constraint|check constraint "/i.test(message)) {
+      return fallback;
+    }
+    return message;
   }
 
   return fallback;

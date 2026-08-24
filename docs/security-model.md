@@ -40,6 +40,19 @@ Elke org-gescopete tabel heeft vier policies in plaats van één `FOR ALL`:
 <tabel>_delete : can_write(organization_id)
 ```
 
+**Uitzondering — afgeleide tabellen.** `charge_allocations`,
+`payment_allocations`, `journal_entries` en `journal_lines` worden uitsluitend
+door de deterministische triggers onderhouden. Hun INSERT/UPDATE/DELETE-policies
+staan op `false`: geen enkele rol kan er via de API in schrijven. Alleen SELECT
+is org-gescopet toegestaan.
+
+**Onveranderlijke sleutels.** `trig_00_org_immutable` verbiedt het wijzigen van
+`organization_id` op alle org-gescopete tabellen, `trig_00_unit_building_immutable`
+doet hetzelfde voor `units.building_id` en `trig_00_mbr_user_immutable` voor
+`memberships.user_id`. Zonder die guards kon een gebruiker met schrijfrechten in
+twee organisaties een record van de ene naar de andere verplaatsen, wat alle 27
+samengestelde foreign keys zou ondermijnen.
+
 `units` en `ownership` hebben geen eigen `organization_id`; daar loopt de keten
 via `building_id → buildings.organization_id`.
 
@@ -169,3 +182,9 @@ psql "$DATABASE_URL" -f supabase/tests/security_integration.sql
 | T10 | lege én ongebalanceerde journaalpost worden geweigerd |
 | T11 | overbetaling belandt op 4419 |
 | T12 | normale geldige flow blijft werken |
+| T13 | gesloten boekjaar: `settled_amount` mag, `amount` niet |
+| T14 | verwijderen van een journaalregel breekt de balans niet |
+| T15 | manager kan een boekjaar niet heropenen, owner wel |
+| T16 | `organization_id` van een record is onveranderlijk |
+| T17 | afgeleide tabellen zijn niet rechtstreeks beschrijfbaar |
+| T18 | PCSI-kernrekening kan niet worden verwijderd |

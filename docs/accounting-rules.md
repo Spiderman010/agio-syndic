@@ -35,8 +35,11 @@ bestaat niet.
   elke journaalpost minimaal twee regels heeft én dat debet gelijk is aan
   credit. Dit is het vangnet dat ook handmatige of toekomstige boekingsroutes
   afdekt.
-- `trig_journal_balance_check` op `journal_lines` bewaakt daarnaast de balans
-  per regelmutatie.
+- `trig_journal_balance_check` op `journal_lines` bewaakt de balans bij elke
+  regelmutatie. Sinds `m11` dekt die trigger óók DELETE: daarvoor kon één regel
+  van een tweeregelige post worden verwijderd zonder dat er iets protesteerde.
+  Wanneer de kop zelf via cascade verdwijnt slaat de controle over — er valt dan
+  niets meer te balanceren.
 
 Omdat de triggers binnen dezelfde transactie als de bron-INSERT draaien, rolt
 een mislukte journaalpost automatisch de gehele brontransactie terug. Een aparte
@@ -75,10 +78,22 @@ vordering op een eigenaar loopt gewoon door.
 
 **Wél toegestaan na afsluiting:**
 
-- `charge_allocations.settled_amount` — zie hieronder
-- `payment_allocations` INSERT — het afboeken van een doorlopende vordering
+- `charge_allocations.settled_amount`, uitsluitend bijgewerkt door de
+  FIFO-trigger — zie hieronder
+- `payment_allocations` INSERT door die trigger — het afboeken van een
+  doorlopende vordering
 - `fiscal_years.status` terugzetten naar `open` (heropenen), voorbehouden aan
-  `owner`/`admin` via RLS
+  `owner`/`admin` en afgedwongen door `fn_guard_fiscal_year_immutable`
+
+**Afgeleide tabellen zijn niet met de hand te muteren.** `charge_allocations`,
+`payment_allocations`, `journal_entries` en `journal_lines` worden uitsluitend
+door triggers onderhouden. Sinds `m11` staan hun INSERT-, UPDATE- en
+DELETE-policies voor `authenticated` op `false`: de API kan er niets in
+schrijven, ook niet in een open boekjaar. De triggerfuncties zijn
+`SECURITY DEFINER` en omzeilen RLS, dus de deterministische kern werkt gewoon.
+
+Dat sluit de laatste route waarlangs `settled_amount`, een toewijzing of het
+grootboek buiten de rekenkern om verdraaid kon worden.
 
 **Waarom `settled_amount` mag muteren.**
 
@@ -134,6 +149,11 @@ gelijk aan credit, ook bij gedeeltelijke toewijzing.
 **Bewezen door test T11** in `supabase/tests/security_integration.sql`:
 openstaand 100,00 en een betaling van 150,00 levert 100,00 aan
 `payment_allocations` en 50,00 credit op 4419.
+
+`fn_payment_fifo()` neemt sinds `m11` een `FOR UPDATE`-vergrendeling op de
+openstaande posten. Zonder die vergrendeling konden twee gelijktijdige
+betalingen dezelfde post afboeken, waarna het teveel alsnog verdween in plaats
+van op 4419 te belanden.
 
 **Bekende beperking.** Een bestaand tegoed op 4419 wordt nog niet automatisch
 verrekend met een latere lastenoproep. De eigenaar heeft dan tegelijk een

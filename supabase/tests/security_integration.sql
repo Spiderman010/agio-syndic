@@ -14,7 +14,7 @@
 --   psql "$DATABASE_URL" -f supabase/tests/security_integration.sql
 -- of via de Supabase SQL-editor / MCP-connector.
 --
--- Verwachte uitkomst: "13 geslaagd, 0 gefaald".
+-- Verwachte uitkomst: "18 geslaagd, 0 gefaald".
 -- ============================================================================
 
 DO $test$
@@ -22,6 +22,7 @@ DECLARE
   v_user_a  uuid := gen_random_uuid();
   v_user_b  uuid := gen_random_uuid();
   v_user_r  uuid := gen_random_uuid();   -- reader binnen organisatie A
+  v_user_m  uuid := gen_random_uuid();   -- manager binnen organisatie A
   v_user_c  uuid := gen_random_uuid();   -- verse gebruiker voor onboarding-test
 
   v_org_a   uuid;
@@ -49,15 +50,17 @@ DECLARE
   PROC_A text;
   PROC_B text;
   PROC_R text;
+  PROC_M text;
 BEGIN
   PROC_A := json_build_object('sub', v_user_a::text, 'role', 'authenticated')::text;
   PROC_B := json_build_object('sub', v_user_b::text, 'role', 'authenticated')::text;
   PROC_R := json_build_object('sub', v_user_r::text, 'role', 'authenticated')::text;
+  PROC_M := json_build_object('sub', v_user_m::text, 'role', 'authenticated')::text;
 
   -- =========================================================================
   -- SETUP (als postgres; RLS niet van toepassing)
   -- =========================================================================
-  INSERT INTO auth.users(id) VALUES (v_user_a), (v_user_b), (v_user_r), (v_user_c);
+  INSERT INTO auth.users(id) VALUES (v_user_a), (v_user_b), (v_user_r), (v_user_m), (v_user_c);
 
   PERFORM set_config('request.jwt.claims', PROC_A, true);
   v_org_a := public.create_organization('TEST Org A');
@@ -65,9 +68,10 @@ BEGIN
   PERFORM set_config('request.jwt.claims', PROC_B, true);
   v_org_b := public.create_organization('TEST Org B');
 
-  -- reader in organisatie A
+  -- reader en manager in organisatie A
   INSERT INTO public.memberships(organization_id, user_id, role)
-  VALUES (v_org_a, v_user_r, 'reader');
+  VALUES (v_org_a, v_user_r, 'reader'),
+         (v_org_a, v_user_m, 'manager');
 
   -- Organisatie B: gebouw + eigenaar (de "vreemde" tenant)
   INSERT INTO public.buildings(organization_id, name, total_tantiemes)
@@ -485,6 +489,85 @@ BEGIN
   END IF;
   IF ok THEN pass := pass + 1; report := report || E'\n  PASS  T13  gesloten boekjaar: settled_amount mag muteren, amount en toewijzingen niet';
   ELSE     fail := fail + 1; report := report || E'\n  FAIL  T13  boekhoudregel voor gesloten boekjaar klopt niet'; END IF;
+
+  -- =========================================================================
+  -- T14 Een journaalregel verwijderen mag de balans niet breken   (m11 §1)
+  -- =========================================================================
+  -- trig_journal_balance_check stond op AFTER INSERT OR UPDATE; DELETE viel
+  -- erbuiten, waardoor één regel van een tweeregelige post weg kon.
+  BEGIN
+    PERFORM set_config('role', 'postgres', true);
+    DELETE FROM public.journal_lines
+     WHERE journal_entry_id IN (SELECT id FROM public.journal_entries WHERE source_id = v_cc)
+       AND debit > 0;
+    SET CONSTRAINTS ALL IMMEDIATE;
+    ok := false;
+  EXCEPTION WHEN others THEN ok := true; END;
+  BEGIN SET CONSTRAINTS ALL DEFERRED; EXCEPTION WHEN others THEN NULL; END;
+  IF ok THEN pass := pass + 1; report := report || E'\n  PASS  T14  verwijderen van een journaalregel breekt de balans niet';
+  ELSE     fail := fail + 1; report := report || E'\n  FAIL  T14  JOURNAALREGEL KAN WEG ZONDER BALANSCONTROLE'; END IF;
+
+  -- =========================================================================
+  -- T15 Heropenen van een boekjaar is voorbehouden aan owner/admin  (m11 §4)
+  -- =========================================================================
+  BEGIN
+    PERFORM set_config('request.jwt.claims', PROC_M, true);
+    PERFORM set_config('role', 'authenticated', true);
+    UPDATE public.fiscal_years SET status = 'open' WHERE id = v_fy_shut;
+    PERFORM set_config('role', 'postgres', true);
+    ok := false;
+  EXCEPTION WHEN others THEN PERFORM set_config('role', 'postgres', true); ok := true; END;
+
+  IF ok THEN
+    BEGIN
+      PERFORM set_config('request.jwt.claims', PROC_A, true);
+      PERFORM set_config('role', 'authenticated', true);
+      UPDATE public.fiscal_years SET status = 'open' WHERE id = v_fy_shut;
+      PERFORM set_config('role', 'postgres', true);
+      ok := true;
+    EXCEPTION WHEN others THEN
+      PERFORM set_config('role', 'postgres', true); ok := false;
+      report := report || E'\n         (T15 owner: ' || SQLERRM || ')';
+    END;
+  END IF;
+  IF ok THEN pass := pass + 1; report := report || E'\n  PASS  T15  manager kan niet heropenen, owner wel';
+  ELSE     fail := fail + 1; report := report || E'\n  FAIL  T15  rolcontrole op heropenen ontbreekt'; END IF;
+
+  -- =========================================================================
+  -- T16 organization_id van een bestaand record is onveranderlijk  (m11 §3)
+  -- =========================================================================
+  BEGIN
+    PERFORM set_config('role', 'postgres', true);
+    UPDATE public.buildings SET organization_id = v_org_b WHERE id = v_bld_a;
+    ok := false;
+  EXCEPTION WHEN others THEN ok := true; END;
+  IF ok THEN pass := pass + 1; report := report || E'\n  PASS  T16  record kan niet naar een andere organisatie worden verplaatst';
+  ELSE     fail := fail + 1; report := report || E'\n  FAIL  T16  RECORD KAN NAAR ANDERE ORGANISATIE'; END IF;
+
+  -- =========================================================================
+  -- T17 Afgeleide tabellen zijn niet rechtstreeks beschrijfbaar  (m11 §2)
+  -- =========================================================================
+  BEGIN
+    PERFORM set_config('request.jwt.claims', PROC_A, true);
+    PERFORM set_config('role', 'authenticated', true);
+    UPDATE public.charge_allocations SET settled_amount = 999 WHERE charge_call_id = v_cc;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    PERFORM set_config('role', 'postgres', true);
+    ok := (n = 0);
+  EXCEPTION WHEN others THEN PERFORM set_config('role', 'postgres', true); ok := true; END;
+  IF ok THEN pass := pass + 1; report := report || E'\n  PASS  T17  settled_amount niet met de hand aanpasbaar via de API';
+  ELSE     fail := fail + 1; report := report || E'\n  FAIL  T17  AFGELEIDE TABELLEN RECHTSTREEKS BESCHRIJFBAAR'; END IF;
+
+  -- =========================================================================
+  -- T18 Kernrekeningen van het PCSI zijn beschermd  (m11 §6)
+  -- =========================================================================
+  BEGIN
+    PERFORM set_config('role', 'postgres', true);
+    DELETE FROM public.accounts WHERE organization_id = v_org_a AND code = '4111';
+    ok := false;
+  EXCEPTION WHEN others THEN ok := true; END;
+  IF ok THEN pass := pass + 1; report := report || E'\n  PASS  T18  kernrekening 4111 kan niet worden verwijderd';
+  ELSE     fail := fail + 1; report := report || E'\n  FAIL  T18  PCSI-KERNREKENING VERWIJDERBAAR'; END IF;
 
   -- =========================================================================
   PERFORM set_config('role', 'postgres', true);

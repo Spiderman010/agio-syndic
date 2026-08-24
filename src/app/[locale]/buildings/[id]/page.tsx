@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import TopBar from "@/components/TopBar";
 import { Link } from "@/navigation";
 import { createUnit, createOwner, assignOwner, updateBankInfo } from "./actions";
+import ActionForm from "@/components/ActionForm";
 import { TIER_LABELS, TIER_ANNEXES } from "@/lib/tier";
 import type { Building, Owner } from "@/lib/types";
 
@@ -92,7 +93,7 @@ export default async function BuildingDetail({
         {/* Bankgegevens */}
         <div className="card" style={{ padding: "1.1rem 1.4rem", marginBottom: "1.4rem" }}>
           <h2 style={{ fontSize: "1rem", margin: "0 0 0.8rem" }}>Coordonnées bancaires</h2>
-          <form action={updateBankInfo} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: "0.7rem", alignItems: "end" }}>
+          <ActionForm action={updateBankInfo} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: "0.7rem", alignItems: "end" }}>
             <input type="hidden" name="building_id" value={b.id} />
             <div>
               <label className="label" htmlFor="bank_name">Banque</label>
@@ -103,7 +104,7 @@ export default async function BuildingDetail({
               <input className="input" id="bank_rib" name="bank_rib" defaultValue={b.bank_rib ?? ""} placeholder="007 780 0001234567890123 56" />
             </div>
             <button className="btn btn-primary" style={{ whiteSpace: "nowrap" }}>Enregistrer</button>
-          </form>
+          </ActionForm>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "1.4rem", alignItems: "start" }}>
@@ -132,7 +133,7 @@ export default async function BuildingDetail({
                     </div>
                   </div>
                   {!currentOwner(u) && owners.length > 0 && (
-                    <form action={assignOwner} style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <ActionForm action={assignOwner} style={{ display: "flex", gap: 6, marginTop: 8 }}>
                       <input type="hidden" name="building_id" value={b.id} />
                       <input type="hidden" name="unit_id" value={u.id} />
                       <select className="input" name="owner_id" style={{ fontSize: "0.82rem", padding: "0.35rem 0.5rem" }}>
@@ -141,13 +142,13 @@ export default async function BuildingDetail({
                         ))}
                       </select>
                       <button className="btn" style={{ padding: "0.35rem 0.7rem", fontSize: "0.8rem" }}>Affecter</button>
-                    </form>
+                    </ActionForm>
                   )}
                 </div>
               ))}
             </div>
 
-            <form action={createUnit} className="card" style={{ padding: "1.1rem", marginTop: "0.9rem" }}>
+            <ActionForm action={createUnit} className="card" style={{ padding: "1.1rem", marginTop: "0.9rem" }}>
               <input type="hidden" name="building_id" value={b.id} />
               <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.8rem" }}>Ajouter un lot</h3>
               <div style={{ display: "flex", gap: "0.6rem", marginBottom: "0.7rem" }}>
@@ -171,7 +172,7 @@ export default async function BuildingDetail({
                 </select>
               </div>
               <button className="btn btn-primary" style={{ width: "100%" }}>Ajouter</button>
-            </form>
+            </ActionForm>
           </section>
 
           {/* Eigenaars */}
@@ -189,7 +190,7 @@ export default async function BuildingDetail({
               ))}
             </div>
 
-            <form action={createOwner} className="card" style={{ padding: "1.1rem", marginTop: "0.9rem" }}>
+            <ActionForm action={createOwner} className="card" style={{ padding: "1.1rem", marginTop: "0.9rem" }}>
               <input type="hidden" name="building_id" value={b.id} />
               <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.8rem" }}>Ajouter un propriétaire</h3>
               <div style={{ marginBottom: "0.7rem" }}>
@@ -204,7 +205,7 @@ export default async function BuildingDetail({
                 <input type="checkbox" name="is_mre" /> Réside à l'étranger (MRE)
               </label>
               <button className="btn btn-primary" style={{ width: "100%" }}>Ajouter</button>
-            </form>
+            </ActionForm>
           </section>
         </div>
       </main>

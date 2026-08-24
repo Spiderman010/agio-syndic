@@ -6,6 +6,7 @@ import { Link } from "@/navigation";
 import { getTranslations } from "next-intl/server";
 import { createExpense, createExpenseCategory } from "./actions";
 import ReceiptLink from "@/components/ReceiptLink";
+import ActionForm from "@/components/ActionForm";
 import type { Building, FiscalYear } from "@/lib/types";
 
 type CategoryRow = { id: string; name: string; default_account_id: string | null };
@@ -134,7 +135,7 @@ export default async function ExpensesPage({
             </div>
 
             {/* Add expense form */}
-            <form action={createExpense} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
+            <ActionForm action={createExpense} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
               <input type="hidden" name="building_id" value={buildingId} />
               <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.9rem" }}>{t("addExpense")}</h3>
 
@@ -198,7 +199,7 @@ export default async function ExpensesPage({
               </div>
 
               <button className="btn btn-primary" style={{ width: "100%" }}>{t("createBtn")}</button>
-            </form>
+            </ActionForm>
           </div>
 
           {/* Categories */}
@@ -219,7 +220,7 @@ export default async function ExpensesPage({
               ))}
             </div>
 
-            <form action={createExpenseCategory} className="card" style={{ padding: "1rem 1.1rem" }}>
+            <ActionForm action={createExpenseCategory} className="card" style={{ padding: "1rem 1.1rem" }}>
               <input type="hidden" name="building_id" value={buildingId} />
               <h3 style={{ fontSize: "0.88rem", margin: "0 0 0.7rem" }}>{t("addExpense").replace("dépense", "catégorie")}</h3>
               <div style={{ display: "flex", gap: "0.5rem" }}>
@@ -232,7 +233,7 @@ export default async function ExpensesPage({
                 />
                 <button className="btn btn-primary" style={{ whiteSpace: "nowrap" }}>{t("addCategory")}</button>
               </div>
-            </form>
+            </ActionForm>
           </div>
         </div>
       </main>

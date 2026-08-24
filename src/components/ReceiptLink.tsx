@@ -20,15 +20,35 @@ export default function ReceiptLink({
   const [busy, setBusy] = useState(false);
 
   function open() {
+    // Het tabblad wordt SYNCHROON binnen de klik geopend. Zou window.open()
+    // pas ná de await volgen, dan telt het niet meer als gebruikersgebaar en
+    // blokkeert de browser de pop-up.
+    const tab = window.open("about:blank", "_blank");
+    if (tab) {
+      try {
+        tab.opener = null;
+      } catch {
+        // Sommige browsers staan dit niet toe; niet fataal.
+      }
+    }
+
     setBusy(true);
     startTransition(async () => {
       const result = await getReceiptUrl(expenseId);
       setBusy(false);
+
       if (result.error || !result.url) {
+        tab?.close();
         toast.error(result.error ?? "Het bewijsstuk kon niet worden geopend.");
         return;
       }
-      window.open(result.url, "_blank", "noopener,noreferrer");
+
+      if (tab) {
+        tab.location.replace(result.url);
+      } else {
+        // Pop-up geblokkeerd: navigeer dan in het huidige tabblad.
+        window.location.href = result.url;
+      }
     });
   }
 
