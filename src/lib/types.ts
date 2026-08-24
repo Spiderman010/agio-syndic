@@ -109,6 +109,9 @@ export type Expense = {
   description: string | null;
   amount: number;
   expense_date: string;
+  /** Storage-objectpad: {organization_id}/{building_id}/{bestand}. */
+  receipt_path: string | null;
+  /** DEPRECATED (P0-3): historische signed URL, niet meer vullen. */
   receipt_url: string | null;
   created_at: string;
 };

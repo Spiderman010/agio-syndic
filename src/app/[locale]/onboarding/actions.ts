@@ -3,26 +3,35 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "@/navigation";
+import { organizationSchema, parseForm } from "@/lib/validation";
+import { toUserError } from "@/lib/errors";
 
+/**
+ * Maakt de organisatie aan via de atomische create_organization()-RPC.
+ *
+ * De RPC voert organisatie -> membership (rol owner) -> PCSI-seed uit binnen
+ * één transactie. Losse inserts zijn niet meer mogelijk: de INSERT-policy op
+ * `organizations` staat op WITH CHECK (false), zodat er geen weesorganisatie
+ * kan ontstaan wanneer een tussenstap faalt.
+ */
 export async function createOrganization(formData: FormData) {
-  const name = String(formData.get("name") ?? "").trim();
-  if (!name) return { error: "Naam verplicht." };
+  const parsed = parseForm(organizationSchema, formData);
+  if (parsed.error) return { error: parsed.error };
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: org, error: orgErr } = await supabase
-    .from("organizations")
-    .insert({ name })
-    .select("id")
-    .single();
-  if (orgErr || !org) return { error: orgErr?.message ?? "Aanmaken mislukt." };
+  const { data: orgId, error } = await supabase.rpc("create_organization", {
+    org_name: parsed.data.name,
+  });
 
-  const { error: memErr } = await supabase
-    .from("memberships")
-    .insert({ org_id: org.id, user_id: user.id, role: "admin" });
-  if (memErr) return { error: memErr.message };
+  if (error || !orgId) {
+    return { error: toUserError(error, "Aanmaken van de organisatie is mislukt.") };
+  }
 
   revalidatePath("/", "layout");
   redirect("/buildings");
