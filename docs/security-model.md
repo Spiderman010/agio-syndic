@@ -114,11 +114,32 @@ van de kolom is een aparte, latere stap.
 | Functie | Aanroepbaar door |
 |---|---|
 | `create_organization(text)` | authenticated |
-| `is_org_member`, `can_write`, `can_manage_members`, `is_org_owner`, `current_org_role` | authenticated (nodig voor policy-evaluatie) |
+| `is_org_member`, `can_write`, `can_manage_members`, `is_org_owner`, `current_org_role`, `receipt_path_org`, `receipt_path_building_ok` | authenticated (nodig voor policy-evaluatie) |
 | `seed_pcsi`, `get_account_id`, `require_account_id`, `fn_assert_fy_open` | niemand — uitsluitend intern |
 | alle `fn_*` triggerfuncties | niemand — uitsluitend als trigger |
 
 `PUBLIC` en `anon` hebben op geen enkele functie in `public` nog EXECUTE.
+Migratie `m10` bevat daarvoor een vangnet-blok dat elke functie met een
+resterende anon-grant intrekt.
+
+### Waarom `authenticated` deze functies wél mag aanroepen
+
+RLS-policyexpressies worden geëvalueerd met de rechten van de aanroeper. Zonder
+`EXECUTE` voor `authenticated` breken alle 96 policies. Dat betekent wel dat
+PostgREST ze als RPC-endpoint aanbiedt, en de Supabase-linter waarschuwt
+daarvoor.
+
+Die blootstelling is beoordeeld en aanvaard: elk van deze functies geeft
+uitsluitend informatie over het **eigen** lidmaatschap van de aanroeper terug.
+Voor een organisatie waar de aanroeper geen lid van is, retourneren zij `NULL`
+of `false`. `receipt_path_building_ok()` had die eigenschap aanvankelijk niet en
+fungeerde als existence-oracle op de relatie gebouw ↔ organisatie; sinds `m10`
+weigert de functie te antwoorden voor niet-leden.
+
+**Openstaande verbetering.** De structureel schonere oplossing is de helpers naar
+een niet-geëxposeerd schema te verplaatsen (bijvoorbeeld `app_private`), zodat
+PostgREST ze helemaal niet publiceert. Dat raakt alle 96 policies en is daarom
+niet in deze herstelronde meegenomen.
 
 ## Tests
 
