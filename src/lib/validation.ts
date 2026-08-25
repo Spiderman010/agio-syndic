@@ -168,11 +168,15 @@ export const expenseCategorySchema = z.object({
  * Valideert FormData tegen een schema en geeft óf de geparste waarden óf een
  * enkele, leesbare foutmelding terug.
  */
+export type ParseResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string };
+
 export function parseForm<T extends z.ZodTypeAny>(
   schema: T,
   formData: FormData,
   overrides: Record<string, unknown> = {},
-): { data: z.infer<T>; error?: undefined } | { data?: undefined; error: string } {
+): ParseResult<z.infer<T>> {
   const raw: Record<string, unknown> = {};
   for (const [key, value] of formData.entries()) {
     if (value instanceof File) continue;
@@ -182,7 +186,7 @@ export function parseForm<T extends z.ZodTypeAny>(
 
   const result = schema.safeParse(raw);
   if (!result.success) {
-    return { error: result.error.issues[0]?.message ?? "Ongeldige invoer." };
+    return { ok: false, error: result.error.issues[0]?.message ?? "Ongeldige invoer." };
   }
-  return { data: result.data };
+  return { ok: true, data: result.data };
 }

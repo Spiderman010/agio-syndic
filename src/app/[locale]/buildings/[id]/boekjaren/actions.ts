@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireOrg } from "@/lib/org";
 import { revalidatePath } from "next/cache";
-import { redirect } from "@/navigation";
+import { localeRedirect } from "@/lib/redirect";
 import {
   chargeCallSchema,
   fiscalYearSchema,
@@ -17,7 +17,7 @@ export async function createFiscalYear(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(fiscalYearSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { building_id, year, start_date, end_date } = parsed.data;
 
   const supabase = await createClient();
@@ -44,14 +44,14 @@ export async function createFiscalYear(formData: FormData) {
   }
 
   revalidatePath(`/buildings/${building_id}/boekjaren`);
-  redirect(`/buildings/${building_id}/boekjaren/${data.id}`);
+  return localeRedirect(`/buildings/${building_id}/boekjaren/${data.id}`);
 }
 
 export async function createChargeCall(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(chargeCallSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { fiscal_year_id, ...call } = parsed.data;
 
   const supabase = await createClient();
@@ -82,14 +82,14 @@ export async function createChargeCall(formData: FormData) {
   if (error) return { error: toUserError(error, "Aanmaken van de lastenoproep is mislukt.") };
 
   revalidatePath(`/buildings/${fy.building_id}/boekjaren/${fiscal_year_id}`);
-  redirect(`/buildings/${fy.building_id}/boekjaren/${fiscal_year_id}`);
+  return localeRedirect(`/buildings/${fy.building_id}/boekjaren/${fiscal_year_id}`);
 }
 
 export async function createPayment(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(paymentSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { building_id, fiscal_year_id, owner_id, ...payment } = parsed.data;
 
   const supabase = await createClient();
@@ -115,5 +115,5 @@ export async function createPayment(formData: FormData) {
   if (error) return { error: toUserError(error, "Registreren van de betaling is mislukt.") };
 
   revalidatePath(`/buildings/${building_id}/boekjaren/${fiscal_year_id}`);
-  redirect(`/buildings/${building_id}/boekjaren/${fiscal_year_id}`);
+  return localeRedirect(`/buildings/${building_id}/boekjaren/${fiscal_year_id}`);
 }

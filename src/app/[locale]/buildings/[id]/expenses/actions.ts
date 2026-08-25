@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { requireOrg } from "@/lib/org";
 import { revalidatePath } from "next/cache";
-import { redirect } from "@/navigation";
+import { localeRedirect } from "@/lib/redirect";
 import { expenseCategorySchema, expenseSchema, parseForm } from "@/lib/validation";
 import { assertFiscalYearWritable, assertInOrg, assertInOrgOptional } from "@/lib/guard";
 import { toUserError } from "@/lib/errors";
@@ -28,7 +28,7 @@ export async function createExpenseCategory(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(expenseCategorySchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { building_id, name } = parsed.data;
 
   const supabase = await createClient();
@@ -43,14 +43,14 @@ export async function createExpenseCategory(formData: FormData) {
   if (error) return { error: toUserError(error, "Toevoegen van de categorie is mislukt.") };
 
   revalidatePath(`/buildings/${building_id}/expenses`);
-  redirect(`/buildings/${building_id}/expenses`);
+  return localeRedirect(`/buildings/${building_id}/expenses`);
 }
 
 export async function createExpense(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(expenseSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { building_id, fiscal_year_id, category_id, ...expense } = parsed.data;
 
   const supabase = await createClient();
@@ -123,7 +123,7 @@ export async function createExpense(formData: FormData) {
   }
 
   revalidatePath(`/buildings/${building_id}/expenses`);
-  redirect(`/buildings/${building_id}/expenses`);
+  return localeRedirect(`/buildings/${building_id}/expenses`);
 }
 
 /**

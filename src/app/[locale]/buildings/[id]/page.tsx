@@ -202,7 +202,7 @@ export default async function BuildingDetail({
                 <input className="input" id="email" name="email" type="email" />
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.85rem", marginBottom: "0.9rem" }}>
-                <input type="checkbox" name="is_mre" /> Réside à l'étranger (MRE)
+                <input type="checkbox" name="is_mre" /> Réside à l&apos;étranger (MRE)
               </label>
               <button className="btn btn-primary" style={{ width: "100%" }}>Ajouter</button>
             </ActionForm>

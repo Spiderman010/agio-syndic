@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { redirect } from "@/navigation";
+import { localeRedirect } from "@/lib/redirect";
 import { organizationSchema, parseForm } from "@/lib/validation";
 import { toUserError } from "@/lib/errors";
 
@@ -16,14 +16,14 @@ import { toUserError } from "@/lib/errors";
  */
 export async function createOrganization(formData: FormData) {
   const parsed = parseForm(organizationSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
 
   const supabase = await createClient();
 
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  if (!user) return localeRedirect("/login");
 
   const { data: orgId, error } = await supabase.rpc("create_organization", {
     org_name: parsed.data.name,
@@ -34,5 +34,5 @@ export async function createOrganization(formData: FormData) {
   }
 
   revalidatePath("/", "layout");
-  redirect("/buildings");
+  return localeRedirect("/buildings");
 }

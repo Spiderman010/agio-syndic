@@ -239,7 +239,6 @@ export default async function FiscalYearDetail({
                           <div className="label" style={{ marginBottom: "0.35rem" }}>Répartition par lot</div>
                           <div style={{ display: "grid", gap: "0.3rem" }}>
                             {cc.charge_allocations.map((ca) => {
-                              const open = Number(ca.amount) - Number(ca.settled_amount);
                               return (
                                 <div key={ca.id} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.82rem", alignItems: "center" }}>
                                   <span>
@@ -293,7 +292,7 @@ export default async function FiscalYearDetail({
                     <input className="input" id="total_amount" name="total_amount" type="text" placeholder="1200.00" required />
                   </div>
                   <div>
-                    <label className="label" htmlFor="call_date">Date d'appel</label>
+                    <label className="label" htmlFor="call_date">Date d&apos;appel</label>
                     <input className="input" id="call_date" name="call_date" type="date" required />
                   </div>
                   <div>
@@ -303,7 +302,7 @@ export default async function FiscalYearDetail({
                 </div>
 
                 <button className="btn btn-primary" style={{ width: "100%" }}>
-                  Créer l'appel
+                  Créer l&apos;appel
                 </button>
               </ActionForm>
             )}

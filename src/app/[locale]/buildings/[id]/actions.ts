@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireOrg } from "@/lib/org";
 import { revalidatePath } from "next/cache";
-import { redirect } from "@/navigation";
+import { localeRedirect } from "@/lib/redirect";
 import {
   assignOwnerSchema,
   bankInfoSchema,
@@ -18,7 +18,7 @@ export async function createUnit(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(unitSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { building_id, ...unit } = parsed.data;
 
   const supabase = await createClient();
@@ -30,7 +30,7 @@ export async function createUnit(formData: FormData) {
   if (error) return { error: toUserError(error, "Toevoegen van de unit is mislukt.") };
 
   revalidatePath(`/buildings/${building_id}`);
-  redirect(`/buildings/${building_id}`);
+  return localeRedirect(`/buildings/${building_id}`);
 }
 
 export async function createOwner(formData: FormData) {
@@ -39,7 +39,7 @@ export async function createOwner(formData: FormData) {
   const parsed = parseForm(ownerSchema, formData, {
     is_mre: formData.get("is_mre") === "on",
   });
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { building_id, ...owner } = parsed.data;
 
   const supabase = await createClient();
@@ -53,7 +53,7 @@ export async function createOwner(formData: FormData) {
   if (error) return { error: toUserError(error, "Toevoegen van de eigenaar is mislukt.") };
 
   revalidatePath(`/buildings/${building_id}`);
-  redirect(`/buildings/${building_id}`);
+  return localeRedirect(`/buildings/${building_id}`);
 }
 
 /**
@@ -68,7 +68,7 @@ export async function assignOwner(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(assignOwnerSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { building_id, unit_id, owner_id } = parsed.data;
 
   const supabase = await createClient();
@@ -86,14 +86,14 @@ export async function assignOwner(formData: FormData) {
   if (error) return { error: toUserError(error, "Koppelen van de eigenaar is mislukt.") };
 
   revalidatePath(`/buildings/${building_id}`);
-  redirect(`/buildings/${building_id}`);
+  return localeRedirect(`/buildings/${building_id}`);
 }
 
 export async function updateBankInfo(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(bankInfoSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
   const { building_id, bank_name, bank_rib } = parsed.data;
 
   const supabase = await createClient();
@@ -109,5 +109,5 @@ export async function updateBankInfo(formData: FormData) {
   if (error) return { error: toUserError(error, "Opslaan van de bankgegevens is mislukt.") };
 
   revalidatePath(`/buildings/${building_id}`);
-  redirect(`/buildings/${building_id}`);
+  return localeRedirect(`/buildings/${building_id}`);
 }

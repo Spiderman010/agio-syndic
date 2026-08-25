@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireOrg } from "@/lib/org";
 import { revalidatePath } from "next/cache";
-import { redirect } from "@/navigation";
+import { localeRedirect } from "@/lib/redirect";
 import { buildingSchema, parseForm } from "@/lib/validation";
 import { toUserError } from "@/lib/errors";
 
@@ -11,7 +11,7 @@ export async function createBuilding(formData: FormData) {
   const { org } = await requireOrg();
 
   const parsed = parseForm(buildingSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.ok) return { error: parsed.error };
 
   const supabase = await createClient();
   const { data, error } = await supabase
@@ -25,5 +25,5 @@ export async function createBuilding(formData: FormData) {
   }
 
   revalidatePath("/buildings");
-  redirect(`/buildings/${data.id}`);
+  return localeRedirect(`/buildings/${data.id}`);
 }
