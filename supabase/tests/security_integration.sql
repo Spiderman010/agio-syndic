@@ -108,8 +108,9 @@ BEGIN
     VALUES (v_org_a, v_bld_a, 2026, '2026-01-01', '2026-12-31', 'open')
     RETURNING id INTO v_fy_a;
 
-    INSERT INTO public.charge_calls(organization_id, fiscal_year_id, type, total_amount, call_date)
-    VALUES (v_org_a, v_fy_a, 'regulier', 100.00, '2026-03-01') RETURNING id INTO v_cc;
+    -- Sinds m15 is de RPC het enige schrijfpad voor een lastenoproep; een
+    -- rechtstreekse INSERT is voor `authenticated` geblokkeerd.
+    v_cc := public.create_charge_call(v_fy_a, 'regulier', 100.00, '2026-03-01');
 
     PERFORM set_config('role', 'postgres', true);
 
@@ -359,8 +360,7 @@ BEGIN
 
   IF ok THEN
     BEGIN
-      INSERT INTO public.charge_calls(organization_id, fiscal_year_id, type, total_amount, call_date)
-      VALUES (v_org_a, v_fy_shut, 'regulier', 500.00, '2025-06-01');
+      PERFORM public.create_charge_call(v_fy_shut, 'regulier', 500.00, '2025-06-01');
       ok := false;
     EXCEPTION WHEN others THEN
       ok := true;

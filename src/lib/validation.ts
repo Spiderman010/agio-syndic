@@ -133,6 +133,9 @@ export const chargeCallSchema = z
     total_amount: amount,
     call_date: isoDate,
     due_date: optionalIsoDate,
+    // Leeg = de standaard-verdeelregel van het gebouw. De database bepaalt
+    // welke dat is; de client kiest hem niet impliciet.
+    allocation_rule_id: optionalUuid,
   })
   .refine((v) => v.due_date === null || v.due_date >= v.call_date, {
     message: "Vervaldatum moet op of na de oproepdatum liggen.",

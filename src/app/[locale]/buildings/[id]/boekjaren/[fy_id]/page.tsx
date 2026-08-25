@@ -7,6 +7,19 @@ import { createChargeCall, createPayment } from "../actions";
 import ActionForm from "@/components/ActionForm";
 import type { Building, FiscalYear } from "@/lib/types";
 
+const METHOD_LABEL: Record<string, string> = {
+  equal: "parts égales",
+  tantieme: "tantièmes",
+  percentage: "pourcentages",
+  manual: "manuel",
+};
+
+const SCOPE_LABEL: Record<string, string> = {
+  whole_building: "tout le bâtiment",
+  block: "un bloc",
+  selected_units: "lots sélectionnés",
+};
+
 type AllocRow = {
   id: string;
   amount: number;
@@ -89,13 +102,33 @@ export default async function FiscalYearDetail({
 
   const { data: unitIds } = await supabase
     .from("units")
-    .select("id")
-    .eq("building_id", buildingId);
+    .select("id, label")
+    .eq("building_id", buildingId)
+    .order("label");
+  const lots = (unitIds ?? []) as { id: string; label: string }[];
+
+  // Actieve verdeelregels van dit gebouw. De standaardregel staat bovenaan;
+  // laat de gebruiker leeg, dan kiest de database die zelf.
+  const { data: rulesData } = await supabase
+    .from("allocation_rules")
+    .select("id, label, method, scope, is_default")
+    .eq("building_id", buildingId)
+    .eq("status", "active")
+    .order("is_default", { ascending: false })
+    .order("label");
+  const rules = (rulesData ?? []) as {
+    id: string;
+    label: string;
+    method: string;
+    scope: string;
+    is_default: boolean;
+  }[];
+  const heeftHandmatigeRegel = rules.some((r) => r.method === "manual");
 
   const { data: ownershipData } = await supabase
     .from("ownership")
     .select("owners(id, full_name)")
-    .in("unit_id", (unitIds ?? []).map((u: { id: string }) => u.id))
+    .in("unit_id", lots.map((u) => u.id))
     .is("end_date", null);
 
   const eigenaarMap = new Map<string, string>();
@@ -285,6 +318,45 @@ export default async function FiscalYearDetail({
                   <label className="label" htmlFor="cc_label">Libellé (optionnel)</label>
                   <input className="input" id="cc_label" name="label" placeholder="Entretien ascenseur T2" />
                 </div>
+
+                <div style={{ marginBottom: "0.7rem" }}>
+                  <label className="label" htmlFor="allocation_rule_id">Clé de répartition</label>
+                  <select className="input" id="allocation_rule_id" name="allocation_rule_id" defaultValue="">
+                    <option value="">Règle par défaut du bâtiment</option>
+                    {rules.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.label} — {METHOD_LABEL[r.method] ?? r.method} / {SCOPE_LABEL[r.scope] ?? r.scope}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {heeftHandmatigeRegel && lots.length > 0 && (
+                  <details style={{ marginBottom: "0.9rem" }}>
+                    <summary style={{ cursor: "pointer", fontSize: "0.82rem", color: "var(--muted)" }}>
+                      Montants manuels par lot — uniquement pour une règle « manuel »
+                    </summary>
+                    <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0.5rem 0" }}>
+                      Chaque lot participant doit avoir un montant. Un champ vide compte comme 0,00 MAD.
+                      La somme doit correspondre exactement au montant de l&apos;appel.
+                    </p>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+                      {lots.map((u) => (
+                        <div key={u.id}>
+                          <label className="label" htmlFor={`manual_${u.id}`}>{u.label}</label>
+                          <input
+                            className="input"
+                            id={`manual_${u.id}`}
+                            name={`manual_${u.id}`}
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="0.00"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.7rem", marginBottom: "0.9rem" }}>
                   <div>

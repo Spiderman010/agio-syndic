@@ -27,6 +27,24 @@ const UNIQUE_MESSAGES: Record<string, string> = {
     "Er bestaat al een boekjaar voor dit jaar en gebouw.",
 };
 
+/**
+ * Meldingen uit de allocation engine dragen een stabiele code als voorvoegsel,
+ * bijvoorbeeld `ALLOC_WEIGHT_MISSING: ...`. Die code is bedoeld om later op een
+ * next-intl-sleutel te mappen; tot die tijd wordt hij van de zichtbare tekst
+ * afgehaald zodat de gebruiker geen technische sleutel te zien krijgt.
+ */
+const ENGINE_PREFIX = /^([A-Z][A-Z0-9_]{4,}):\s*/;
+
+/** De stabiele foutcode van een engine-melding, of null. */
+export function engineErrorCode(error: DbError): string | null {
+  const match = ENGINE_PREFIX.exec(error?.message ?? "");
+  return match ? match[1] : null;
+}
+
+function stripEnginePrefix(message: string): string {
+  return message.replace(ENGINE_PREFIX, "");
+}
+
 export function toUserError(error: DbError, fallback: string): string {
   if (!error) return fallback;
 
@@ -42,7 +60,7 @@ export function toUserError(error: DbError, fallback: string): string {
         message.includes("permission denied")) {
       return "Je hebt niet de juiste rechten voor deze actie.";
     }
-    return message;
+    return stripEnginePrefix(message);
   }
 
   // Unieke constraint.
@@ -75,7 +93,7 @@ export function toUserError(error: DbError, fallback: string): string {
     if (!message || /violates check constraint|check constraint "/i.test(message)) {
       return fallback;
     }
-    return message;
+    return stripEnginePrefix(message);
   }
 
   return fallback;
