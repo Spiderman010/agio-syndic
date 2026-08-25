@@ -1,6 +1,18 @@
 # Migratiedrift — status en herstelprocedure
 
-Bijgewerkt: 25-08-2026, bij aanvang van de flexible allocation engine (m12–m16).
+Bijgewerkt: 25-08-2026, na de flexible allocation engine (m12–m20).
+
+> **Status: migration history reconciled; full baseline rebuild still pending.**
+>
+> De live migratiegeschiedenis en de bestandsnamen in de repository zijn
+> gereconcilieerd, met zeven historische migraties als bewust lege
+> plaatshouders. De volledige baseline voor een rebuild-from-empty is nog
+> **niet gegenereerd en niet gevalideerd**; een lege database volledig
+> reconstrueren vanuit Git is dus nog niet bewezen.
+
+Migraties vanaf `m12` volgen het normale proces: elke wijziging heeft een eigen
+bestand in `supabase/migrations/` met exact de naam waaronder hij is
+geregistreerd.
 
 ## Huidige stand
 

@@ -1,6 +1,51 @@
 # Bekende problemen en handmatige stappen
 
-Bijgewerkt: 25-08-2026, na de security-herstelronde (`m8` t/m `m11`) en de release-gate op commit `d31f191`.
+Bijgewerkt: 25-08-2026, na de flexible allocation engine (`m12` t/m `m20`).
+
+---
+
+## 0. Mede-eigendom: één debiteur ontvangt de volledige vordering
+
+**Dit is de belangrijkste functionele beperking van deze release.**
+
+De database staat meerdere `ownership`-records per lot toe: een appartement kan
+twee of meer gelijktijdige mede-eigenaars hebben, elk met een eigen `share`.
+
+De allocation engine splitst een lot-allocatie echter **niet** over die
+eigenaars. Per lot wordt precies één debiteur bepaald — de eigenaar met
+`is_primary_debtor = true` — en die krijgt de **volledige** betalingsverplichting
+van dat lot. `ownership.share` wordt wél vastgelegd en is auditeerbaar
+(`charge_allocations.ownership_id` en `ownership_share_ppm` staan in de
+snapshot), maar wordt niet gebruikt om te verdelen.
+
+**Wat dit concreet betekent**
+
+- Bij een 50/50 mede-eigendom ontstaan **géén** twee vorderingen van 50%. Er
+  ontstaat één vordering van 100% op de aangewezen debiteur.
+- Gebruikers mogen niet aannemen dat het invoeren van twee eigenaars met
+  `share = 0.5` automatisch tot een gedeelde facturatie leidt.
+- De keuze is wel expliciet en herleidbaar in plaats van willekeurig: zijn er
+  meerdere actieve eigenaars en is er géén (of meer dan één) aangewezen
+  debiteur, dan **faalt de lastenoproep hard** met `ALLOC_AMBIGUOUS_OWNER` in
+  plaats van stilzwijgend iemand te kiezen. Vóór `m14` koos de oude code met
+  `LIMIT 1` zonder `ORDER BY` een willekeurige eigenaar.
+- Een partiële index (`ownership_primary_active_idx`) staat hoogstens één
+  aangewezen debiteur per lot binnen een lopende periode toe.
+
+**Toekomstige productfunctionaliteit**
+
+Echte share-based debtor splitting is nog te ontwerpen en te bouwen. Het raakt
+meer dan de verdeling alleen:
+
+- `charge_allocations` heeft `UNIQUE (charge_call_id, unit_id)`, wat meerdere
+  rijen per lot nu uitsluit;
+- er komt een tweede afrondingsniveau bij (eerst over lots, dan binnen een lot
+  over eigenaars), met een eigen som-invariant per lot;
+- `fn_payment_fifo` en de openstaandenberekening moeten meebewegen.
+
+**Dit moet zijn ontworpen, gebouwd en getest vóórdat een klant wordt onboarded
+met werkelijke mede-eigendomssituaties** — bijvoorbeeld een nalatenschap met
+meerdere erfgenamen, wat in de Marokkaanse praktijk niet zeldzaam is.
 
 ---
 
@@ -15,11 +60,20 @@ inschakelen. Aanbevolen: ook een minimale wachtwoordlengte en rate limiting op
 
 ---
 
-## 2. Migratiedrift: 7 historische migraties ontbreken in Git
+## 2. Migratiegeschiedenis: gereconcilieerd, baseline nog niet bewezen
 
-Zie `docs/migration-drift.md`. De herstelprocedure is uitgeschreven maar
-**bewust niet uitgevoerd** — die vereist de Supabase CLI en expliciete
-toestemming.
+*migration history reconciled; full baseline rebuild still pending.*
+
+Elke live geregistreerde migratie heeft nu een bestand met exact dezelfde naam,
+waaronder zeven **bewust lege plaatshouders** voor migraties die destijds
+rechtstreeks zijn toegepast. Daarmee zijn voorwaartse operaties veilig: de CLI
+ziet geen enkele migratie meer als nog-toe-te-passen.
+
+Wat hiermee **niet** is opgelost: een lege database volledig reconstrueren
+vanuit Git. De plaatshouders bevatten geen DDL, en de volledige schema-baseline
+is nog **niet gegenereerd en niet gevalideerd**. Rebuild-from-empty is dus nog
+niet bewezen. Zie `docs/migration-drift.md` en `supabase/baseline/README.md`;
+het maken van de baseline vereist de Supabase CLI plus het databasewachtwoord.
 
 ---
 
@@ -69,18 +123,28 @@ herstelronde en dus niet aangepakt:
   lastenoproep (gedocumenteerd in `docs/accounting-rules.md`).
 - Een uitgave zonder boekjaar krijgt geen journaalpost en kan er achteraf niet
   alsnog aan gekoppeld worden.
-- Het wijzigen of verwijderen van een `charge_call` in een open boekjaar laat de
-  bijbehorende allocaties en journaalpost staan.
 - `funds.balance` wordt alleen bij INSERT bijgewerkt, niet bij UPDATE/DELETE van
   een fondsmutatie.
 - Er is geen controle dat `journal_entries.entry_date` binnen de periode van het
   boekjaar valt.
-- De tantième-verdeling waarschuwt niet wanneer de som van `units.tantiemes`
-  afwijkt van `buildings.total_tantiemes`.
-- `charge_allocations.unit_id` is de enige org-gescopete relatie zonder
-  samengestelde foreign key (`units` heeft geen `organization_id`). Het risico
-  is beperkt omdat de kolom uitsluitend door de allocatietrigger wordt gevuld.
 - Er is geen audit trail van financiële mutaties (wie boekte wat, wanneer).
+
+Drie punten uit deze lijst zijn inmiddels **wél** opgelost door `m12`–`m20` en
+staan hier alleen nog ter historie:
+
+- ~~Het wijzigen of verwijderen van een `charge_call` laat allocaties en
+  journaalpost staan.~~ Wijzigen is nu geblokkeerd (`trig_00_cc_immutable`);
+  intrekken ruimt de journaalpost op en is onmogelijk zodra er betalingen aan
+  hangen.
+- ~~De tantième-verdeling waarschuwt niet bij een afwijkende som.~~ Een
+  lastenoproep op tantièmes over het hele gebouw **faalt nu hard**
+  (`ALLOC_CONTROL_TOTAL`) zolang de som afwijkt van `buildings.total_tantiemes`,
+  tenzij een onderbouwde derogatie met vervalboekjaar is vastgelegd.
+- ~~`charge_allocations.unit_id` mist een samengestelde foreign key.~~ `units`
+  en `fiscal_years` hebben sinds `m12` een `UNIQUE (id, building_id)`, en
+  `charge_allocations` hangt daar sinds `m13`/`m18` met een samengestelde FK
+  aan vast. Er is géén `units.organization_id` nodig gebleken: de keten loopt
+  via `buildings(id, organization_id)`.
 
 ---
 

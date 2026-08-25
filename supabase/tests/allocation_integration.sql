@@ -10,7 +10,7 @@
 --   psql "$DATABASE_URL" -f supabase/tests/allocation_integration.sql
 -- of plakken in de SQL-editor / via de MCP-connector.
 --
--- Verwachte uitkomst: "32 geslaagd, 0 gefaald".
+-- Verwachte uitkomst: "38 geslaagd, 0 gefaald".
 --
 -- Let op de SET CONSTRAINTS ALL IMMEDIATE in T25, T26, T30, T31 en T32: de
 -- som-invariant en de journaalcontroles zijn DEFERRABLE INITIALLY DEFERRED en
@@ -505,6 +505,88 @@ BEGIN
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
              || '  T32  DELETE van de hele organisatie  ' || coalesce('['||msg||']','');
+
+  -- =========================================================================
+  -- CONSTRAINT-MODE (m20)
+  -- =========================================================================
+  -- `SET CONSTRAINTS ALL IMMEDIATE` geldt voor de rest van de transactie. Zet
+  -- een caller die modus, dan zouden de uitgestelde controles al tijdens de
+  -- opbouw van de oproep vuren in plaats van bij commit. De RPC dwingt daarom
+  -- zelf af dat precies zijn eigen vier controles uitgesteld zijn.
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_u::text, 'role','authenticated')::text, true);
+  v_org2 := public.create_organization('ALLOC TEST constraint-mode');
+  INSERT INTO public.owners(organization_id,full_name) VALUES (v_org2,'CM Eig') RETURNING id INTO v_o;
+  INSERT INTO public.buildings(organization_id,name,total_tantiemes) VALUES (v_org2,'T33',100) RETURNING id INTO v_b;
+  INSERT INTO public.units(building_id,label,unit_type,tantiemes) VALUES (v_b,'a','appartement',60) RETURNING id INTO u1;
+  INSERT INTO public.units(building_id,label,unit_type,tantiemes) VALUES (v_b,'b','appartement',40) RETURNING id INTO u2;
+  INSERT INTO public.ownership(unit_id,owner_id,share,start_date)
+  VALUES (u1,v_o,1,'2026-01-01'),(u2,v_o,1,'2026-01-01');
+  INSERT INTO public.fiscal_years(organization_id,building_id,year,start_date,end_date,status)
+  VALUES (v_org2,v_b,2026,'2026-01-01','2026-12-31','open') RETURNING id INTO v_fy;
+
+  -- T33  de RPC slaagt ook wanneer de caller alles op IMMEDIATE heeft gezet
+  SET CONSTRAINTS ALL IMMEDIATE;
+  BEGIN
+    v_cc := public.create_charge_call(v_fy,'regulier',1000.00,'2026-03-01',NULL,'CM1');
+    ok := true;
+  EXCEPTION WHEN others THEN ok := false; msg := left(SQLERRM,90); END;
+  IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
+  rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
+             || '  T33  RPC slaagt onder SET CONSTRAINTS ALL IMMEDIATE  ' || coalesce('['||msg||']','');
+
+  -- T34  allocaties tellen exact op tot het oproeptotaal
+  SELECT count(*), sum(amount) INTO n, s FROM public.charge_allocations WHERE charge_call_id=v_cc;
+  ok := (n=2 AND s=1000.00);
+  IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
+  rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
+             || '  T34  ' || coalesce(n,0) || ' allocaties, som ' || coalesce(s,0)::text || ' = 1000.00';
+
+  -- T35  de journaalpost sluit
+  SELECT coalesce(sum(jl.debit),0), coalesce(sum(jl.credit),0) INTO v_sub, s
+    FROM public.journal_lines jl JOIN public.journal_entries je ON je.id=jl.journal_entry_id
+   WHERE je.source_id=v_cc;
+  ok := (v_sub = s AND v_sub = 1000.00);
+  IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
+  rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
+             || '  T35  journaal debet ' || coalesce(v_sub,0)::text || ' = credit ' || coalesce(s,0)::text;
+
+  -- T36  de controles zijn niet verzwakt: een verwijderde allocatie faalt nog steeds
+  SELECT id INTO a1 FROM public.charge_allocations WHERE charge_call_id=v_cc LIMIT 1;
+  BEGIN
+    DELETE FROM public.charge_allocations WHERE id=a1;
+    SET CONSTRAINTS ALL IMMEDIATE;
+    ok := false;
+  EXCEPTION WHEN others THEN ok := (SQLERRM LIKE 'ALLOC_%'); END;
+  IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
+  rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
+             || '  T36  verwijderde allocatie faalt nog steeds hard onder IMMEDIATE';
+
+  -- T37  ongeldige invoer faalt hard onder IMMEDIATE en laat niets achter
+  INSERT INTO public.buildings(organization_id,name,total_tantiemes) VALUES (v_org2,'T37',1000) RETURNING id INTO v_b2;
+  INSERT INTO public.units(building_id,label,unit_type,tantiemes) VALUES (v_b2,'p','appartement',16) RETURNING id INTO ux;
+  INSERT INTO public.ownership(unit_id,owner_id,share,start_date) VALUES (ux,v_o,1,'2026-01-01');
+  INSERT INTO public.fiscal_years(organization_id,building_id,year,start_date,end_date,status)
+  VALUES (v_org2,v_b2,2026,'2026-01-01','2026-12-31','open') RETURNING id INTO v_fy2;
+  SET CONSTRAINTS ALL IMMEDIATE;
+  BEGIN
+    PERFORM public.create_charge_call(v_fy2,'regulier',1000.00,'2026-03-01'); ok := false;
+  EXCEPTION WHEN others THEN ok := (SQLERRM LIKE 'ALLOC_CONTROL_TOTAL%'); END;
+  SELECT count(*) INTO n FROM public.charge_calls WHERE building_id=v_b2;
+  ok := ok AND (n=0);
+  IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
+  rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
+             || '  T37  ongeldige verdeling faalt hard onder IMMEDIATE, niets achtergebleven';
+
+  -- T38  de RPC raakt bewust NIET de constraint van allocation_rule_weights aan
+  SELECT count(*) INTO n FROM pg_constraint
+   WHERE conname='trig_zz_rule_complete_w' AND condeferrable AND condeferred;
+  ok := (n=1);
+  IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
+  rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
+             || '  T38  trig_zz_rule_complete_w ongemoeid (geen blinde SET CONSTRAINTS ALL)';
+
+  BEGIN SET CONSTRAINTS ALL DEFERRED; EXCEPTION WHEN others THEN NULL; END;
 
   RAISE EXCEPTION E'ALLOCATION ENGINE — % geslaagd, % gefaald%', pass, fail, rep;
 END $test$;
