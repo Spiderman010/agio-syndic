@@ -73,8 +73,10 @@ vordering op een eigenaar loopt gewoon door.
 - `journal_entries` en `journal_lines` — het historische grootboek
 - `fund_movements` waarvan de datum binnen de periode van het boekjaar valt
 - `fiscal_years.year`, `start_date`, `end_date` — de periode zelf
-- `fiscal_year_closings` — de vastlegging van de afsluiting is volledig
-  immutable (geen UPDATE, geen DELETE), als audit trail
+- `fiscal_year_closings` — de vastlegging van de afsluiting is niet handmatig
+  wijzigbaar; UPDATE is geblokkeerd. DELETE kan alleen als onderdeel van een
+  bovenliggende cascade (bijvoorbeeld het verwijderen van de organisatie of het
+  gebouw), zodat referentiële opruiming niet vastloopt.
 
 **Wél toegestaan na afsluiting:**
 
