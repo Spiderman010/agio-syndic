@@ -3,80 +3,111 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireOrg } from "@/lib/org";
 import { revalidatePath } from "next/cache";
-import { redirect } from "@/navigation";
-import type { UnitType } from "@/lib/types";
+import { localeRedirect } from "@/lib/redirect";
+import {
+  assignOwnerSchema,
+  bankInfoSchema,
+  ownerSchema,
+  parseForm,
+  unitSchema,
+} from "@/lib/validation";
+import { assertInOrg, assertUnitInOrg } from "@/lib/guard";
+import { toUserError } from "@/lib/errors";
 
 export async function createUnit(formData: FormData) {
-  await requireOrg();
-  const buildingId = String(formData.get("building_id") ?? "");
-  const label = String(formData.get("label") ?? "").trim();
-  const unit_type = String(formData.get("unit_type") ?? "appartement") as UnitType;
-  const tantiemes = Number(formData.get("tantiemes") ?? 0) || 0;
+  const { org } = await requireOrg();
 
-  if (!buildingId || !label) return { error: "Label is verplicht." };
+  const parsed = parseForm(unitSchema, formData);
+  if (!parsed.ok) return { error: parsed.error };
+  const { building_id, ...unit } = parsed.data;
 
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("units")
-    .insert({ building_id: buildingId, label, unit_type, tantiemes });
 
-  if (error) return { error: error.message };
-  revalidatePath(`/buildings/${buildingId}`);
-  redirect(`/buildings/${buildingId}`);
+  const guard = await assertInOrg(supabase, "buildings", building_id, org.id, "Gebouw");
+  if (guard) return { error: guard };
+
+  const { error } = await supabase.from("units").insert({ building_id, ...unit });
+  if (error) return { error: toUserError(error, "Toevoegen van de unit is mislukt.") };
+
+  revalidatePath(`/buildings/${building_id}`);
+  return localeRedirect(`/buildings/${building_id}`);
 }
 
 export async function createOwner(formData: FormData) {
   const { org } = await requireOrg();
-  const buildingId = String(formData.get("building_id") ?? "");
-  const full_name = String(formData.get("full_name") ?? "").trim();
-  const email = String(formData.get("email") ?? "").trim() || null;
-  const is_mre = formData.get("is_mre") === "on";
 
-  if (!full_name) return { error: "Naam eigenaar is verplicht." };
+  const parsed = parseForm(ownerSchema, formData, {
+    is_mre: formData.get("is_mre") === "on",
+  });
+  if (!parsed.ok) return { error: parsed.error };
+  const { building_id, ...owner } = parsed.data;
 
   const supabase = await createClient();
+
+  const guard = await assertInOrg(supabase, "buildings", building_id, org.id, "Gebouw");
+  if (guard) return { error: guard };
+
   const { error } = await supabase
     .from("owners")
-    .insert({ organization_id: org.id, full_name, email, is_mre });
+    .insert({ organization_id: org.id, ...owner });
+  if (error) return { error: toUserError(error, "Toevoegen van de eigenaar is mislukt.") };
 
-  if (error) return { error: error.message };
-  revalidatePath(`/buildings/${buildingId}`);
-  redirect(`/buildings/${buildingId}`);
+  revalidatePath(`/buildings/${building_id}`);
+  return localeRedirect(`/buildings/${building_id}`);
+}
+
+/**
+ * Koppelt een eigenaar aan een unit.
+ *
+ * P0-4: unit_id én owner_id komen beide uit het formulier en worden allebei
+ * expliciet tegen de actieve organisatie gecontroleerd. De database dwingt
+ * dezelfde invariant nogmaals af via trig_00_ownership_tenant_guard en de
+ * ownership-RLS-policy.
+ */
+export async function assignOwner(formData: FormData) {
+  const { org } = await requireOrg();
+
+  const parsed = parseForm(assignOwnerSchema, formData);
+  if (!parsed.ok) return { error: parsed.error };
+  const { building_id, unit_id, owner_id } = parsed.data;
+
+  const supabase = await createClient();
+
+  const buildingGuard = await assertInOrg(supabase, "buildings", building_id, org.id, "Gebouw");
+  if (buildingGuard) return { error: buildingGuard };
+
+  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id);
+  if (unitGuard) return { error: unitGuard };
+
+  const ownerGuard = await assertInOrg(supabase, "owners", owner_id, org.id, "Eigenaar");
+  if (ownerGuard) return { error: ownerGuard };
+
+  const { error } = await supabase.from("ownership").insert({ unit_id, owner_id });
+  if (error) return { error: toUserError(error, "Koppelen van de eigenaar is mislukt.") };
+
+  revalidatePath(`/buildings/${building_id}`);
+  return localeRedirect(`/buildings/${building_id}`);
 }
 
 export async function updateBankInfo(formData: FormData) {
-  await requireOrg();
-  const buildingId = String(formData.get("building_id") ?? "");
-  const bank_name = String(formData.get("bank_name") ?? "").trim() || null;
-  const bank_rib = String(formData.get("bank_rib") ?? "").trim() || null;
+  const { org } = await requireOrg();
 
-  if (!buildingId) return { error: "Gebouw-ID ontbreekt." };
+  const parsed = parseForm(bankInfoSchema, formData);
+  if (!parsed.ok) return { error: parsed.error };
+  const { building_id, bank_name, bank_rib } = parsed.data;
 
   const supabase = await createClient();
+
+  const guard = await assertInOrg(supabase, "buildings", building_id, org.id, "Gebouw");
+  if (guard) return { error: guard };
+
   const { error } = await supabase
     .from("buildings")
     .update({ bank_name, bank_rib })
-    .eq("id", buildingId);
+    .eq("id", building_id);
 
-  if (error) return { error: error.message };
-  revalidatePath(`/buildings/${buildingId}`);
-  redirect(`/buildings/${buildingId}`);
-}
+  if (error) return { error: toUserError(error, "Opslaan van de bankgegevens is mislukt.") };
 
-export async function assignOwner(formData: FormData) {
-  await requireOrg();
-  const buildingId = String(formData.get("building_id") ?? "");
-  const unitId = String(formData.get("unit_id") ?? "");
-  const ownerId = String(formData.get("owner_id") ?? "");
-
-  if (!unitId || !ownerId) redirect(`/buildings/${buildingId}`);
-
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("ownership")
-    .insert({ unit_id: unitId, owner_id: ownerId });
-
-  if (error) return { error: error.message };
-  revalidatePath(`/buildings/${buildingId}`);
-  redirect(`/buildings/${buildingId}`);
+  revalidatePath(`/buildings/${building_id}`);
+  return localeRedirect(`/buildings/${building_id}`);
 }

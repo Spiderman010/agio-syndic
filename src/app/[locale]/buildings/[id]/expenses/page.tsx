@@ -5,6 +5,8 @@ import TopBar from "@/components/TopBar";
 import { Link } from "@/navigation";
 import { getTranslations } from "next-intl/server";
 import { createExpense, createExpenseCategory } from "./actions";
+import ReceiptLink from "@/components/ReceiptLink";
+import ActionForm from "@/components/ActionForm";
 import type { Building, FiscalYear } from "@/lib/types";
 
 type CategoryRow = { id: string; name: string; default_account_id: string | null };
@@ -14,6 +16,7 @@ type ExpenseRow = {
   description: string | null;
   amount: number;
   expense_date: string;
+  receipt_path: string | null;
   receipt_url: string | null;
   fiscal_year_id: string | null;
   expense_categories: { name: string } | null;
@@ -45,14 +48,19 @@ export default async function ExpensesPage({
       .order("name"),
     supabase
       .from("expenses")
-      .select("id, supplier, description, amount, expense_date, receipt_url, fiscal_year_id, expense_categories(name)")
+      .select(
+        "id, supplier, description, amount, expense_date, receipt_path, receipt_url, fiscal_year_id, expense_categories(name)",
+      )
       .eq("building_id", buildingId)
       .order("expense_date", { ascending: false })
       .limit(50),
+    // Alleen OPEN boekjaren: een afgesloten boekjaar accepteert geen uitgaven
+    // meer (afgedwongen door trig_00_exp_closed_fy).
     supabase
       .from("fiscal_years")
       .select("id, year, status")
       .eq("building_id", buildingId)
+      .eq("status", "open")
       .order("year", { ascending: false }),
   ]);
 
@@ -116,16 +124,8 @@ export default async function ExpensesPage({
                       </div>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                         <span style={{ fontWeight: 700, fontSize: "0.97rem" }}>{fmt(Number(e.amount))} MAD</span>
-                        {e.receipt_url && (
-                          <a
-                            href={e.receipt_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="btn"
-                            style={{ fontSize: "0.75rem", padding: "0.2rem 0.5rem" }}
-                          >
-                            📎 {t("viewReceipt")}
-                          </a>
+                        {(e.receipt_path || e.receipt_url) && (
+                          <ReceiptLink expenseId={e.id} label={t("viewReceipt")} />
                         )}
                       </div>
                     </div>
@@ -135,7 +135,7 @@ export default async function ExpensesPage({
             </div>
 
             {/* Add expense form */}
-            <form action={createExpense} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
+            <ActionForm action={createExpense} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
               <input type="hidden" name="building_id" value={buildingId} />
               <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.9rem" }}>{t("addExpense")}</h3>
 
@@ -178,7 +178,7 @@ export default async function ExpensesPage({
                     <option value="">{t("noFiscalYear")}</option>
                     {fiscalYears.map((fy) => (
                       <option key={fy.id} value={fy.id}>
-                        Exercice {fy.year}{fy.status === "closed" ? " (clôturé)" : ""}
+                        Exercice {fy.year}
                       </option>
                     ))}
                   </select>
@@ -199,7 +199,7 @@ export default async function ExpensesPage({
               </div>
 
               <button className="btn btn-primary" style={{ width: "100%" }}>{t("createBtn")}</button>
-            </form>
+            </ActionForm>
           </div>
 
           {/* Categories */}
@@ -220,7 +220,7 @@ export default async function ExpensesPage({
               ))}
             </div>
 
-            <form action={createExpenseCategory} className="card" style={{ padding: "1rem 1.1rem" }}>
+            <ActionForm action={createExpenseCategory} className="card" style={{ padding: "1rem 1.1rem" }}>
               <input type="hidden" name="building_id" value={buildingId} />
               <h3 style={{ fontSize: "0.88rem", margin: "0 0 0.7rem" }}>{t("addExpense").replace("dépense", "catégorie")}</h3>
               <div style={{ display: "flex", gap: "0.5rem" }}>
@@ -233,7 +233,7 @@ export default async function ExpensesPage({
                 />
                 <button className="btn btn-primary" style={{ whiteSpace: "nowrap" }}>{t("addCategory")}</button>
               </div>
-            </form>
+            </ActionForm>
           </div>
         </div>
       </main>

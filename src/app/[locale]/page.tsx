@@ -1,8 +1,12 @@
 import { redirect } from "@/navigation";
 import { getActiveOrg } from "@/lib/org";
 
-export default async function LocaleHomePage() {
+export default async function LocaleHomePage({
+  params,
+}: {
+  params: Promise<{ locale: string }>;
+}) {
+  const { locale } = await params;
   const active = await getActiveOrg();
-  if (active) redirect("/buildings");
-  else redirect("/login");
+  redirect({ href: active ? "/buildings" : "/login", locale });
 }

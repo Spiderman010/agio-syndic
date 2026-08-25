@@ -1,4 +1,4 @@
-import { redirect } from "@/navigation";
+import { localeRedirect } from "@/lib/redirect";
 import { createClient } from "@/lib/supabase/server";
 import type { OrgRole, Organization } from "@/lib/types";
 
@@ -26,6 +26,6 @@ export async function getActiveOrg(): Promise<ActiveOrg | null> {
 
 export async function requireOrg(): Promise<ActiveOrg> {
   const active = await getActiveOrg();
-  if (!active) redirect("/onboarding");
+  if (!active) return localeRedirect("/onboarding");
   return active;
 }

@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { redirect } from "@/navigation";
+import { localeRedirect } from "@/lib/redirect";
 
 export async function signIn(formData: FormData) {
   const email = String(formData.get("email") ?? "");
@@ -13,7 +13,7 @@ export async function signIn(formData: FormData) {
     return { error: error.message };
   }
   revalidatePath("/", "layout");
-  redirect("/buildings");
+  return localeRedirect("/buildings");
 }
 
 export async function signUp(formData: FormData) {
@@ -28,12 +28,12 @@ export async function signUp(formData: FormData) {
     return { success: "Compte créé. Confirmez votre e-mail puis connectez-vous." };
   }
   revalidatePath("/", "layout");
-  redirect("/onboarding");
+  return localeRedirect("/onboarding");
 }
 
 export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();
   revalidatePath("/", "layout");
-  redirect("/login");
+  return localeRedirect("/login");
 }

@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import TopBar from "@/components/TopBar";
 import { Link } from "@/navigation";
 import { createChargeCall, createPayment } from "../actions";
+import ActionForm from "@/components/ActionForm";
 import type { Building, FiscalYear } from "@/lib/types";
 
 type AllocRow = {
@@ -238,7 +239,6 @@ export default async function FiscalYearDetail({
                           <div className="label" style={{ marginBottom: "0.35rem" }}>Répartition par lot</div>
                           <div style={{ display: "grid", gap: "0.3rem" }}>
                             {cc.charge_allocations.map((ca) => {
-                              const open = Number(ca.amount) - Number(ca.settled_amount);
                               return (
                                 <div key={ca.id} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.82rem", alignItems: "center" }}>
                                   <span>
@@ -262,7 +262,7 @@ export default async function FiscalYearDetail({
             </section>
 
             {fy.status === "open" && (
-              <form action={createChargeCall} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
+              <ActionForm action={createChargeCall} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
                 <input type="hidden" name="building_id" value={buildingId} />
                 <input type="hidden" name="fiscal_year_id" value={fyId} />
                 <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.9rem" }}>Nouvel appel de charges</h3>
@@ -292,7 +292,7 @@ export default async function FiscalYearDetail({
                     <input className="input" id="total_amount" name="total_amount" type="text" placeholder="1200.00" required />
                   </div>
                   <div>
-                    <label className="label" htmlFor="call_date">Date d'appel</label>
+                    <label className="label" htmlFor="call_date">Date d&apos;appel</label>
                     <input className="input" id="call_date" name="call_date" type="date" required />
                   </div>
                   <div>
@@ -302,9 +302,9 @@ export default async function FiscalYearDetail({
                 </div>
 
                 <button className="btn btn-primary" style={{ width: "100%" }}>
-                  Créer l'appel
+                  Créer l&apos;appel
                 </button>
-              </form>
+              </ActionForm>
             )}
           </div>
 
@@ -352,7 +352,7 @@ export default async function FiscalYearDetail({
               </div>
 
               {fy.status === "open" && eigenaars.length > 0 && (
-                <form action={createPayment} className="card" style={{ padding: "1rem 1.1rem", marginTop: "0.7rem" }}>
+                <ActionForm action={createPayment} className="card" style={{ padding: "1rem 1.1rem", marginTop: "0.7rem" }}>
                   <input type="hidden" name="building_id" value={buildingId} />
                   <input type="hidden" name="fiscal_year_id" value={fyId} />
                   <h3 style={{ fontSize: "0.88rem", margin: "0 0 0.75rem" }}>Enregistrer un paiement</h3>
@@ -394,7 +394,7 @@ export default async function FiscalYearDetail({
                   </div>
 
                   <button className="btn btn-primary" style={{ width: "100%" }}>Enregistrer</button>
-                </form>
+                </ActionForm>
               )}
             </section>
 
