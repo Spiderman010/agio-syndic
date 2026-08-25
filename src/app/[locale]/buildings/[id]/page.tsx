@@ -88,6 +88,28 @@ export default async function BuildingDetail({
               </div>
             </div>
           </div>
+
+          {/*
+            De teller alleen zegt DAT er iets niet klopt. Sinds de nieuwe
+            verdeelmotor wordt een appel de charges op dit bâtiment geweigerd
+            zolang de som afwijkt, dus de consequentie hoort erbij te staan.
+          */}
+          {sumTantiemes !== b.total_tantiemes && (
+            <div
+              style={{
+                marginTop: "0.9rem",
+                padding: "0.7rem 0.85rem",
+                border: "1px solid var(--warn)",
+                borderRadius: 3,
+                fontSize: "0.82rem",
+                color: "var(--warn)",
+              }}
+            >
+              Il manque {b.total_tantiemes - sumTantiemes} tantièmes sur {b.total_tantiemes}.
+              Tant que la somme ne correspond pas, tout appel de charges réparti aux
+              tantièmes sur l&apos;ensemble du bâtiment sera refusé.
+            </div>
+          )}
         </div>
 
         {/* Bankgegevens */}
