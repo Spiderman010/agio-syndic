@@ -1,6 +1,6 @@
 # Bekende problemen en handmatige stappen
 
-Bijgewerkt: 26-08-2026, na de fiscal year delete guard (`m21`).
+Bijgewerkt: 26-08-2026, na de financial integrity hardening (`m22`).
 
 ---
 
@@ -128,26 +128,74 @@ herstelronde en dus niet aangepakt:
 - Er is geen controle dat `journal_entries.entry_date` binnen de periode van het
   boekjaar valt.
 - Er is geen audit trail van financiële mutaties (wie boekte wat, wanneer).
-- `payments` heeft geen DELETE-guard: een betaling verwijderen cascadeert haar
-  `payment_allocations` weg zonder `charge_allocations.settled_amount` terug te
-  rekenen (`fn_payment_fifo` is AFTER INSERT only).
-- `fiscal_year_closings` heeft geen DELETE-guard: het afsluitbewijs van een
-  gesloten boekjaar is te wissen terwijl het jaar `closed` blijft.
-- `expenses.fiscal_year_id` losmaken (`→ NULL`) mag altijd en zet de uitgave
-  permanent buiten elke afsluitbescherming; een uitgave die pas via UPDATE aan
-  een jaar wordt gekoppeld krijgt bovendien nooit een journaalpost.
-- `is_org_member()` bevat een **ongekwalificeerde** verwijzing naar
-  `memberships` met `search_path = public` zonder `pg_temp`. PostgreSQL
-  doorzoekt `pg_temp` altijd eerst voor relatienamen, dus een sessie die een
-  tijdelijke tabel `memberships` kan aanmaken zou alle SELECT-policies kunnen
-  openzetten. Niet bereikbaar via PostgREST (dat kan geen temp-tabellen maken)
-  en schrijven blijft dicht, maar de functie draagt 96 policies en hoort
-  `from public.memberships` plus `SET search_path = public, pg_temp` te krijgen.
-- `TRUNCATE` is nog aan `anon` en `authenticated` gegund op onder meer
-  `fiscal_years`, `buildings`, `organizations`, `payments` en `expenses`. Dat het
-  vandaag stukloopt komt doordat de cascade een tabel raakt waar het recht wél is
-  ingetrokken — geluk, geen ontwerp. `REVOKE TRUNCATE ON ALL TABLES IN SCHEMA
-  public FROM anon, authenticated` hoort erbij.
+- Er bestaat geen storno- of terugbetaalflow. Sinds `m22` is een betaling met
+  historie niet meer verwijderbaar, en `fn_journal_from_payment` maakt bij élke
+  INSERT een journaalpost. In de praktijk is daarmee **geen enkele betaling nog
+  direct verwijderbaar**. Dat is de bedoelde uitkomst — wissen is geen correctie —
+  maar het maakt een echte correctieroute wel de eerstvolgende functionele stap.
+- Er is nog geen periodieke reconciliatie tussen 5141 (bank) en de
+  `payments`-registratie; `v_allocation_integrity` dekt alleen de vorderingenkant.
+
+**Opgelost in `m22`** — de resterende financiële en security-routes uit de
+adversariële review van PR #3:
+
+- **TRUNCATE** is ingetrokken voor `anon` en `authenticated` op alle tabellen in
+  `public`, plus via `ALTER DEFAULT PRIVILEGES FOR ROLE postgres` voor tabellen die
+  later worden aangemaakt. Bewezen: `SET ROLE authenticated; TRUNCATE
+  public.expenses` slaagde vóór `m22` en wiste RLS-blind alle tenants; nu
+  `permission denied`. SELECT/INSERT/UPDATE/DELETE blijven ongewijzigd.
+  *Nog niet afgedekt:* er bestaat een tweede default-ACL met grantor
+  `supabase_admin`. Die kunnen we niet aanpassen (`postgres` is er geen lid van; de
+  poging faalt met "permission denied to change default privileges"). Hij geldt
+  alleen voor tabellen die `supabase_admin` zelf in `public` aanmaakt.
+- **Betalingen** met toewijzingen, een journaalpost of een bankkoppeling zijn niet
+  meer direct verwijderbaar (`PAYMENT_HAS_FINANCIAL_HISTORY`). Er wordt bewust
+  niets teruggerekend en niets gestorneerd: dat is een reversal-flow, geen guard.
+  Bewust **geen** escape op `owners` — die tabel heeft sinds `m18` haar eigen guard,
+  en een escape zou de betalingsguard gratis omzeilbaar maken.
+- **Jaarafsluitingen** zijn niet meer verwijderbaar zolang het boekjaar bestaat
+  (`FISCAL_YEAR_CLOSING_IMMUTABLE`). UPDATE was al onvoorwaardelijk geblokkeerd;
+  DELETE en UPDATE zijn nu symmetrisch. `fiscal_years.status = closed` kan daarmee
+  niet meer bestaan zonder bijbehorend afsluitbewijs.
+- **De gebouwguard** kijkt niet langer alleen via `fiscal_years` maar telt
+  rechtstreeks op `building_id`: lastenoproepen, betalingen, uitgaven,
+  journaalposten, jaarafsluitingen, definitieve documenten en fondsmutaties.
+  Bewezen gat vóór `m22`: een gebouw zonder boekjaar maar met 75.000 aan uitgaven,
+  30.000 fondsmutatie en een definitief document was gewoon te verwijderen.
+- **Rijvergrendeling** in de boekjaar-, gebouw- en betalingsguard. Een BEFORE
+  ROW-trigger draait vóór het verwerven van de tuple-lock; zonder eigen
+  `FOR UPDATE` kon een gelijktijdige INSERT van historie alsnog worden
+  weggecascadeerd. *Analytisch vastgesteld en structureel afgedekt; een echte
+  parallelle-sessietest vereist `dblink` of `postgres_fdw`, die wel beschikbaar
+  maar niet geïnstalleerd zijn.*
+- **Parent-cascade escapes** op de vijf resterende closed-fy guards
+  (`charge_calls`, `charge_allocations`, `payment_allocations`, `journal_lines`,
+  `fund_movements`). Offboarding werkte tot nu toe alleen doordat de interne
+  RI-trigger van `fiscal_years` toevallig vóór die van de kindtabellen staat in de
+  aanmaakvolgorde van de foreign keys. Zou `fiscal_years_organization_id_fkey` ooit
+  worden gedropt en opnieuw aangemaakt, dan deadlockte de offboarding van élke
+  organisatie die ooit een boekjaar heeft afgesloten.
+- **Documenten** zijn onveranderlijk zodra ze de conceptfase verlaten
+  (`DOCUMENT_IMMUTABLE`): nooit terug naar `concept`, en `verification_number`, de
+  drie koppelingen, het documenttype en de reeds gevulde `content_hash`/`pdf_url`
+  liggen vast. `definitief → geannuleerd` blijft toegestaan; die status telt nog
+  steeds als historie en opent dus geen omweg. Titel en `meta` blijven vrij.
+- **De boekjaarkoppeling van een uitgave** ligt vast (`EXPENSE_FY_IMMUTABLE`).
+  Losmaken of verplaatsen kan niet meer, omdat de journaalpost niet mee kan
+  verhuizen (`journal_entries` staat voor `authenticated` op `USING (false)`).
+  Achteraf koppelen is eveneens geweigerd (`EXPENSE_FY_LATE_ASSIGNMENT`):
+  `fn_journal_from_expense` is AFTER INSERT only, dus zo'n uitgave zou wél in het
+  boekjaar maar niet in het grootboek belanden. De werkroute is de uitgave
+  intrekken en opnieuw boeken mét boekjaar.
+- **`is_org_member()`** gebruikt nu `from public.memberships` met
+  `search_path = public, pg_temp`, waarmee pg_temp-shadowing van de 96 policies die
+  deze functie dragen is uitgesloten. Grants ongewijzigd.
+
+**Bewust niet aangepast:** de advisor meldt `fn_alloc_distribute` met een mutable
+`search_path`. Beoordeeld en geaccepteerd: die functie is SECURITY INVOKER, heeft
+geen EXECUTE voor `anon` of `authenticated`, en raakt geen enkele tabel — hij
+rekent alleen op arrays. Een `SET search_path` toevoegen zou de waarschuwing
+wegpoetsen zonder iets te beschermen.
 
 **Opgelost in `m21`** — het verwijderen van een boekjaar met financiële historie:
 
