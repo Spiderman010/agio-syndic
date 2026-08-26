@@ -116,7 +116,9 @@ BEGIN
   BEGIN
     INSERT INTO public.fiscal_years(organization_id,building_id,year,start_date,end_date,status)
     VALUES (vorg,vb,2024,'2024-01-01','2024-12-31','open') RETURNING id INTO vfy7;
-    UPDATE public.fiscal_years SET status='closed' WHERE id=vfy7;
+    -- Sinds m23 is close_fiscal_year() het enige afsluitpad; een kale UPDATE naar
+    -- 'closed' wordt geweigerd omdat er dan geen afsluitbewijs zou ontstaan.
+    PERFORM public.close_fiscal_year(vfy7);
     BEGIN DELETE FROM public.fiscal_years WHERE id=vfy7; ok := false;
     EXCEPTION WHEN others THEN ok := (SQLERRM LIKE 'Een afgesloten boekjaar%'); END;
   END;
@@ -297,7 +299,7 @@ BEGIN
     VALUES (vorg2,vbB,2020,'2020-01-01','2020-12-31','open') RETURNING id INTO vfyB;
     INSERT INTO public.expenses(organization_id,building_id,fiscal_year_id,account_id,supplier,amount,expense_date)
     VALUES (vorg2,vbX,vfyB,public.get_account_id(vorg2,'6110'),'Kruis',10.00,'2020-05-01');
-    UPDATE public.fiscal_years SET status='closed' WHERE id=vfyB;
+    PERFORM public.close_fiscal_year(vfyB);   -- m23: officiele afsluitroute
     msg := NULL;
     BEGIN
       DELETE FROM public.buildings WHERE id=vbX;
