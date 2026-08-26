@@ -485,15 +485,22 @@ BEGIN
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
              || '  T30  oproep zonder betaling intrekbaar, journaalpost opgeruimd';
 
-  -- T31  het HELE gebouw verwijderen moet blijven werken
+  -- T31  GEWIJZIGDE VERWACHTING sinds m21.
+  -- Tot m20 kon een gebouw met betaalde historie zonder meer worden verwijderd; de cascade wiste
+  -- dan oproepen, allocaties, betalingskoppelingen en journaalposten. m21 sluit die route: een
+  -- gebouw met financiele historie is niet langer verwijderbaar. Het opheffen van de hele
+  -- organisatie blijft de bewuste, volledige uitgang — dat is T32.
   BEGIN
     DELETE FROM public.buildings WHERE id=v_b;
     SET CONSTRAINTS ALL IMMEDIATE;
-    ok := true;
-  EXCEPTION WHEN others THEN ok := false; msg := left(SQLERRM,80); END;
+    ok := false;
+  EXCEPTION WHEN others THEN
+    ok := (SQLERRM LIKE 'BUILDING_HAS_FINANCIAL_HISTORY%'); msg := left(SQLERRM,80);
+  END;
+  BEGIN SET CONSTRAINTS ALL DEFERRED; EXCEPTION WHEN others THEN NULL; END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-             || '  T31  DELETE van gebouw met betaalde historie en actieve percentageregel  '
+             || '  T31  DELETE van gebouw met betaalde historie -> geblokkeerd (m21)  '
              || coalesce('['||msg||']','');
 
   -- T32  de hele organisatie verwijderen
