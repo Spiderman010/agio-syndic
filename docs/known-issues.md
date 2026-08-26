@@ -137,14 +137,29 @@ herstelronde en dus niet aangepakt:
   journaalpost. Dat is de bedoelde uitkomst — wissen is geen correctie — maar het
   maakt een echte correctieroute wel de eerstvolgende functionele stap, en die geldt
   nu voor twee brontabellen in plaats van één.
-- **Een heropend boekjaar kan niet opnieuw via `close_fiscal_year()` worden
-  afgesloten.** `fiscal_year_closings` kent `UNIQUE (fiscal_year_id)` en is sinds
-  `m22` onwijzigbaar, dus een tweede afsluitbewijs kan er niet komen en het bestaande
-  mag niet worden overschreven; de RPC weigert met `FY_CLOSING_EXISTS`. De harde
-  invariant blijft intact — het jaar hééft een afsluitbewijs — maar het afsluitbewijs
-  beschrijft dan de eerste afsluiting, niet de laatste. Een echte
-  heropen-/hersluitcyclus vraagt om meerdere afsluitbewijzen per boekjaar en dus om
-  een schemawijziging; bewust buiten `m23` gehouden.
+- **Heropenen en opnieuw afsluiten: bekende beperking, volledig beschreven.**
+  `fiscal_year_closings` kent `UNIQUE (fiscal_year_id)`, dus er kan hoogstens één
+  afsluitbewijs per boekjaar bestaan, en sinds `m22` is dat bewijs onwijzigbaar en niet
+  verwijderbaar zolang het boekjaar bestaat. Na een eerste afsluiting en een
+  daaropvolgende heropening (owner/admin) **blijft dat oude afsluitbewijs dus staan**.
+  Gevolgen, in deze volgorde:
+    - `close_fiscal_year()` kan het jaar niet opnieuw afsluiten en weigert met
+      `FY_CLOSING_EXISTS`; het zou het bestaande bewijs moeten overschrijven.
+    - **Belangrijk:** juist omdát er al een afsluitbewijs bestaat, komt een directe
+      `UPDATE fiscal_years SET status='closed'` na die heropening op dit moment **weer
+      door de guard heen**. `trig_02_fy_close_requires_closing` controleert alleen of
+      er een afsluitbewijs *bestaat*, niet of het bij deze afsluiting hoort.
+    - Daardoor blijven `closed_at`, `closed_by` en `result_amount` afkomstig van de
+      **eerste** afsluiting, en worden bij die tweede afsluiting geen journaalcontrole
+      en geen herberekening van het resultaat uitgevoerd.
+    - De invariant "een gesloten boekjaar heeft een afsluitbewijs" blijft wél intact.
+    - Maar het afsluitbewijs vertegenwoordigt dan **niet noodzakelijk de meest recente
+      afsluiting** van dat boekjaar.
+  Een echte heropen-/hersluitcyclus vraagt om meerdere of geversioneerde
+  afsluitbewijzen per boekjaar, of om een expliciete herafsluitflow, en dus om een
+  schemawijziging. Bewust buiten `m23` gehouden: **P2 / toekomstige workflow, geen
+  merge-blocker voor `m23`.** Er bestaat vandaag geen UI-flow voor afsluiten of
+  heropenen, dus dit scenario is via de applicatie niet bereikbaar.
 - Er is nog geen periodieke reconciliatie tussen 5141 (bank) en de
   `payments`-registratie; `v_allocation_integrity` dekt alleen de vorderingenkant.
 
@@ -159,18 +174,20 @@ review van PR #4:
   zonder mutaties is geen historie. De COMMENT die `bank_accounts` eerder wegzette als
   "stamdata zonder bedragen" is gecorrigeerd; dat klopte voor de rekening, niet voor de
   mutaties erop.
-- **Een boekjaar afsluiten kan alleen nog via `close_fiscal_year()`.** Bewezen gat
-  vóór `m23`: `UPDATE fiscal_years SET status='closed'` slaagde met nul
+- **De EERSTE afsluiting van een boekjaar kan alleen via `close_fiscal_year()`.** Deze
+  claim geldt precies voor een boekjaar dat nog géén afsluitbewijs heeft; voor de
+  heropen-/hersluitsituatie geldt de uitzondering die hierboven staat beschreven.
+  Bewezen gat vóór `m23`: `UPDATE fiscal_years SET status='closed'` slaagde met nul
   afsluitbewijzen. De nieuwe RPC valideert, vergrendelt het boekjaar, controleert dat
   het journaal sluit, berekent het resultaat volgens PCSI (klasse 7 minus klasse 6),
   schrijft het afsluitbewijs met `closed_by`/`closed_at` en zet de status — alles in
-  één transactie. `trig_02_fy_close_requires_closing` is het vangnet: elke andere weg
-  naar `closed` wordt geweigerd, ook voor owner, admin en de postgres-context. De
-  omgekeerde richting volgt uit de constructie: alleen de RPC kan een afsluitbewijs
-  aanmaken (RLS op INSERT staat op `false`), en die zet de status in dezelfde
-  transactie. Autorisatie: `can_write`, dezelfde kring die ook lastenoproepen boekt —
-  bewust níet beperkt tot owner/admin, want *heropenen* is de uitzonderlijke ingreep en
-  blijft wél aan owner/admin voorbehouden.
+  één transactie. `trig_02_fy_close_requires_closing` is het vangnet: zolang er nog
+  geen afsluitbewijs bestaat, wordt elke andere weg naar `closed` geweigerd, ook voor
+  owner, admin en de postgres-context. De omgekeerde richting volgt uit de constructie:
+  alleen de RPC kan een afsluitbewijs aanmaken (RLS op INSERT staat op `false`), en die
+  zet de status in dezelfde transactie. Autorisatie: `can_write`, dezelfde kring die
+  ook lastenoproepen boekt — bewust níet beperkt tot owner/admin, want *heropenen* is de
+  uitzonderlijke ingreep en blijft wél aan owner/admin voorbehouden.
 - **Een uitgave met journaalpost is niet direct verwijderbaar**
   (`EXPENSE_HAS_FINANCIAL_HISTORY`). Bewezen gat vóór `m23`: een manager verwijderde
   een uitgave van 900,00; de journaalpost bleef staan (1 vóór, 1 ná), dus 6110 debet en
