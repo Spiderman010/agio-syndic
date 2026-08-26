@@ -348,7 +348,11 @@ BEGIN
   INSERT INTO public.fiscal_years(organization_id, building_id, year, start_date, end_date, status)
   VALUES (v_org_a, v_bld_a, 2025, '2025-01-01', '2025-12-31', 'open')
   RETURNING id INTO v_fy_shut;
-  UPDATE public.fiscal_years SET status = 'closed' WHERE id = v_fy_shut;
+  -- m23: afsluiten loopt via de RPC, die ook het afsluitbewijs vastlegt. De RPC controleert
+  -- can_write op basis van auth.uid(), en een eerder mislukt sub-blok rolt set_config mee
+  -- terug; daarom wordt de JWT-context hier expliciet op de owner gezet.
+  PERFORM set_config('request.jwt.claims', PROC_A, true);
+  PERFORM public.close_fiscal_year(v_fy_shut);
 
   BEGIN
     INSERT INTO public.expenses(organization_id, building_id, fiscal_year_id, amount, expense_date)
@@ -457,7 +461,8 @@ BEGIN
   --     Zie docs/accounting-rules.md §2.
   -- =========================================================================
   PERFORM set_config('role', 'postgres', true);
-  UPDATE public.fiscal_years SET status = 'closed' WHERE id = v_fy_a;
+  PERFORM set_config('request.jwt.claims', PROC_A, true);
+  PERFORM public.close_fiscal_year(v_fy_a);   -- m23: officiele afsluitroute
 
   BEGIN
     UPDATE public.charge_allocations SET settled_amount = settled_amount
