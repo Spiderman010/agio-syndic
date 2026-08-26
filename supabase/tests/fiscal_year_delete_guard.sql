@@ -19,8 +19,8 @@
 --   * de invariant geldt voor ELKE rol, ook owner/admin en de postgres-context;
 --   * het verwijderen van het GEBOUW is geen omweg meer (BUILDING_HAS_FINANCIAL_HISTORY);
 --   * het verwijderen van de ORGANISATIE blijft de bewuste, volledige uitgang;
---   * de parent-cascade escapes werken, ook bij een kruislingse uitgave naar het gesloten
---     boekjaar van een ander gebouw (dat blokkeerde vroeger de hele gebouwsloop).
+--   * de parent-cascade escapes werken; sinds m22 is de kruislingse uitgave naar het gesloten
+--     boekjaar van een ander gebouw geen sloopdeadlock meer maar gewoon eigen historie (T18).
 -- ============================================================================
 
 DO $test$
@@ -284,8 +284,13 @@ BEGIN
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
              || '  T17  alleen een compliance-deadline -> bewust toegestaan ' || coalesce('['||msg||']','');
 
-  -- T18 — de kruislingse deadlock die m21 meeneemt: een uitgave op gebouw X die verwijst naar het
-  -- GESLOTEN boekjaar van gebouw B blokkeerde vroeger het slopen van gebouw X.
+  -- T18 — kruislingse referentie. GEWIJZIGDE VERWACHTING sinds m22.
+  -- Tot m21 was gebouw X hier verwijderbaar en bewees deze test dat de parent-escape op
+  -- fn_guard_closed_fy_expenses de oude deadlock ('Boekjaar is afgesloten') ophief. m22 verbreedt
+  -- de gebouwguard naar directe historie op building_id, en die uitgave IS financiele historie van
+  -- gebouw X. De sloop wordt dus nu geweigerd — maar om de JUISTE reden. Deze test legt beide vast:
+  -- geblokkeerd met BUILDING_HAS_FINANCIAL_HISTORY, en nadrukkelijk NIET met de deadlockmelding.
+  -- De escape zelf wordt bewezen door T20 (organisatiecascade) en door de m22-suite.
   BEGIN
     INSERT INTO public.buildings(organization_id,name,total_tantiemes) VALUES (vorg2,'X-open',100) RETURNING id INTO vbX;
     INSERT INTO public.fiscal_years(organization_id,building_id,year,start_date,end_date,status)
@@ -297,23 +302,45 @@ BEGIN
     BEGIN
       DELETE FROM public.buildings WHERE id=vbX;
       SET CONSTRAINTS ALL IMMEDIATE; SET CONSTRAINTS ALL DEFERRED;
-      ok := true;
-    EXCEPTION WHEN others THEN ok := false; msg := left(SQLERRM,100); END;
+      ok := false;
+    EXCEPTION WHEN others THEN
+      ok := (SQLERRM LIKE 'BUILDING_HAS_FINANCIAL_HISTORY%' AND SQLERRM LIKE '%uitgave%');
+      msg := left(SQLERRM,100);
+    END;
   END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-             || '  T18  kruislingse uitgave naar gesloten jaar van ander gebouw -> sloop slaagt '
+             || '  T18  kruislingse uitgave naar gesloten jaar van ander gebouw -> geblokkeerd op de eigen uitgave (m22), niet op de oude deadlock '
              || coalesce('['||msg||']','');
 
   -- T19 — BEFORE-guards zijn statement-atomisch: een meervoudige DELETE wordt volledig geweigerd.
+  -- De fixture wordt hier expliciet opgebouwd zodat het DELETE-statement WERKELIJK meerdere
+  -- boekjaren raakt. Voor m22 raakte deze test er maar een, omdat T13 het tweede jaar naar een
+  -- ander gebouw had verplaatst; het label claimde toen iets wat de fixture niet uitvoerde.
+  DECLARE vfy19a uuid; vfy19b uuid;
+  BEGIN
+    INSERT INTO public.fiscal_years(organization_id,building_id,year,start_date,end_date,status)
+    VALUES (vorg2,vbA,2038,'2038-01-01','2038-12-31','open') RETURNING id INTO vfy19a;
+    INSERT INTO public.fiscal_years(organization_id,building_id,year,start_date,end_date,status)
+    VALUES (vorg2,vbA,2039,'2039-01-01','2039-12-31','open') RETURNING id INTO vfy19b;
+    -- 2039 krijgt eigen historie, 2038 blijft leeg. Samen met het beschermde 2030 uit T12 staan
+    -- er dan drie jaren onder vbA, waarvan twee beschermd en een verwijderbaar.
+    INSERT INTO public.journal_entries(organization_id,building_id,fiscal_year_id,entry_date,source,description)
+    VALUES (vorg2,vbA,vfy19b,'2039-03-01','manual','T19') RETURNING id INTO ve;
+    INSERT INTO public.journal_lines(organization_id,journal_entry_id,account_id,debit,credit)
+    VALUES (vorg2,ve,public.get_account_id(vorg2,'6110'),7,0),
+           (vorg2,ve,public.get_account_id(vorg2,'4411'),0,7);
+  END;
   SELECT count(*) INTO n_voor FROM public.fiscal_years WHERE building_id=vbA;
   BEGIN DELETE FROM public.fiscal_years WHERE building_id=vbA; ok := false;
   EXCEPTION WHEN others THEN ok := (SQLERRM LIKE 'FY_HAS_FINANCIAL_HISTORY%'); END;
   SELECT count(*) INTO n_na FROM public.fiscal_years WHERE building_id=vbA;
-  ok := ok AND (n_voor = n_na);
+  -- harde eis: het statement moet echt meerdere rijen hebben geraakt
+  ok := ok AND (n_voor > 1) AND (n_voor = n_na);
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-             || '  T19  meervoudige DELETE -> volledige weigering, geen enkel jaar verwijderd';
+             || '  T19  meervoudige DELETE over ' || n_voor || ' boekjaren -> volledige weigering, '
+             || n_na || ' nog aanwezig';
 
   -- T20 — offboarding blijft werken, ook met meerdere gebouwen en volledige historie.
   msg := NULL;
