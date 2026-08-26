@@ -1,6 +1,6 @@
 # Bekende problemen en handmatige stappen
 
-Bijgewerkt: 25-08-2026, na de flexible allocation engine (`m12` t/m `m20`).
+Bijgewerkt: 26-08-2026, na de fiscal year delete guard (`m21`).
 
 ---
 
@@ -128,6 +128,46 @@ herstelronde en dus niet aangepakt:
 - Er is geen controle dat `journal_entries.entry_date` binnen de periode van het
   boekjaar valt.
 - Er is geen audit trail van financiële mutaties (wie boekte wat, wanneer).
+- `payments` heeft geen DELETE-guard: een betaling verwijderen cascadeert haar
+  `payment_allocations` weg zonder `charge_allocations.settled_amount` terug te
+  rekenen (`fn_payment_fifo` is AFTER INSERT only).
+- `fiscal_year_closings` heeft geen DELETE-guard: het afsluitbewijs van een
+  gesloten boekjaar is te wissen terwijl het jaar `closed` blijft.
+- `expenses.fiscal_year_id` losmaken (`→ NULL`) mag altijd en zet de uitgave
+  permanent buiten elke afsluitbescherming; een uitgave die pas via UPDATE aan
+  een jaar wordt gekoppeld krijgt bovendien nooit een journaalpost.
+- `is_org_member()` bevat een **ongekwalificeerde** verwijzing naar
+  `memberships` met `search_path = public` zonder `pg_temp`. PostgreSQL
+  doorzoekt `pg_temp` altijd eerst voor relatienamen, dus een sessie die een
+  tijdelijke tabel `memberships` kan aanmaken zou alle SELECT-policies kunnen
+  openzetten. Niet bereikbaar via PostgREST (dat kan geen temp-tabellen maken)
+  en schrijven blijft dicht, maar de functie draagt 96 policies en hoort
+  `from public.memberships` plus `SET search_path = public, pg_temp` te krijgen.
+- `TRUNCATE` is nog aan `anon` en `authenticated` gegund op onder meer
+  `fiscal_years`, `buildings`, `organizations`, `payments` en `expenses`. Dat het
+  vandaag stukloopt komt doordat de cascade een tabel raakt waar het recht wél is
+  ingetrokken — geluk, geen ontwerp. `REVOKE TRUNCATE ON ALL TABLES IN SCHEMA
+  public FROM anon, authenticated` hoort erbij.
+
+**Opgelost in `m21`** — het verwijderen van een boekjaar met financiële historie:
+
+- Een boekjaar met lastenoproepen, allocaties, betalingskoppelingen,
+  journaalposten, uitgaven, jaarafsluitingen, definitieve documenten of
+  fondsmutaties binnen zijn periode is niet meer direct verwijderbaar
+  (`FY_HAS_FINANCIAL_HISTORY`). De invariant geldt voor élke rol, ook
+  owner/admin — er is bewust geen shortcut.
+- `buildings` kreeg een spiegelguard (`BUILDING_HAS_FINANCIAL_HISTORY`). Zonder
+  die guard zou de boekjaarguard triviaal te omzeilen zijn door het gebouw te
+  verwijderen. **Gedragswijziging:** een gebouw met financiële historie is nu
+  niet langer verwijderbaar; dat was het tot en met `m20` wél.
+- Een boekjaar mét historie kan niet meer naar een ander gebouw verhuizen — dat
+  was anders de omweg: verhuizen naar een leeg gebouw en dat gebouw slopen.
+- Twee bestaande deadlocks meegenomen: een gebouw of organisatie met een
+  **gesloten** boekjaar was permanent onverwijderbaar, en een uitgave of
+  journaalpost die kruislings naar het gesloten boekjaar van een ánder gebouw
+  verwees blokkeerde de sloop van het eerste gebouw.
+- `organizations` verwijderen blijft de bewuste, volledige uitgang
+  (offboarding), via RLS voorbehouden aan de owner.
 
 Drie punten uit deze lijst zijn inmiddels **wél** opgelost door `m12`–`m20` en
 staan hier alleen nog ter historie:
