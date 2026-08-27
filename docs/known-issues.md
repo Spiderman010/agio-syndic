@@ -1,6 +1,6 @@
 # Bekende problemen en handmatige stappen
 
-Bijgewerkt: 26-08-2026, na de financial integrity completion (`m23`).
+Bijgewerkt: 27-08-2026, na de financial reversal engine (`m24`–`m28`).
 
 ---
 
@@ -129,14 +129,40 @@ herstelronde en dus niet aangepakt:
   een fondsmutatie.
 - Er is geen controle dat `journal_entries.entry_date` binnen de periode van het
   boekjaar valt.
-- Er is geen audit trail van financiële mutaties (wie boekte wat, wanneer).
-- Er bestaat geen storno- of terugbetaalflow. Sinds `m22` is een betaling met
-  historie niet meer verwijderbaar, en `fn_journal_from_payment` maakt bij élke
-  INSERT een journaalpost. In de praktijk is daarmee **geen enkele betaling nog
-  direct verwijderbaar**. Sinds `m23` geldt hetzelfde voor een **uitgave** met
-  journaalpost. Dat is de bedoelde uitkomst — wissen is geen correctie — maar het
-  maakt een echte correctieroute wel de eerstvolgende functionele stap, en die geldt
-  nu voor twee brontabellen in plaats van één.
+- Er is geen algemene audit trail van financiële mutaties (wie boekte wat, wanneer).
+  Sinds `m25` geldt dat wél voor storno's en correcties: `financial_reversals` legt
+  actor, tijdstip, reden en bestemming vast. Het gewone boeken van een betaling of
+  uitgave draagt nog steeds geen `created_by`.
+- **Gedeeltelijke storno bestaat niet.** De engine kent alleen een VOLLEDIGE storno;
+  `fn_guard_par_consistent` weigert een neutralisatie die afwijkt van het bedrag van
+  de oorspronkelijke toewijzing (`ALLOCATION_REVERSAL_PARTIAL`). Wie een deel wil
+  terugdraaien storneert volledig en boekt de juiste transactie opnieuw. Bewuste
+  MVP-grens; een gedeeltelijke variant vraagt om een tweede neutralisatievorm en om
+  hertoewijzing van FIFO, en is daarmee eigen functionaliteit.
+- **Rapportage telt bruto.** `payments.amount` en `expenses.amount` sommeren nog
+  steeds origineel én correctie. Een correctie van 1000 naar 800 laat de bruto
+  betalingslijst 1800 tonen. Eigenaarsaldi corrigeren zichzelf wél, omdat die uit
+  `amount - settled_amount` volgen en de storno `settled_amount` herstelt.
+  `v_financial_reversals` maakt zichtbaar wat gestorneerd is; het netten in de UI is
+  Checkpoint 3 en is bewust niet in de databasekern gebouwd.
+- `v_allocation_integrity` en `v_reconciliation_4111` dragen nog overbodige
+  INSERT/UPDATE/DELETE-grants voor `authenticated`, geërfd van de default-ACL. Beide
+  views zijn niet auto-updatable (`is_insertable_into = NO`), dus die rechten zijn
+  onbruikbaar. Voor de drie NIEUWE views is dit in `m27`/`m28` wél ingetrokken; de twee
+  oude vallen buiten de scope van de reversal-engine en horen in een eigen
+  opruimronde. **P2, geen merge-blocker.**
+- **`fiscal_year_closings.closed_by` blokkeert het verwijderen van een gebruiker.**
+  Exact dezelfde fout die `m28` voor `financial_reversals.created_by` heeft gesloten,
+  bestaat pre-existent op `fiscal_year_closings`: de kolom is
+  `REFERENCES auth.users(id) ON DELETE SET NULL`, en PostgreSQL voert die RI-actie uit
+  als een UPDATE op de kindrij — die `fn_guard_fy_closing_immutable` sinds `m18`
+  onvoorwaardelijk weigert. Gevolg: `DELETE FROM auth.users` faalt voor iedereen die
+  ooit een boekjaar heeft afgesloten, wat offboarding en AVG-verwijdering blokkeert.
+  Gevonden tijdens de adversariële review op `m24`–`m27`. **Bewust NIET in `m28`
+  gerepareerd** — het raakt de jaarafsluiting en niet de reversal-engine, en hoort met
+  een eigen test in een eigen ronde. De fix is dezelfde vorm als die in `m28`: alleen
+  de overgang `closed_by → NULL` toestaan wanneer de gebruiker daadwerkelijk weg is en
+  alle overige kolommen ongewijzigd zijn. **P1 voor de volgende ronde.**
 - **Heropenen en opnieuw afsluiten: bekende beperking, volledig beschreven.**
   `fiscal_year_closings` kent `UNIQUE (fiscal_year_id)`, dus er kan hoogstens één
   afsluitbewijs per boekjaar bestaan, en sinds `m22` is dat bewijs onwijzigbaar en niet
@@ -162,6 +188,91 @@ herstelronde en dus niet aangepakt:
   heropenen, dus dit scenario is via de applicatie niet bereikbaar.
 - Er is nog geen periodieke reconciliatie tussen 5141 (bank) en de
   `payments`-registratie; `v_allocation_integrity` dekt alleen de vorderingenkant.
+
+**Opgelost in `m24`–`m28`** — de gecontroleerde storno-/correctieflow, de laatste
+functionele P1 uit de reeks.
+
+`m28` sluit vier bevindingen uit de adversariële review op `m24`–`m27`, alle vier bewezen
+met een rollback-probe op de live database:
+
+- **De settlement-guard leunde op een onbewaakte optelling.**
+  `fn_guard_ca_settlement_derived` leidt `settled_amount` af uit
+  `SUM(payment_allocations.amount)`, maar niets koppelde die som aan `payments.amount`.
+  Een verzonnen extra toewijzing van 600,00 op een bestaande betaling van 400,00 werd
+  nergens tegengehouden, waarna een vordering van 1000,00 legitiem volledig afgeboekt kon
+  worden terwijl er 400,00 was ontvangen. `v_settlement_integrity` stelt dezelfde
+  vergelijking en meldde daardoor `ok = true`: geen preventie én geen detectie.
+  `fn_guard_pa_within_payment` bindt de som nu aan de betaling; de nieuwe view
+  `v_payment_allocation_integrity` maakt het meetbaar. Dit was de scherpste van de vier —
+  de guard was precies zo sterk als zijn zwakste invoer, en dat was niet wat `m25` claimde.
+- **Een gebruiker die ooit een storno boekte kon niet worden verwijderd.**
+  `created_by` is `ON DELETE SET NULL`; PostgreSQL voert dat uit als een UPDATE, en de
+  immutability-guard weigerde elke UPDATE onvoorwaardelijk. `DELETE FROM auth.users` —
+  precies wat Supabase' admin `deleteUser` doet — faalde daardoor met `23514`, wat
+  offboarding en AVG-verwijdering hard blokkeerde. Toegestaan is nu uitsluitend de
+  overgang `created_by → NULL` wanneer de gebruiker daadwerkelijk weg is en alle overige
+  kolommen ongewijzigd zijn; reden, tijdstip en bedrag blijven staan.
+- **De gespiegelde journaalpost los verwijderen sloopte de audittrail.** De FK naar
+  `journal_entries` staat op `ON DELETE CASCADE`, dus het wissen van de storno-post nam de
+  `financial_reversals`-rij én de neutralisaties mee terwijl `settled_amount` verlaagd
+  bleef. De vordering stond dan afgeboekt zonder enige onderbouwing, en raakte bovendien
+  permanent geblokkeerd voor nieuwe betalingen. `fn_guard_reversal_entry_delete` weigert
+  dat nu, met de gebruikelijke parent-cascade-escape zodat offboarding blijft werken.
+- **Een correctie kon over twee OPEN boekjaren worden gesplitst.** De storno volgde het
+  originele boekjaar zolang dat open was, terwijl `fn_journal_from_payment` de vervangende
+  betaling altijd in het meest recente open jaar boekt. Stond er een nieuwer open jaar
+  naast, dan belastte de storno 2025 en de correctie 2026, en meldde de detector
+  `is_correctie_vorig_boekjaar` ten onrechte `false`. Betalingen volgen nu altijd het meest
+  recente open boekjaar, dezelfde regel als `fn_journal_from_payment`, zodat beide helften
+  per definitie in hetzelfde jaar landen. Uitgaven houden hun eigen regel, omdat
+  `correct_expense` het doelboekjaar expliciet meegeeft.
+
+De engine zelf, uit `m24`–`m27`:
+
+- **Er is nu een storno- en correctieroute voor betalingen en voor gejournaliseerde
+  uitgaven.** Vier RPC's: `reverse_payment`, `correct_payment`, `reverse_expense`,
+  `correct_expense`. Het origineel wordt nooit gewist of overschreven; de storno is
+  een gespiegelde journaalpost (`journal_entries.source = 'reversal'`) in het geldige
+  OPEN boekjaar, plus append-only neutralisatierijen die de openstaande vordering
+  herstellen. Een gecorrigeerde transactie is een gewone nieuwe rij, zodat de
+  bestaande FIFO- en journaalmotoren ongewijzigd hun werk doen.
+- **`charge_allocations.settled_amount` is niet langer vrij muteerbaar.** Dit was de
+  scherpste openstaande P1: de kolom waarop de hele debiteurenpositie rust, kon door
+  elke SECURITY DEFINER-context en door `service_role` op een willekeurige waarde
+  worden gezet. `fn_guard_ca_settlement_derived` dwingt nu de invariant zelf af:
+
+      settled_amount = SUM(payment_allocations.amount)
+                     - SUM(payment_allocation_reversals.amount)
+
+  Bewust GEEN identificatie van de aanroeper. `pg_trigger_depth()` bewijst alleen dat
+  er érgens een trigger draait, niet welke; een transactielokale GUC verplaatst het
+  probleem naar "wie kan die GUC zetten", met bewijslast die nooit afneemt. Door de
+  invariant te controleren in plaats van de aanroeper is er geen context om te
+  vervalsen. `v_settlement_integrity` maakt eventuele drift zichtbaar.
+- **Een geboekte betaling en een geboekte uitgave zijn onwijzigbaar op alles wat het
+  grootboek raakt.** Bevroren zodra er een journaalpost hangt: bij betalingen bedrag,
+  eigenaar, gebouw, valutadatum en betaalwijze; bij uitgaven bedrag,
+  grootboekrekening, categorie, uitgavedatum en gebouw. Bewust vrij: `reference` bij
+  betalingen en leverancier/omschrijving/bewijsstuk bij uitgaven. Zonder deze guards
+  zouden er twee wegen naar hetzelfde resultaat bestaan — de auditeerbare
+  correctieflow en een stille UPDATE — en dan is de audittrail optioneel.
+- **Storno van een storno is structureel onmogelijk.** Een reversal is geen
+  `payments`- en geen `expenses`-rij, dus er bestaat geen bron om naar te wijzen.
+  Daarvoor was geen extra constraint nodig; de vorm sluit het uit.
+- **Een gesloten boekjaar wordt nooit herschreven.** De storno landt altijd in een
+  OPEN boekjaar. Wat wél mag is het herstellen van `settled_amount` in een gesloten
+  jaar: dat is de doorlopende debiteurenpositie op 4111 en geen wijziging van de
+  vastgestelde jaarrekening — zie `docs/accounting-rules.md` paragraaf 2 en 5.
+  Autorisatie volgt die scheiding: origineel in een open jaar vraagt `can_write`,
+  origineel in een afgesloten jaar `can_manage_members` (owner/admin).
+- **Bug gevonden en gerepareerd tijdens deze ronde (`m27`).** De twee
+  immutability-guards uit `m25` bouwden hun veldenlijst met een ongetypeerd literal
+  (`velden || 'bedrag'`), waardoor PostgreSQL `anyarray || anyarray` koos en faalde
+  met `malformed array literal`. Gevolg: de guard sloeg af vóór de controle op het
+  bestaan van een journaalpost, gaf een onbegrijpelijke fout in plaats van
+  `PAYMENT_IMMUTABLE`, én weigerde een volstrekt legitieme wijziging aan een uitgave
+  zonder journaalpost. Gevonden door tests A11–A16, gerepareerd met een expliciete
+  `::text`-cast. `m22` liep hier niet tegenaan omdat het `format()` gebruikt.
 
 **Opgelost in `m23`** — de drie resterende integriteitsgaten uit de adversariële
 review van PR #4:
