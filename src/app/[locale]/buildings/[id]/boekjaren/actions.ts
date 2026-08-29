@@ -1,17 +1,22 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { requireOrg } from "@/lib/org";
+import { getActiveOrg, requireOrg } from "@/lib/org";
 import { revalidatePath } from "next/cache";
+import { getLocale, getTranslations } from "next-intl/server";
 import { localeRedirect } from "@/lib/redirect";
 import {
   chargeCallSchema,
+  correctPaymentSchema,
   fiscalYearSchema,
   parseForm,
   paymentSchema,
+  reversalValidationKey,
+  reversePaymentSchema,
 } from "@/lib/validation";
 import { assertFiscalYearWritable, assertInOrg } from "@/lib/guard";
 import { isDuplicateYear, toUserError } from "@/lib/errors";
+import { reversalErrorFingerprint, reversalErrorKey } from "@/lib/reversalErrors";
 
 export async function createFiscalYear(formData: FormData) {
   const { org } = await requireOrg();
@@ -166,4 +171,154 @@ export async function createPayment(formData: FormData) {
 
   revalidatePath(`/buildings/${building_id}/boekjaren/${fiscal_year_id}`);
   return localeRedirect(`/buildings/${building_id}/boekjaren/${fiscal_year_id}`);
+}
+
+// ---------------------------------------------------------------------------
+// Financial Reversal Engine — betalingen (m24–m28)
+// ---------------------------------------------------------------------------
+//
+// Deze twee actions bevatten GEEN financiële logica. Ze valideren de invoer,
+// controleren dat de betaling tot de actieve organisatie hoort, en roepen dan
+// exact één RPC aan. Storno, neutralisatie van de toewijzingen, de gespiegelde
+// journaalpost, FIFO op de vervangende betaling en de boekjaarkeuze gebeuren
+// atomair in de database. Wordt dat hier gedupliceerd, dan bestaan er twee
+// waarheden — en dat is precies wat de engine uitsluit.
+//
+// organization_id komt NOOIT uit FormData: hij wordt uit de actieve sessie
+// gelezen. Een meegestuurde organization_id zou stilzwijgend worden genegeerd.
+
+type ReversalResult = { error?: string };
+
+/**
+ * Gemeenschappelijke voorbereiding: sessie, vertalingen en de betaling zelf.
+ *
+ * Retourneert een foutmelding wanneer er geen sessie is (S1), wanneer het id
+ * ongeldig is, of wanneer de betaling niet bij de actieve organisatie hoort.
+ * Die laatste controle is de applicatielaag; RLS en `fn_reversal_authorize`
+ * doen hem onafhankelijk nog een keer.
+ */
+async function preparePaymentReversal(paymentId: string) {
+  const t = await getTranslations("reversal");
+
+  const active = await getActiveOrg();
+  if (!active) return { error: t("errors.notAuthenticated") } as const;
+
+  const supabase = await createClient();
+
+  const guard = await assertInOrg(supabase, "payments", paymentId, active.org.id, "Betaling");
+  if (guard) return { error: t("errors.notFound") } as const;
+
+  const { data, error } = await supabase
+    .from("payments")
+    .select("id, building_id")
+    .eq("id", paymentId)
+    .maybeSingle();
+
+  if (error || !data) return { error: t("errors.notFound") } as const;
+
+  return { ok: true as const, t, supabase, buildingId: data.building_id as string };
+}
+
+/**
+ * Vertaalt het resultaat van een reversal-RPC naar een stabiele appfout.
+ *
+ * Onbekende fouten worden serverside gelogd met alleen een vingerafdruk —
+ * SQLSTATE en engine-code. Bedragen, namen en de opgegeven reden zijn
+ * financiële persoonsgegevens en horen niet in een log.
+ */
+function mapReversalError(
+  error: { code?: string | null; message?: string | null } | null,
+  t: Awaited<ReturnType<typeof getTranslations<"reversal">>>,
+  context: string,
+): string {
+  const key = reversalErrorKey(error);
+  if (key === "unknown") {
+    console.error(`[reversal] ${context} ${reversalErrorFingerprint(error)}`);
+  }
+  return t(`errors.${key}` as Parameters<typeof t>[0]);
+}
+
+/**
+ * Pad dat na een storno of correctie opnieuw moet worden opgehaald.
+ *
+ * De LOCALE hoort erbij. next-intl draait met localePrefix "always", dus de
+ * werkelijke route is /fr/buildings/... — een pad zonder dat voorvoegsel komt
+ * met geen enkele gerenderde route overeen en laat de client-routercache van de
+ * gebruiker ongemoeid. Het gevolg zou een verouderde pagina zijn direct na een
+ * storno, precies wanneer het bedrag ertoe doet.
+ */
+async function revalidateAfterReversal(buildingId: string, fiscalYearId: string | null) {
+  const locale = await getLocale();
+  if (fiscalYearId) {
+    revalidatePath(`/${locale}/buildings/${buildingId}/boekjaren/${fiscalYearId}`);
+  }
+  revalidatePath(`/${locale}/buildings/${buildingId}/boekjaren`);
+}
+
+/** Het boekjaar waar de gebruiker vandaan komt; alleen voor revalidatie. */
+function redirectFiscalYear(formData: FormData): string | null {
+  const raw = formData.get("fy_id");
+  if (typeof raw !== "string") return null;
+  return /^[0-9a-f-]{36}$/i.test(raw) ? raw : null;
+}
+
+export async function reversePayment(formData: FormData): Promise<ReversalResult> {
+  // formData.get() geeft de EERSTE waarde van een herhaalde sleutel, terwijl
+  // parseForm() over entries() loopt en dus de LAATSTE overhoudt. Bij een
+  // dubbel meegestuurde payment_id zouden dat twee verschillende id's zijn: de
+  // tenantcontrole zou de ene rij goedkeuren en de RPC op de andere losgaan.
+  // De gecontroleerde id wordt daarom als override doorgegeven en is de enige
+  // waarde die telt.
+  const rawId = formData.get("payment_id");
+  const paymentId = typeof rawId === "string" ? rawId : "";
+  const prep = await preparePaymentReversal(paymentId);
+  if ("error" in prep) return prep;
+  const { t, supabase, buildingId } = prep;
+
+  const parsed = parseForm(reversePaymentSchema, formData, { payment_id: paymentId });
+  if (!parsed.ok) {
+    return { error: t(`errors.${reversalValidationKey(parsed.error)}` as Parameters<typeof t>[0]) };
+  }
+
+  const { error } = await supabase.rpc("reverse_payment", {
+    p_payment_id: parsed.data.payment_id,
+    p_reason: parsed.data.reason,
+  });
+
+  if (error) return { error: mapReversalError(error, t, "reverse_payment") };
+
+  await revalidateAfterReversal(buildingId, redirectFiscalYear(formData));
+  return {};
+}
+
+export async function correctPayment(formData: FormData): Promise<ReversalResult> {
+  // Zie reversePayment: de gecontroleerde id wint van een herhaalde formulierwaarde.
+  const rawId = formData.get("payment_id");
+  const paymentId = typeof rawId === "string" ? rawId : "";
+  const prep = await preparePaymentReversal(paymentId);
+  if ("error" in prep) return prep;
+  const { t, supabase, buildingId } = prep;
+
+  const parsed = parseForm(correctPaymentSchema, formData, { payment_id: paymentId });
+  if (!parsed.ok) {
+    return { error: t(`errors.${reversalValidationKey(parsed.error)}` as Parameters<typeof t>[0]) };
+  }
+  const { payment_id, amount, value_date, method, reference, reason } = parsed.data;
+
+  // De database doet dit atomair: storno, neutralisatie, gespiegelde
+  // journaalpost, nieuwe betaling, FIFO en journaal. Faalt er iets, dan rolt
+  // alles terug en bestaat er geen halve correctie.
+  const { error } = await supabase.rpc("correct_payment", {
+    p_payment_id: payment_id,
+    p_amount: amount,
+    p_value_date: value_date,
+    p_method: method,
+    p_reference: reference,
+    p_reason: reason,
+  });
+
+  if (error) return { error: mapReversalError(error, t, "correct_payment") };
+
+  await revalidateAfterReversal(buildingId, redirectFiscalYear(formData));
+  return {};
 }

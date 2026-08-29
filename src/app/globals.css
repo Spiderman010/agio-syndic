@@ -157,3 +157,55 @@ a {
 .muted {
   color: var(--ink-faint);
 }
+
+/* --------------------------------------------------------------------------
+   Financial Reversal Engine (m24-m28)
+   -------------------------------------------------------------------------- */
+
+/* Een gestorneerde transactie blijft staan en blijft leesbaar; hij wordt
+   gemarkeerd, niet verstopt. Doorhalen alleen op het bedrag, zodat de rest van
+   de regel gewoon te lezen blijft. */
+.badge-storno {
+  background: #f6e3e1;
+  color: var(--crit);
+}
+.badge-correctie {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.amount-reversed {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+
+.btn-danger {
+  background: var(--crit);
+  color: #fff;
+  border-color: var(--crit);
+}
+.btn-danger:hover {
+  background: var(--crit);
+  border-color: var(--crit);
+  color: #fff;
+  filter: brightness(0.94);
+}
+
+/* Native <dialog>. Geen extra afhankelijkheid; focus-trap, Escape en backdrop
+   komen van het platform. */
+.reversal-dialog {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.1rem 1.2rem 1.2rem;
+  max-width: 30rem;
+  width: calc(100vw - 2rem);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 18%);
+}
+.reversal-dialog::backdrop {
+  background: rgb(0 0 0 / 38%);
+}
+.reversal-dialog .label {
+  margin-top: 0.5rem;
+}

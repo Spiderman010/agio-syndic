@@ -167,6 +167,130 @@ export const expenseCategorySchema = z.object({
   name: z.string().trim().min(1, "Naam is verplicht.").max(120),
 });
 
+// ---------------------------------------------------------------------------
+// Financial Reversal Engine (m24–m28)
+// ---------------------------------------------------------------------------
+//
+// De schema's hieronder dragen als foutboodschap een SLEUTEL en geen zin. De
+// bestaande schema's geven Nederlandse prozateksten terug — historisch gegroeid
+// en vastgelegd als bekend punt in docs/known-issues.md — maar de reversal-flows
+// zijn nieuw en moeten Frans zijn via next-intl. Een sleutel laat de server
+// action de tekst vertalen; reversalValidationKey() bewaakt dat er nooit een
+// onbekende sleutel doorheen glipt.
+//
+// De grenzen spiegelen exact de database:
+//   reason   CHECK (length(btrim(reason)) BETWEEN 10 AND 500)
+//   amount   payments/expenses CHECK (amount > 0)
+//   method   enum payment_method
+// De database blijft de bron van waarheid; dit vangt de fout alleen eerder af en
+// met een begrijpelijke melding.
+
+const VALIDATION_KEYS = new Set([
+  "idInvalid",
+  "reasonRequired",
+  "amountInvalid",
+  "dateInvalid",
+  "methodInvalid",
+  "referenceTooLong",
+  "supplierTooLong",
+  "descriptionTooLong",
+]);
+
+/** Geeft de sleutel terug wanneer die bekend is, anders "invalidInput". */
+export function reversalValidationKey(key: string): string {
+  return VALIDATION_KEYS.has(key) ? key : "invalidInput";
+}
+
+const reversalUuid = z.string().uuid("idInvalid");
+
+/** Verplichte, betekenisvolle reden. Spiegelt de CHECK op financial_reversals. */
+const reversalReason = z
+  .string()
+  .trim()
+  .min(10, "reasonRequired")
+  .max(500, "reasonRequired");
+
+/**
+ * Bedrag voor een correctie.
+ *
+ * BEWUST STRENGER DAN `amount` HIERBOVEN. Dat oudere schema gebruikt
+ * `parseFloat`, en dat is voor een correctiebedrag gevaarlijk:
+ *
+ *   - `parseFloat` leest het langst geldige VOORVOEGSEL en negeert de rest, dus
+ *     "1200x" wordt stilzwijgend 1200 en "12OO" (met letters O) wordt 12;
+ *   - `.replace(",", ".")` vervangt alleen de EERSTE komma, dus "1.200,50"
+ *     wordt "1.200.50" en `parseFloat` maakt daar 1,2 van.
+ *
+ * Bij een correctie is die stilte onaanvaardbaar: het originele bedrag is dan
+ * al gestorneerd, dus een verkeerd gelezen getal komt rechtstreeks in de
+ * vervangende betaling en in het grootboek terecht. Daarom eerst de VORM
+ * controleren en pas daarna omzetten met `Number()`, dat de hele string moet
+ * kunnen lezen of NaN teruggeeft.
+ *
+ * Spaties (ook de smalle en niet-brekende spatie die fr-MA als
+ * duizendtalscheiding gebruikt) worden verwijderd. Een punt of komma is
+ * uitsluitend het decimaalteken; "1.200,50" wordt geweigerd in plaats van
+ * geraden, want daar is niet uit af te leiden of 1200,50 of 1,20 is bedoeld.
+ */
+const reversalAmount = z
+  .string()
+  .trim()
+  .min(1, "amountInvalid")
+  .transform((v) => v.replace(/[\s   ]/g, ""))
+  .refine((v) => /^\d{1,12}([.,]\d{1,2})?$/.test(v), { message: "amountInvalid" })
+  .transform((v) => Number(v.replace(",", ".")))
+  .refine((n) => Number.isFinite(n), { message: "amountInvalid" })
+  .refine((n) => n > 0, { message: "amountInvalid" })
+  .refine((n) => n <= 1_000_000_000, { message: "amountInvalid" })
+  .transform((n) => Math.round(n * 100) / 100);
+
+const reversalDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "dateInvalid")
+  .refine((v) => !Number.isNaN(Date.parse(v)), { message: "dateInvalid" });
+
+const reversalOptionalText = (max: number, key: string) =>
+  z.preprocess(blankToNull, z.string().max(max, key).nullable());
+
+export const reversePaymentSchema = z.object({
+  payment_id: reversalUuid,
+  reason: reversalReason,
+});
+
+export const correctPaymentSchema = z.object({
+  payment_id: reversalUuid,
+  amount: reversalAmount,
+  value_date: reversalDate,
+  method: z.enum(["virement", "especes", "cheque", "carte"], {
+    errorMap: () => ({ message: "methodInvalid" }),
+  }),
+  reference: reversalOptionalText(80, "referenceTooLong"),
+  reason: reversalReason,
+});
+
+export const reverseExpenseSchema = z.object({
+  expense_id: reversalUuid,
+  reason: reversalReason,
+});
+
+/**
+ * Correctie van een uitgave.
+ *
+ * `account_id` staat hier BEWUST niet in: de bestaande invoerflow laat de
+ * gebruiker die ook niet kiezen (de rekening volgt uit de categorie), en de
+ * server neemt hem over van de ORIGINELE uitgave. Zo komt er geen door de client
+ * aangeleverde grootboekrekening het systeem in.
+ */
+export const correctExpenseSchema = z.object({
+  expense_id: reversalUuid,
+  amount: reversalAmount,
+  expense_date: reversalDate,
+  category_id: optionalUuid,
+  supplier: reversalOptionalText(200, "supplierTooLong"),
+  description: reversalOptionalText(400, "descriptionTooLong"),
+  reason: reversalReason,
+});
+
 /**
  * Valideert FormData tegen een schema en geeft óf de geparste waarden óf een
  * enkele, leesbare foutmelding terug.

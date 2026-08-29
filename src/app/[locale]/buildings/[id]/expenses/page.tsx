@@ -7,6 +7,9 @@ import { getTranslations } from "next-intl/server";
 import { createExpense, createExpenseCategory } from "./actions";
 import ReceiptLink from "@/components/ReceiptLink";
 import ActionForm from "@/components/ActionForm";
+import ExpenseReversalActions from "@/components/ExpenseReversalActions";
+import { canReverse } from "@/lib/roles";
+import { correctionOf, fetchReversalIndex, netTotal, reversalOf } from "@/lib/reversal";
 import type { Building, FiscalYear } from "@/lib/types";
 
 type CategoryRow = { id: string; name: string; default_account_id: string | null };
@@ -19,6 +22,7 @@ type ExpenseRow = {
   receipt_path: string | null;
   receipt_url: string | null;
   fiscal_year_id: string | null;
+  category_id: string | null;
   expense_categories: { name: string } | null;
 };
 
@@ -32,9 +36,10 @@ export default async function ExpensesPage({
   params: Promise<{ id: string }>;
 }) {
   const { id: buildingId } = await params;
-  const { org } = await requireOrg();
+  const { org, role } = await requireOrg();
   const supabase = await createClient();
   const t = await getTranslations("expenses");
+  const tr = await getTranslations("reversal");
 
   const { data: buildingData } = await supabase.from("buildings").select("*").eq("id", buildingId).maybeSingle();
   if (!buildingData) notFound();
@@ -49,7 +54,7 @@ export default async function ExpensesPage({
     supabase
       .from("expenses")
       .select(
-        "id, supplier, description, amount, expense_date, receipt_path, receipt_url, fiscal_year_id, expense_categories(name)",
+        "id, supplier, description, amount, expense_date, receipt_path, receipt_url, fiscal_year_id, category_id, expense_categories(name)",
       )
       .eq("building_id", buildingId)
       .order("expense_date", { ascending: false })
@@ -68,7 +73,30 @@ export default async function ExpensesPage({
   const expenses = (expData ?? []) as unknown as ExpenseRow[];
   const fiscalYears = (fyData ?? []) as Pick<FiscalYear, "id" | "year" | "status">[];
 
-  const totalAmount = expenses.reduce((s, e) => s + Number(e.amount), 0);
+  // ---- Financial Reversal Engine -------------------------------------------
+  // De storno's die bij deze uitgaven horen. Hiermee wordt de LIJST gemarkeerd
+  // (klasse A: alles blijft zichtbaar) en het TOTAAL genet (klasse B).
+  const reversals = await fetchReversalIndex(
+    supabase,
+    "expense",
+    expenses.map((e) => e.id),
+  );
+
+  // Welke boekjaren zijn afgesloten? Bepaalt of storneren een owner/admin-
+  // ingreep is; de database beslist definitief in fn_reversal_authorize.
+  const { data: allFyData } = await supabase
+    .from("fiscal_years")
+    .select("id, status")
+    .eq("building_id", buildingId);
+  const closedFy = new Set(
+    (allFyData ?? []).filter((f) => f.status === "closed").map((f) => f.id as string),
+  );
+
+  // NETTO totaal: een gestorneerde uitgave telt niet mee, de vervangende wel.
+  // Een correctie van 1200 naar 900 levert dus 900 en niet 2100. De lijst
+  // hieronder toont nog steeds alle rijen.
+  const totalAmount = netTotal(expenses, reversals);
+  const heeftStorno = expenses.some((e) => reversals.bySource.has(e.id));
 
   return (
     <>
@@ -84,9 +112,16 @@ export default async function ExpensesPage({
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0.7rem 0 1.2rem", flexWrap: "wrap", gap: 8 }}>
           <h1 style={{ margin: 0, fontSize: "1.4rem" }}>{t("title")}</h1>
-          {totalAmount > 0 && (
-            <span style={{ fontWeight: 700, fontSize: "1rem" }}>
+          {/* Ook tonen bij 0: na een storno IS het nettototaal legitiem nul, en
+              een verdwijnend totaal zou als "niet berekend" worden gelezen. */}
+          {expenses.length > 0 && (
+            <span style={{ fontWeight: 700, fontSize: "1rem" }} title={heeftStorno ? tr("netHint") : undefined}>
               {fmt(totalAmount)} MAD {t("title").toLowerCase()}
+              {heeftStorno && (
+                <span className="muted" style={{ fontWeight: 500, fontSize: "0.78rem", marginLeft: 6 }}>
+                  ({tr("netLabel")})
+                </span>
+              )}
             </span>
           )}
         </div>
@@ -109,26 +144,80 @@ export default async function ExpensesPage({
               {expenses.map((e) => {
                 const rawCat = e.expense_categories as { name: string } | { name: string }[] | null;
                 const catName = Array.isArray(rawCat) ? (rawCat[0]?.name ?? null) : rawCat?.name ?? null;
+
+                // Storno-context. `reversal` = deze uitgave is gestorneerd;
+                // `correction` = deze uitgave IS de vervangende rij.
+                const reversal = reversalOf(reversals, e.id);
+                const correction = correctionOf(reversals, e.id);
+                const isClosed = e.fiscal_year_id !== null && closedFy.has(e.fiscal_year_id);
+
+                // Alleen aanbieden wat kan slagen: bevoegd, nog niet gestorneerd,
+                // en gejournaliseerd (een uitgave zonder boekjaar heeft geen
+                // journaalpost en wordt gewoon verwijderd, niet gestorneerd).
+                const mayReverse =
+                  reversal === null &&
+                  e.fiscal_year_id !== null &&
+                  canReverse(role, isClosed);
+
                 return (
                   <div key={e.id} className="card" style={{ padding: "0.9rem 1rem" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                       <div>
-                        <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>
+                        <div style={{ fontWeight: 600, fontSize: "0.95rem", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           {e.supplier ?? e.description ?? "—"}
+                          {reversal && (
+                            <span className="badge badge-storno">
+                              {reversal.isCorrection ? tr("corrected") : tr("reversed")}
+                            </span>
+                          )}
+                          {correction && <span className="badge badge-correctie">{tr("isCorrection")}</span>}
                         </div>
                         <div className="muted" style={{ fontSize: "0.78rem", marginTop: 2 }}>
                           {e.expense_date}
                           {catName && <> · {catName}</>}
                           {e.description && e.supplier && <> · {e.description}</>}
                         </div>
+                        {reversal && (
+                          <div className="muted" style={{ fontSize: "0.74rem", marginTop: 4, lineHeight: 1.45 }}>
+                            {reversal.isCorrection ? tr("replacedBy") : tr("typeReversal")}
+                            {" · "}
+                            {tr("reasonLabel")}: {reversal.reason}
+                            {reversal.effectiveDate && <> · {reversal.effectiveDate}</>}
+                            {reversal.isPriorYearCorrection && <> · {tr("priorYear")}</>}
+                          </div>
+                        )}
+                        {correction && (
+                          <div className="muted" style={{ fontSize: "0.74rem", marginTop: 4 }}>
+                            {tr("correctionOf")}
+                          </div>
+                        )}
                       </div>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-                        <span style={{ fontWeight: 700, fontSize: "0.97rem" }}>{fmt(Number(e.amount))} MAD</span>
+                        <span
+                          className={reversal ? "amount-reversed" : undefined}
+                          style={reversal ? { fontSize: "0.97rem" } : { fontWeight: 700, fontSize: "0.97rem" }}
+                        >
+                          {fmt(Number(e.amount))} MAD
+                        </span>
                         {(e.receipt_path || e.receipt_url) && (
                           <ReceiptLink expenseId={e.id} label={t("viewReceipt")} />
                         )}
                       </div>
                     </div>
+                    {mayReverse && (
+                      <div style={{ marginTop: "0.6rem", borderTop: "1px solid var(--line)", paddingTop: "0.55rem" }}>
+                        <ExpenseReversalActions
+                          expenseId={e.id}
+                          amount={Number(e.amount)}
+                          expenseDate={e.expense_date}
+                          supplier={e.supplier}
+                          description={e.description}
+                          categoryId={e.category_id}
+                          categories={categories.map((c) => ({ id: c.id, name: c.name }))}
+                          closedFiscalYear={isClosed}
+                        />
+                      </div>
+                    )}
                   </div>
                 );
               })}
