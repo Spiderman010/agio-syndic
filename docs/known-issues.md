@@ -1,6 +1,6 @@
 # Bekende problemen en handmatige stappen
 
-Bijgewerkt: 27-08-2026, na de financial reversal engine (`m24`–`m28`).
+Bijgewerkt: 31-08-2026, na de fiscal closing actor delete fix (`m29`).
 
 ---
 
@@ -151,18 +151,17 @@ herstelronde en dus niet aangepakt:
   onbruikbaar. Voor de drie NIEUWE views is dit in `m27`/`m28` wél ingetrokken; de twee
   oude vallen buiten de scope van de reversal-engine en horen in een eigen
   opruimronde. **P2, geen merge-blocker.**
-- **`fiscal_year_closings.closed_by` blokkeert het verwijderen van een gebruiker.**
-  Exact dezelfde fout die `m28` voor `financial_reversals.created_by` heeft gesloten,
-  bestaat pre-existent op `fiscal_year_closings`: de kolom is
-  `REFERENCES auth.users(id) ON DELETE SET NULL`, en PostgreSQL voert die RI-actie uit
-  als een UPDATE op de kindrij — die `fn_guard_fy_closing_immutable` sinds `m18`
-  onvoorwaardelijk weigert. Gevolg: `DELETE FROM auth.users` faalt voor iedereen die
-  ooit een boekjaar heeft afgesloten, wat offboarding en AVG-verwijdering blokkeert.
-  Gevonden tijdens de adversariële review op `m24`–`m27`. **Bewust NIET in `m28`
-  gerepareerd** — het raakt de jaarafsluiting en niet de reversal-engine, en hoort met
-  een eigen test in een eigen ronde. De fix is dezelfde vorm als die in `m28`: alleen
-  de overgang `closed_by → NULL` toestaan wanneer de gebruiker daadwerkelijk weg is en
-  alle overige kolommen ongewijzigd zijn. **P1 voor de volgende ronde.**
+- **Actorattributie verdwijnt wanneer een gebruiker wordt verwijderd.** Sinds `m29`
+  kan een gebruiker die ooit een boekjaar afsloot wél worden verwijderd, en blijft het
+  afsluitbewijs met alle financiële gegevens bestaan — maar `closed_by` wordt dan NULL
+  en er is nergens een naam- of e-mailmomentopname. `memberships` is bovendien
+  `ON DELETE CASCADE`, dus ook daar blijft niets over. Het afsluitbewijs vertelt daarna
+  nog wél *wat* er is afgesloten, met welk resultaat en wanneer, maar niet meer *door
+  wie*. Hetzelfde geldt voor `financial_reversals.created_by` sinds `m28` en voor
+  `documents.created_by`. Een toekomstige `actor_display_snapshot` (naam plus e-mail op
+  het moment van handelen, los van `auth.users`) zou dit sluiten; dat is een
+  auditlog-ontwerp op zichzelf en bewust niet in `m29` gebouwd. **P2 — geen
+  merge-blocker, wel wenselijk vóór een audit door derden.**
 - **Heropenen en opnieuw afsluiten: bekende beperking, volledig beschreven.**
   `fiscal_year_closings` kent `UNIQUE (fiscal_year_id)`, dus er kan hoogstens één
   afsluitbewijs per boekjaar bestaan, en sinds `m22` is dat bewijs onwijzigbaar en niet
@@ -188,6 +187,29 @@ herstelronde en dus niet aangepakt:
   heropenen, dus dit scenario is via de applicatie niet bereikbaar.
 - Er is nog geen periodieke reconciliatie tussen 5141 (bank) en de
   `payments`-registratie; `v_allocation_integrity` dekt alleen de vorderingenkant.
+
+**Opgelost in `m29`** — een gebruiker verwijderen zonder de jaarafsluiting te verliezen.
+
+`fiscal_year_closings.closed_by` is `REFERENCES auth.users(id) ON DELETE SET NULL`, en
+PostgreSQL voert die RI-actie uit als een UPDATE op de kindrij. `fn_guard_fy_closing_immutable`
+weigerde tot `m29` élke UPDATE onvoorwaardelijk — geen `TG_OP`-check, geen escape. Daardoor
+faalde `DELETE FROM auth.users` voor iedereen die ooit een boekjaar had afgesloten, precies het
+statement dat Supabase' admin `deleteUser` uitvoert. Offboarding en AVG-verwijdering liepen hard
+vast op de database. Gereproduceerd vóór de fix: de DELETE gaf
+`Een vastgelegde jaarafsluiting is onwijzigbaar (audit trail)` en de gebruiker bleef bestaan.
+
+De guard laat nu exact één overgang toe: `closed_by` naar NULL, uitsluitend wanneer de
+betreffende `auth.users`-rij niet meer bestaat, met alle overige kolommen ongewijzigd. Dat is
+géén heuristiek over de aanroeper maar een controle op de enige legitieme oorzaak, en die is
+sluitend omdat de foreign key `convalidated` en niet `deferrable` is: een non-null `closed_by`
+verwijst dus altijd naar een bestaande gebruiker, zodat de conditie alleen binnen het
+cascadevenster waar kan zijn. Een client kan dat venster niet maken — `authenticated` heeft geen
+DELETE en zelfs geen SELECT op `auth.users`. Dezelfde vorm als de `m28`-fix voor
+`financial_reversals.created_by`.
+
+Alles daarbuiten blijft geweigerd: een handmatige `SET closed_by = NULL` (de gebruiker bestaat
+dan nog), `closed_at`, `result_amount`, `notes`, en de rechtstreekse DELETE. De foreign key,
+RLS, grants en de bestaande cascades zijn niet aangeraakt.
 
 **Opgelost in `m24`–`m28`** — de gecontroleerde storno-/correctieflow, de laatste
 functionele P1 uit de reeks.
