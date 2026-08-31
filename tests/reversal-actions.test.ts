@@ -82,10 +82,10 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 const { reversePayment, correctPayment } = await import(
-  "@/app/[locale]/buildings/[id]/boekjaren/actions"
+  "@/app/[locale]/(app)/buildings/[id]/boekjaren/actions"
 );
 const { reverseExpense, correctExpense } = await import(
-  "@/app/[locale]/buildings/[id]/expenses/actions"
+  "@/app/[locale]/(app)/buildings/[id]/expenses/actions"
 );
 
 // --- helpers ---------------------------------------------------------------

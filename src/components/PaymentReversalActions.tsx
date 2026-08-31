@@ -5,7 +5,7 @@ import ReversalDialog from "@/components/ReversalDialog";
 import {
   correctPayment,
   reversePayment,
-} from "@/app/[locale]/buildings/[id]/boekjaren/actions";
+} from "@/app/[locale]/(app)/buildings/[id]/boekjaren/actions";
 
 /**
  * De twee acties op een betaling: contrepasser en corriger.

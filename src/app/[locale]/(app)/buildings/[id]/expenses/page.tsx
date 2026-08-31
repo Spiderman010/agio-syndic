@@ -1,8 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
-import TopBar from "@/components/TopBar";
-import { Link } from "@/navigation";
 import { getTranslations } from "next-intl/server";
 import { createExpense, createExpenseCategory } from "./actions";
 import ReceiptLink from "@/components/ReceiptLink";
@@ -100,25 +98,19 @@ export default async function ExpensesPage({
 
   return (
     <>
-      <TopBar orgName={org.name} />
-      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "1.6rem 1.3rem 4rem" }}>
-        <div style={{ fontSize: "0.82rem", display: "flex", gap: 6, alignItems: "center" }} className="muted">
-          <Link href="/buildings" className="muted">Bâtiments</Link>
-          <span>/</span>
-          <Link href={`/buildings/${buildingId}`} className="muted">{b.name}</Link>
-          <span>/</span>
-          <span style={{ color: "var(--ink)" }}>{t("title")}</span>
-        </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0.7rem 0 1.2rem", flexWrap: "wrap", gap: 8 }}>
-          <h1 style={{ margin: 0, fontSize: "1.4rem" }}>{t("title")}</h1>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 1.2rem", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <h1 className="mt-0 mb-0 text-2xl font-semibold text-ink">{t("title")}</h1>
+            <p className="muted mt-1 mb-0 text-[0.9rem]">{b.name}</p>
+          </div>
           {/* Ook tonen bij 0: na een storno IS het nettototaal legitiem nul, en
               een verdwijnend totaal zou als "niet berekend" worden gelezen. */}
           {expenses.length > 0 && (
             <span style={{ fontWeight: 700, fontSize: "1rem" }} title={heeftStorno ? tr("netHint") : undefined}>
               {fmt(totalAmount)} MAD {t("title").toLowerCase()}
               {heeftStorno && (
-                <span className="muted" style={{ fontWeight: 500, fontSize: "0.78rem", marginLeft: 6 }}>
+                <span className="muted" style={{ fontWeight: 500, fontSize: "0.78rem", marginInlineStart: 6 }}>
                   ({tr("netLabel")})
                 </span>
               )}
@@ -126,7 +118,7 @@ export default async function ExpensesPage({
           )}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: "1.4rem", alignItems: "start" }}>
+        <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.5fr_1fr]">
           {/* Expenses list */}
           <div>
             <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>
@@ -228,7 +220,7 @@ export default async function ExpensesPage({
               <input type="hidden" name="building_id" value={buildingId} />
               <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.9rem" }}>{t("addExpense")}</h3>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.7rem", marginBottom: "0.7rem" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.7rem", marginBottom: "0.7rem" }}>
                 <div>
                   <label className="label" htmlFor="supplier">{t("supplier")}</label>
                   <input className="input" id="supplier" name="supplier" placeholder={t("supplierPlaceholder")} />
@@ -244,7 +236,7 @@ export default async function ExpensesPage({
                 <input className="input" id="description" name="description" placeholder={t("descPlaceholder")} />
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.7rem", marginBottom: "0.7rem" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.7rem", marginBottom: "0.7rem" }}>
                 <div>
                   <label className="label" htmlFor="amount">{t("amount")}</label>
                   <input className="input" id="amount" name="amount" type="text" placeholder="1200.00" required />
@@ -325,7 +317,6 @@ export default async function ExpensesPage({
             </ActionForm>
           </div>
         </div>
-      </main>
     </>
   );
 }

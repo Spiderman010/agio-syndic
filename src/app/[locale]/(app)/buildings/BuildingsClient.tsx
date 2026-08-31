@@ -7,15 +7,12 @@ import { createBuilding } from "./actions";
 import { useTranslations } from "next-intl";
 import type { Building } from "@/lib/types";
 import { TIER_LABELS } from "@/lib/tier";
-import TopBar from "@/components/TopBar";
 
 type ActionState = { error?: string } | null;
 
 export default function BuildingsClient({
-  orgName,
   buildings,
 }: {
-  orgName: string;
   buildings: Building[];
 }) {
   const t = useTranslations("buildings");
@@ -31,12 +28,13 @@ export default function BuildingsClient({
 
   return (
     <>
-      <TopBar orgName={orgName} />
-      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "1.6rem 1.3rem 4rem" }}>
-        <h1 style={{ fontSize: "1.5rem", margin: "0 0 0.2rem" }}>{t("title")}</h1>
-        <p className="muted" style={{ margin: "0 0 1.4rem", fontSize: "0.9rem" }}>{t("subtitle")}</p>
+      <h1 className="mt-0 mb-1 text-2xl font-semibold text-ink">{t("title")}</h1>
+      <p className="muted mt-0 mb-6 text-[0.9rem]">{t("subtitle")}</p>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "1.4rem", alignItems: "start" }}>
+      {/* Eén kolom op mobiel, twee vanaf 1024px. Het aanmaakformulier stond
+          eerder in een vaste tweede kolom en werd op een telefoon onbruikbaar
+          smal. */}
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.4fr_1fr]">
           <div style={{ display: "grid", gap: "0.7rem" }}>
             {buildings.length === 0 && (
               <div className="card muted" style={{ padding: "1.4rem", fontSize: "0.9rem" }}>{t("noBuildings")}</div>
@@ -94,8 +92,7 @@ export default function BuildingsClient({
               {pending ? "…" : t("createBtn")}
             </button>
           </form>
-        </div>
-      </main>
+      </div>
     </>
   );
 }

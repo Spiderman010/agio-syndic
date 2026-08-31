@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
 import { routing } from "@/i18n/routing";
+import { isSupportedLocale, localeDirection } from "@/lib/direction";
 import { Toaster } from "@/components/ui/sonner";
 import "../globals.css";
 
@@ -24,12 +25,12 @@ export default async function LocaleLayout({
 }) {
   const { locale } = await params;
 
-  if (!routing.locales.includes(locale as "fr" | "ar" | "nl")) {
+  if (!isSupportedLocale(locale)) {
     notFound();
   }
 
   const messages = await getMessages();
-  const dir = locale === "ar" ? "rtl" : "ltr";
+  const dir = localeDirection(locale);
 
   return (
     <html lang={locale} dir={dir}>

@@ -5,7 +5,7 @@ import ReversalDialog from "@/components/ReversalDialog";
 import {
   correctExpense,
   reverseExpense,
-} from "@/app/[locale]/buildings/[id]/expenses/actions";
+} from "@/app/[locale]/(app)/buildings/[id]/expenses/actions";
 
 /**
  * De twee acties op een uitgave: contrepasser en corriger.

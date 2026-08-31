@@ -249,5 +249,46 @@
       "receiptTooLarge": "Het bewijsstuk is groter dan 10 MB.",
       "receiptTypeInvalid": "Alleen JPG, PNG, WEBP, HEIC of PDF is toegestaan als bewijsstuk."
     }
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "buildings": "Gebouwen",
+    "overview": "Overzicht",
+    "fiscalYears": "Boekjaren",
+    "expenses": "Uitgaven",
+    "building": "Gebouw",
+    "breadcrumb": "Kruimelpad"
+  },
+  "shell": {
+    "organisation": "Organisatie",
+    "building": "Gebouw",
+    "signOut": "Afmelden",
+    "skipToContent": "Naar de inhoud",
+    "mainNav": "Hoofdnavigatie",
+    "openMenu": "Menu openen",
+    "closeMenu": "Menu sluiten",
+    "noBuildings": "Geen gebouwen",
+    "allBuildings": "Alle gebouwen",
+    "switchBuilding": "Gebouw wisselen",
+    "error": {
+      "title": "Er is iets misgegaan",
+      "body": "Deze pagina kon niet worden geladen. Probeer het opnieuw; blijft het misgaan, neem dan contact op met uw beheerder.",
+      "retry": "Opnieuw proberen",
+      "reference": "Referentie"
+    }
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "{org} — overzicht van uw copropriétés.",
+    "empty": {
+      "title": "Nog geen gebouwen",
+      "body": "Maak uw eerste gebouw aan om boekjaren, lastenoproepen en uitgaven te kunnen beheren.",
+      "cta": "Gebouw aanmaken"
+    },
+    "buildings": {
+      "title": "Uw gebouwen",
+      "all": "Alle {count} bekijken",
+      "audit": "Audit vereist"
+    }
   }
 }
