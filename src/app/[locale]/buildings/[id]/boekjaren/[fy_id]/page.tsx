@@ -3,8 +3,12 @@ import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
 import TopBar from "@/components/TopBar";
 import { Link } from "@/navigation";
+import { getTranslations } from "next-intl/server";
 import { createChargeCall, createPayment } from "../actions";
 import ActionForm from "@/components/ActionForm";
+import PaymentReversalActions from "@/components/PaymentReversalActions";
+import { canReverse } from "@/lib/roles";
+import { correctionOf, fetchReversalIndex, reversalOf } from "@/lib/reversal";
 import type { Building, FiscalYear } from "@/lib/types";
 
 const METHOD_LABEL: Record<string, string> = {
@@ -75,8 +79,9 @@ export default async function FiscalYearDetail({
   params: Promise<{ id: string; fy_id: string }>;
 }) {
   const { id: buildingId, fy_id: fyId } = await params;
-  const { org } = await requireOrg();
+  const { org, role } = await requireOrg();
   const supabase = await createClient();
+  const tr = await getTranslations("reversal");
 
   const [{ data: bData }, { data: fyData }] = await Promise.all([
     supabase.from("buildings").select("*").eq("id", buildingId).maybeSingle(),
@@ -157,6 +162,32 @@ export default async function FiscalYearDetail({
     .order("value_date", { ascending: false })
     .limit(20);
   const pays = (paysData ?? []) as unknown as PayRow[];
+
+  // ---- Financial Reversal Engine -------------------------------------------
+  // De storno's bij deze betalingen. De lijst is KLASSE A (bruto activiteit):
+  // elke betaling blijft staan, gestorneerde exemplaren worden gemarkeerd. Het
+  // saldo per eigenaar verderop is klasse B en corrigeert zichzelf al, omdat het
+  // uit `amount - settled_amount` volgt en de storno settled_amount herstelt.
+  const payIds = pays.map((p) => p.id);
+  const reversals = await fetchReversalIndex(supabase, "payment", payIds);
+
+  // In welk boekjaar staat de ORIGINELE journaalpost van elke betaling? Dat
+  // bepaalt of storneren een owner/admin-ingreep is. fn_reversal_authorize
+  // beslist definitief; dit voorkomt alleen een knop die zeker faalt.
+  const closedPayments = new Set<string>();
+  if (payIds.length > 0) {
+    const { data: entryData } = await supabase
+      .from("journal_entries")
+      .select("source_id, fiscal_years(status)")
+      .eq("source", "payment")
+      .in("source_id", payIds);
+
+    for (const row of entryData ?? []) {
+      const rawFy = row.fiscal_years as { status: string } | { status: string }[] | null;
+      const entryFy = Array.isArray(rawFy) ? (rawFy[0] ?? null) : rawFy;
+      if (entryFy?.status === "closed") closedPayments.add(row.source_id as string);
+    }
+  }
 
   const callIds = calls.map((c) => c.id);
   let saldoRows: {
@@ -391,19 +422,54 @@ export default async function FiscalYearDetail({
               )}
 
               <div style={{ display: "grid", gap: "0.55rem" }}>
-                {pays.map((p) => (
+                {pays.map((p) => {
+                  // `reversal` = deze betaling is gestorneerd.
+                  // `correction` = deze betaling IS de vervangende rij.
+                  const reversal = reversalOf(reversals, p.id);
+                  const correction = correctionOf(reversals, p.id);
+                  const isClosed = closedPayments.has(p.id);
+                  const mayReverse = reversal === null && canReverse(role, isClosed);
+
+                  return (
                   <div key={p.id} className="card" style={{ padding: "0.75rem 0.9rem" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div>
-                        <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{p.owners?.full_name ?? "—"}</div>
+                        <div style={{ fontWeight: 600, fontSize: "0.9rem", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          {p.owners?.full_name ?? "—"}
+                          {reversal && (
+                            <span className="badge badge-storno">
+                              {reversal.isCorrection ? tr("corrected") : tr("reversed")}
+                            </span>
+                          )}
+                          {correction && <span className="badge badge-correctie">{tr("isCorrection")}</span>}
+                        </div>
                         <div className="muted" style={{ fontSize: "0.76rem" }}>
                           {p.value_date} · {p.method}{p.reference ? ` · ${p.reference}` : ""}
                         </div>
                       </div>
-                      <div style={{ fontWeight: 700, color: "var(--good)", fontSize: "0.95rem" }}>
+                      <div
+                        className={reversal ? "amount-reversed" : undefined}
+                        style={reversal ? { fontSize: "0.95rem" } : { fontWeight: 700, color: "var(--good)", fontSize: "0.95rem" }}
+                      >
                         +{fmt(Number(p.amount))} MAD
                       </div>
                     </div>
+
+                    {reversal && (
+                      <div className="muted" style={{ fontSize: "0.74rem", marginTop: 4, lineHeight: 1.45 }}>
+                        {reversal.isCorrection ? tr("replacedBy") : tr("typeReversal")}
+                        {" · "}
+                        {tr("reasonLabel")}: {reversal.reason}
+                        {reversal.effectiveDate && <> · {reversal.effectiveDate}</>}
+                        {reversal.isPriorYearCorrection && <> · {tr("priorYear")}</>}
+                      </div>
+                    )}
+                    {correction && (
+                      <div className="muted" style={{ fontSize: "0.74rem", marginTop: 4 }}>
+                        {tr("correctionOf")}
+                      </div>
+                    )}
+
                     {p.payment_allocations.length > 0 && (
                       <div style={{ marginTop: "0.5rem", borderTop: "1px solid var(--line)", paddingTop: "0.4rem" }}>
                         {p.payment_allocations.map((pa, i) => {
@@ -419,8 +485,24 @@ export default async function FiscalYearDetail({
                         })}
                       </div>
                     )}
+
+                    {mayReverse && (
+                      <div style={{ marginTop: "0.55rem", borderTop: "1px solid var(--line)", paddingTop: "0.5rem" }}>
+                        <PaymentReversalActions
+                          paymentId={p.id}
+                          fiscalYearId={fyId}
+                          ownerName={p.owners?.full_name ?? "—"}
+                          amount={Number(p.amount)}
+                          valueDate={p.value_date}
+                          method={p.method}
+                          reference={p.reference}
+                          closedFiscalYear={isClosed}
+                        />
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
               {fy.status === "open" && eigenaars.length > 0 && (

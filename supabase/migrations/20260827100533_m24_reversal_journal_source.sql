@@ -1,0 +1,20 @@
+-- m24 — journal_source: nieuwe waarde 'reversal'
+--
+-- BEWUST EEN EIGEN MIGRATIE, en niets anders erin.
+--
+-- PostgreSQL staat `ALTER TYPE ... ADD VALUE` sinds v12 binnen een transactieblok toe, maar
+-- weigert de nieuwe waarde in DIEZELFDE transactie te GEBRUIKEN wanneer het enumtype niet in
+-- die transactie is aangemaakt ("unsafe use of new value of enum type"). Supabase draait elke
+-- migratie in een transactie. Alles wat de waarde daadwerkelijk evalueert - een CHECK, een
+-- index, een view, een DEFAULT, of een INSERT tijdens een test - zou dus falen zodra het in
+-- hetzelfde bestand staat als deze ALTER.
+--
+-- Functie-lichamen zijn de uitzondering: die zijn bij CREATE FUNCTION niet meer dan tekst en
+-- worden pas bij uitvoering geparseerd. m25 mag 'reversal' dus vrij in plpgsql gebruiken.
+-- Toch splitsen we, en niet alleen voor die ene ALTER: een gesplitste migratie is
+-- reproduceerbaar bij herhaald toepassen en bij `supabase db reset`, en laat geen twijfel
+-- bestaan over de volgorde. m25 is hier hard van afhankelijk en hoort er nooit voor te draaien.
+--
+-- IF NOT EXISTS maakt de migratie idempotent: opnieuw toepassen is een no-op in plaats van
+-- een fout.
+ALTER TYPE public.journal_source ADD VALUE IF NOT EXISTS 'reversal';

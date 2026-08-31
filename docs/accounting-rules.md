@@ -177,3 +177,128 @@ centen één voor één worden toegekend op volgorde van `frac DESC, id ASC`.
 
 De verdeling telt daardoor exact op tot het opgeroepen bedrag en is
 reproduceerbaar: dezelfde invoer geeft altijd dezelfde uitkomst.
+
+---
+
+## 5. Storno en correctie
+
+**Regel.** Een foutieve financiële transactie wordt nooit hersteld door historie te
+verwijderen of door een bestaand financieel feit stil te overschrijven. Het
+origineel blijft staan; de correctie is een nieuwe, traceerbare gebeurtenis.
+
+Dat is geen principekwestie alleen: sinds `m22`/`m23` is een betaling of uitgave
+met journaalpost ook feitelijk niet meer verwijderbaar. Zonder correctieroute was
+er dus letterlijk geen weg meer om een fout te herstellen. `m24`–`m27` sluiten dat
+gat.
+
+### Vier ingangen
+
+| RPC | Doet |
+|---|---|
+| `reverse_payment(id, reden)` | volledige storno van een betaling |
+| `correct_payment(id, bedrag, valutadatum, betaalwijze, referentie, reden)` | storno + vervangende betaling, in één transactie |
+| `reverse_expense(id, reden)` | volledige storno van een gejournaliseerde uitgave |
+| `correct_expense(id, bedrag, datum, rekening, categorie, leverancier, omschrijving, bewijsstuk, reden)` | storno + vervangende uitgave |
+
+Een reden van 10 tot 500 tekens is verplicht, afgedwongen door een CHECK op de
+tabel en niet alleen door de RPC. Een financiële storno zonder opgegeven reden is
+geen auditspoor.
+
+### Waarom bedragen positief blijven
+
+`payments.amount > 0`, `expenses.amount > 0`, `payment_allocations.amount > 0` en de
+strikte debet-XOR-credit op `journal_lines` zijn de constraints waarop de hele
+financiële kern rust. Een storno als negatieve rij zou er drie moeten slopen om één
+functie toe te voegen.
+
+Daarom draagt niet het teken maar de **tabel** de betekenis:
+
+- `financial_reversals` — de onwijzigbare auditgebeurtenis: wie, wanneer, waarom,
+  in welk boekjaar geboekt, en naar welke vervangende rij (`correction_source_id`).
+- `payment_allocation_reversals` — append-only neutralisatie per oorspronkelijke
+  toewijzing, met een **positief** bedrag.
+- `journal_entries.source = 'reversal'` — de gespiegelde journaalpost.
+
+### De gespiegelde journaalpost
+
+De storno is een **letterlijke spiegeling** van de originele regels, met debet en
+credit verwisseld. Er wordt niets opnieuw afgeleid.
+
+| | Debet | Credit |
+|---|---|---|
+| Betaling | 5141 bedrag | 4111 toegewezen + 4419 overschot |
+| **Storno betaling** | **4111 toegewezen + 4419 overschot** | **5141 bedrag** |
+| Uitgave | lastrekening | 4411 |
+| **Storno uitgave** | **4411** | **lastrekening** |
+
+Spiegelen in plaats van herafleiden is een bewuste keuze met een concreet gevolg:
+is de standaardrekening van een uitgavecategorie ná de oorspronkelijke boeking
+gewijzigd, dan zou herafleiden de storno op een ándere rekening zetten dan het
+origineel en saldo achterlaten op de oude. De spiegeling kan die fout per
+constructie niet maken. Vastgelegd door test E08.
+
+Omdat het origineel sluit, sluit de spiegeling ook; en een regel met debet>0 en
+credit=0 wordt credit>0 en debet=0, dus `journal_lines_check` blijft gelden.
+
+### De settlement-invariant
+
+`charge_allocations.settled_amount` is niet langer vrij te zetten. Sinds `m25` geldt:
+
+```
+settled_amount = SUM(payment_allocations.amount)
+               - SUM(payment_allocation_reversals.amount)
+```
+
+`fn_guard_ca_settlement_derived` weigert elke UPDATE die daarvan afwijkt. De guard
+controleert de **invariant**, niet de aanroeper — er is dus geen context om te
+vervalsen. `fn_payment_fifo` voldoet er automatisch aan (INSERT toewijzing, dan
+verhogen); de reversal-engine ook (INSERT neutralisatie, dan verlagen).
+`v_settlement_integrity` maakt eventuele drift zichtbaar.
+
+Alles rekent in `numeric(14,2)`. Geen floating point, dus de vergelijking is exact.
+
+### Afgesloten boekjaar
+
+Twee dingen die uit elkaar gehouden moeten worden.
+
+**Het grootboek van een afgesloten jaar wordt nooit herschreven.** De storno landt
+altijd in een OPEN boekjaar. Is het originele jaar zelf nog open, dan blijft de
+correctie binnen dat jaar; anders gaat hij naar het lopende jaar.
+
+**De openstaande vordering loopt wél door.** Storneren van een betaling herstelt
+`settled_amount`, óók wanneer die vordering in een afgesloten jaar is opgeroepen.
+Dat is exact dezelfde redenering als in paragraaf 2: 4111 is een doorlopende
+balansrekening, en het vastgestelde jaarcijfer (`amount`, het resultaat) verandert
+niet.
+
+Autorisatie volgt die scheiding:
+
+| Origineel staat in | Vereist |
+|---|---|
+| een open boekjaar | `can_write` (owner, admin, manager, accountant) |
+| een afgesloten boekjaar | `can_manage_members` (alleen owner en admin) |
+
+Bepalend is het boekjaar van de **originele journaalpost**. Een betaling in het
+lopende jaar die een oude vordering afboekte blijft dus een `can_write`-handeling.
+
+### Valutadatum bij een correctie
+
+`correct_payment` neemt de opgegeven valutadatum over zoals hij is. Die datum is
+een **bankfeit** en wordt niet naar het huidige boekjaar verlegd. De journaalpost
+van de vervangende betaling landt vervolgens in het meest recente open boekjaar,
+precies zoals bij elke andere betaling. Lopen die twee uiteen, dan is dat een
+correctie over de jaargrens; `v_financial_reversals.is_correctie_vorig_boekjaar`
+maakt dat herkenbaar.
+
+### Grenzen
+
+- **Alleen volledige storno.** Gedeeltelijk terugdraaien bestaat niet; de route is
+  volledig storneren en de juiste transactie opnieuw boeken.
+- **Storno van een storno is onmogelijk** — een reversal is geen `payments`- en geen
+  `expenses`-rij, dus er is geen bron om naar te wijzen. Geen extra constraint nodig.
+- **Rapportage telt bruto.** Een correctie van 1000 naar 800 laat een bruto
+  betalingstotaal 1800 tonen. Eigenaarsaldi corrigeren zichzelf wel, omdat die uit
+  `amount - settled_amount` volgen.
+- **Het bewijsstuk blijft.** Een storno verwijdert geen `receipt_path`.
+- **De banktransactie blijft aan het origineel gekoppeld.** De bank heeft dat bedrag
+  daadwerkelijk ontvangen; dat feit staat los van de boekhoudkundige verwerking.
