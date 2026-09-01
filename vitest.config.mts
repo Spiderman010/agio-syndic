@@ -23,6 +23,11 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    // jsdom implementeert showModal()/close() en matchMedia niet; deze setup
+    // vult precies dat gat. Zie het bestand voor wat het wel en niet bewijst.
+    // Draait ook onder de node-omgeving en doet daar niets (guards op
+    // HTMLDialogElement en window).
+    setupFiles: ["tests/setup/jsdom-dialog.ts"],
   },
   resolve: {
     alias: {

@@ -272,4 +272,39 @@
 .reversal-dialog .label {
   margin-top: 0.5rem;
 }
+
+/* --------------------------------------------------------------------------
+   Mobiele navigatielade
+
+   Ook een native <dialog>, geopend met showModal(). De browser levert dan de
+   top layer, een werkelijk inerte achtergrond en een focus trap waar Tab en
+   Shift+Tab niet uit ontsnappen — precies wat een handgeschreven overlay met
+   `role="dialog" aria-modal="true"` alleen belóóft.
+
+   Deze regels overschrijven de UA-stijl van <dialog> (die centreert met
+   `margin: auto` en `width: fit-content`) naar een paneel aan de startzijde.
+   Alles is logisch uitgedrukt, zodat de lade in het Arabisch vanzelf aan de
+   rechterkant opent zonder een tweede regelset.
+   -------------------------------------------------------------------------- */
+.nav-drawer {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-start: 0;
+  height: 100%;
+  width: min(20rem, 85vw);
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-inline-end: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--ink);
+  overflow: hidden;
+  box-shadow: 0 0 40px rgb(0 0 0 / 18%);
+}
+.nav-drawer::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
 }

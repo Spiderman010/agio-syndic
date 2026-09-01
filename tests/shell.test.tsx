@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { resetMatchMedia, setMatchMedia } from "./setup/jsdom-dialog";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -38,12 +39,24 @@ vi.mock("@/navigation", () => ({
   Link: ({
     href,
     children,
+    onClick,
     ...rest
   }: {
     href: string;
     children: React.ReactNode;
+    onClick?: (e: React.MouseEvent) => void;
   } & Record<string, unknown>) => (
-    <a href={href} {...rest}>
+    <a
+      href={href}
+      onClick={(e) => {
+        // jsdom kan niet navigeren en logt anders "Not implemented: navigation"
+        // bij elke klik op een echte link. De onClick van de component moet wel
+        // gewoon afgaan — daar hangt het sluiten van de lade aan.
+        e.preventDefault();
+        onClick?.(e);
+      }}
+      {...rest}
+    >
       {children}
     </a>
   ),
@@ -77,6 +90,7 @@ function renderShell(pathname: string) {
 afterEach(() => {
   cleanup();
   document.body.style.overflow = "";
+  resetMatchMedia();
 });
 
 describe("de schil rendert", () => {
@@ -160,14 +174,14 @@ describe("gebouwkiezer", () => {
     fireEvent.click(trigger);
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
 
-    const menu = screen.getByRole("menu");
+    const menu = screen.getByTestId("building-switcher-list");
     expect(within(menu).getByText("Résidence Al Amane")).toBeTruthy();
   });
 
   it("houdt de sectie vast bij het wisselen van gebouw", () => {
     renderShell(`/buildings/${BID}/expenses`);
     fireEvent.click(screen.getAllByTestId("building-switcher")[0]);
-    const link = within(screen.getByRole("menu"))
+    const link = within(screen.getByTestId("building-switcher-list"))
       .getByText("Résidence Al Amane")
       .closest("a");
     // Van de uitgaven van A naar de uitgaven van B, niet terug naar het begin.
@@ -177,7 +191,7 @@ describe("gebouwkiezer", () => {
   it("verhuist NIET mee naar een boekjaar dat bij het andere gebouw niet bestaat", () => {
     renderShell(`/buildings/${BID}/boekjaren/some-fy-id`);
     fireEvent.click(screen.getAllByTestId("building-switcher")[0]);
-    const link = within(screen.getByRole("menu"))
+    const link = within(screen.getByTestId("building-switcher-list"))
       .getByText("Résidence Al Amane")
       .closest("a");
     expect(link?.getAttribute("href")).toBe(`/buildings/${OTHER}/boekjaren`);
@@ -187,9 +201,9 @@ describe("gebouwkiezer", () => {
     renderShell(`/buildings/${BID}`);
     const trigger = screen.getAllByTestId("building-switcher")[0];
     fireEvent.click(trigger);
-    expect(screen.queryByRole("menu")).toBeTruthy();
+    expect(screen.queryByTestId("building-switcher-list")).toBeTruthy();
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByTestId("building-switcher-list")).toBeNull();
   });
 
   it("toont een lege staat wanneer er geen gebouwen zijn", () => {
@@ -204,19 +218,75 @@ describe("gebouwkiezer", () => {
   });
 });
 
-describe("mobiele navigatie", () => {
-  beforeEach(() => renderShell("/dashboard"));
+/**
+ * Mobiele lade.
+ *
+ * De lade is een native <dialog> die met showModal() opengaat. Daarmee komt de
+ * focusinsluiting van de BROWSER, niet van onze code. Wat hieronder getest
+ * wordt is dus onze integratie met dat platformcontract; dat de focus
+ * werkelijk opgesloten zit, is in een echte browser geverifieerd — jsdom kent
+ * geen top layer en geen inerte achtergrond, en een emulatie daarvan zou alleen
+ * zichzelf testen. Zie tests/setup/jsdom-dialog.ts.
+ */
+describe("mobiele navigatie — lade", () => {
+  let drawer: HTMLDialogElement;
 
-  it("opent de lade via de menuknop en zet die als dialoog neer", () => {
-    expect(screen.queryByTestId("mobile-drawer")).toBeNull();
+  beforeEach(() => {
+    renderShell("/dashboard");
+    drawer = screen.getByTestId("mobile-drawer") as HTMLDialogElement;
+  });
+
+  // A
+  it("opent via de menuknop", () => {
+    expect(drawer.open).toBe(false);
     fireEvent.click(screen.getByTestId("menu-button"));
-
-    const drawer = screen.getByTestId("mobile-drawer");
-    expect(drawer.getAttribute("role")).toBe("dialog");
-    expect(drawer.getAttribute("aria-modal")).toBe("true");
+    expect(drawer.open).toBe(true);
     expect(screen.getByTestId("menu-button").getAttribute("aria-expanded")).toBe(
       "true",
     );
+  });
+
+  // I — het mechanisme dat de insluiting levert
+  it("is een echte <dialog> die MODAAL wordt geopend, niet een nagebouwde overlay", () => {
+    // Dit is de kern van de fix: een modale <dialog> maakt de achtergrond
+    // browser-side inert. Een div met role="dialog" belooft dat alleen.
+    expect(drawer.tagName).toBe("DIALOG");
+    const spy = vi.spyOn(drawer, "showModal");
+    fireEvent.click(screen.getByTestId("menu-button"));
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+
+    // En hij claimt niets wat de browser al impliceert.
+    expect(drawer.getAttribute("aria-modal")).toBeNull();
+    expect(drawer.getAttribute("role")).toBeNull();
+  });
+
+  // B
+  it("zet de focus bij openen binnen de lade", () => {
+    fireEvent.click(screen.getByTestId("menu-button"));
+    expect(drawer.contains(document.activeElement)).toBe(true);
+  });
+
+  // I — de zelfgebouwde achtergrondknop bestond buiten de lade en ving focus
+  it("heeft geen zelfgebouwde overlay-knop meer buiten de lade", () => {
+    fireEvent.click(screen.getByTestId("menu-button"));
+    // Vroeger waren dit er twee: de sluitknop ín de lade en een schermvullende
+    // <button> als achtergrond, die als focusstop tússen achtergrond en lade
+    // stond. De ::backdrop van een <dialog> is een pseudo-element en dus niet
+    // focusbaar.
+    const sluitknoppen = screen.getAllByLabelText("shell.closeMenu");
+    expect(sluitknoppen).toHaveLength(1);
+    expect(drawer.contains(sluitknoppen[0])).toBe(true);
+  });
+
+  // De inhoud bestaat alleen als de lade open is, zodat de navigatie niet
+  // dubbel in de toegankelijkheidsboom staat.
+  it("houdt de lade-inhoud uit de DOM zolang hij dicht is", () => {
+    expect(drawer.textContent).toBe("");
+    fireEvent.click(screen.getByTestId("menu-button"));
+    expect(within(drawer).getByTestId("nav-dashboard")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("drawer-close"));
+    expect(drawer.textContent).toBe("");
   });
 
   it("vergrendelt het scrollen van de pagina zolang de lade open is", () => {
@@ -226,36 +296,135 @@ describe("mobiele navigatie", () => {
     expect(document.body.style.overflow).not.toBe("hidden");
   });
 
-  it("sluit met de sluitknop, met Escape en met de achtergrond", () => {
+  // G
+  it("sluit met de sluitknop", () => {
     fireEvent.click(screen.getByTestId("menu-button"));
     fireEvent.click(screen.getByTestId("drawer-close"));
-    expect(screen.queryByTestId("mobile-drawer")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("menu-button"));
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByTestId("mobile-drawer")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("menu-button"));
-    fireEvent.click(screen.getByLabelText("shell.closeMenu", { selector: "button.absolute" }));
-    expect(screen.queryByTestId("mobile-drawer")).toBeNull();
+    expect(drawer.open).toBe(false);
   });
 
-  it("geeft de focus terug aan de menuknop na sluiten", () => {
+  // E
+  it("sluit met Escape", () => {
+    fireEvent.click(screen.getByTestId("menu-button"));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(drawer.open).toBe(false);
+  });
+
+  // F — een klik op de ::backdrop heeft de dialoog zelf als target
+  it("sluit bij een klik op de achtergrond, maar niet bij een klik op de inhoud", () => {
+    fireEvent.click(screen.getByTestId("menu-button"));
+    fireEvent.click(within(drawer).getByText("Agio Syndic"));
+    expect(drawer.open).toBe(true);
+
+    fireEvent.click(drawer);
+    expect(drawer.open).toBe(false);
+  });
+
+  // H — het herstelpad hangt aan het close-event, dus het geldt voor ELK pad
+  it.each([
+    ["sluitknop", () => fireEvent.click(screen.getByTestId("drawer-close"))],
+    ["Escape", () => fireEvent.keyDown(document, { key: "Escape" })],
+    ["achtergrondklik", () => fireEvent.click(screen.getByTestId("mobile-drawer"))],
+    [
+      "navigatieklik",
+      () => fireEvent.click(within(screen.getByTestId("mobile-drawer")).getByTestId("nav-buildings")),
+    ],
+  ])("geeft de focus terug aan de menuknop na sluiten via %s", (_naam, sluit) => {
     const button = screen.getByTestId("menu-button");
     fireEvent.click(button);
-    fireEvent.click(screen.getByTestId("drawer-close"));
+    expect(document.activeElement).not.toBe(button);
+
+    sluit();
+
+    expect(drawer.open).toBe(false);
     expect(document.activeElement).toBe(button);
+  });
+
+  /**
+   * Boven de lg-grens verdwijnt de menuknop. Bleef de lade dan open, dan hield
+   * hij als modale dialoog de hele pagina inert terwijl de knop om hem te
+   * sluiten niet meer zichtbaar is — de gebruiker zit vast.
+   *
+   * Dit pad is uitsluitend hier te toetsen: de browseromgeving waarin ik het
+   * handmatig wilde natrekken dispatcht bij een geëmuleerde viewportwijziging
+   * geen `resize` en geen matchMedia-`change`.
+   */
+  it("sluit zichzelf zodra het scherm de desktopgrens passeert", () => {
+    fireEvent.click(screen.getByTestId("menu-button"));
+    expect(drawer.open).toBe(true);
+
+    act(() => setMatchMedia("(min-width: 1024px)", true));
+
+    expect(drawer.open).toBe(false);
+  });
+});
+
+describe("gebouwkiezer — semantiek", () => {
+  // K
+  it("gebruikt GEEN half ARIA-menupatroon", () => {
+    renderShell(`/buildings/${BID}`);
+    const trigger = screen.getAllByTestId("building-switcher")[0];
+    // Een role="menu" verplicht tot pijltoetsnavigatie en focusbeheer; die is
+    // er niet en hoort er voor een lijst met links ook niet te zijn.
+    expect(trigger.getAttribute("aria-haspopup")).toBeNull();
+
+    fireEvent.click(trigger);
+    const lijst = screen.getByTestId("building-switcher-list");
+    expect(lijst.tagName).toBe("UL");
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.querySelector('[role="menuitem"]')).toBeNull();
+  });
+
+  it("koppelt de knop aan de lijst en meldt de open staat", () => {
+    renderShell(`/buildings/${BID}`);
+    const trigger = screen.getAllByTestId("building-switcher")[0];
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(trigger.getAttribute("aria-controls")).toBe(
+      screen.getByTestId("building-switcher-list").id,
+    );
+  });
+
+  // J
+  it("maakt het actieve gebouw herkenbaar zonder kleur of icoon", () => {
+    renderShell(`/buildings/${BID}`);
+    fireEvent.click(screen.getAllByTestId("building-switcher")[0]);
+    const lijst = screen.getByTestId("building-switcher-list");
+
+    const actief = within(lijst).getByText("Résidence Atlas").closest("a");
+    const ander = within(lijst).getByText("Résidence Al Amane").closest("a");
+    expect(actief?.getAttribute("aria-current")).toBe("true");
+    expect(ander?.getAttribute("aria-current")).toBeNull();
+
+    // Het vinkje blijft decoratief; het mag de aankondiging niet dragen.
+    expect(actief?.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
   });
 });
 
 describe("laadstaat", () => {
-  it("rendert een skelet dat voor schermlezers verborgen is", () => {
+  // L
+  it("kondigt het laden aan zonder het skelet voor te lezen", () => {
     const { container } = render(<Loading />);
-    const root = container.firstElementChild;
-    expect(root?.getAttribute("aria-hidden")).toBe("true");
+    const root = screen.getByTestId("app-loading");
+
+    // De status wordt aangekondigd...
+    expect(root.getAttribute("role")).toBe("status");
+    expect(root.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText("shell.loading")).toBeTruthy();
+
+    // ...maar de losse grijze blokken niet.
+    const skelet = container.querySelector(".animate-pulse");
+    expect(skelet?.getAttribute("aria-hidden")).toBe("true");
     // Een skelet in plaats van een spinner: blokken met een vaste hoogte,
     // zodat de inhoud er straks zonder sprong in past.
-    expect(container.querySelectorAll("div").length).toBeGreaterThan(3);
+    expect(skelet?.querySelectorAll("div").length).toBeGreaterThan(3);
+  });
+
+  it("verbergt de statustekst visueel", () => {
+    render(<Loading />);
+    expect(screen.getByText("shell.loading").className).toContain("sr-only");
   });
 });
 

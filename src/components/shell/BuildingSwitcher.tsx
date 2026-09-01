@@ -17,9 +17,18 @@ export type SwitcherBuilding = { id: string; name: string; address: string | nul
  * dus in de URL en niet in serverstate — meerdere tabbladen blijven daardoor
  * onafhankelijk werken en een link blijft deelbaar.
  *
- * Bewust een eigen knop-plus-menu in plaats van een componentbibliotheek: het
+ * Bewust een eigen knop-plus-lijst in plaats van een componentbibliotheek: het
  * is één interactiepatroon en een Radix-afhankelijkheid toevoegen voor deze ene
- * plek is duurder dan de dertig regels toetsenbordafhandeling hieronder.
+ * plek is duurder dan de handvol regels hieronder.
+ *
+ * SEMANTIEK: dit is een DISCLOSURE, geen ARIA-menu. Een `role="menu"` verplicht
+ * tot pijltoetsnavigatie, roving tabindex en focusbeheer bij openen; dat was
+ * niet geïmplementeerd, en een half menupatroon is voor een schermlezer erger
+ * dan geen menupatroon — hij kondigt gedrag aan dat er niet is. Wat er wél is,
+ * is een knop met `aria-expanded` die een lijst met links toont. Dat is precies
+ * wat `aria-expanded` + `<ul>` + `<a>` uitdrukt, en Tab werkt er vanzelf in.
+ * Het actieve gebouw draagt `aria-current`, zodat het ook zonder kleur en
+ * zonder het (decoratieve) vinkje herkenbaar is.
  */
 export default function BuildingSwitcher({
   buildings,
@@ -90,9 +99,8 @@ export default function BuildingSwitcher({
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
+        aria-controls={menuId}
         data-testid="building-switcher"
         className={cn(
           "flex w-full items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-start",
@@ -113,43 +121,45 @@ export default function BuildingSwitcher({
       </button>
 
       {open ? (
-        <div
+        <ul
           id={menuId}
-          role="menu"
           aria-label={t("switchBuilding")}
+          data-testid="building-switcher-list"
           className={cn(
-            "absolute start-0 z-30 mt-1 w-full overflow-hidden rounded-lg border border-line bg-surface shadow-lg",
+            "absolute start-0 z-30 m-0 mt-1 w-full list-none overflow-hidden rounded-lg border border-line bg-surface p-0 shadow-lg",
             "max-h-72 overflow-y-auto",
           )}
         >
           {buildings.map((b) => {
             const isCurrent = b.id === currentId;
             return (
-              <Link
-                key={b.id}
-                role="menuitem"
-                href={hrefFor(b.id)}
-                onClick={() => {
-                  setOpen(false);
-                  onNavigate?.();
-                }}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-2 text-[0.85rem] no-underline",
-                  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--primary)]",
-                  isCurrent
-                    ? "bg-primary-soft font-semibold text-primary"
-                    : "text-ink-soft hover:bg-surface-2",
-                )}
-              >
-                <Check
-                  className={cn("size-4 shrink-0", !isCurrent && "opacity-0")}
-                  aria-hidden="true"
-                />
-                <span className="min-w-0 truncate">{b.name}</span>
-              </Link>
+              <li key={b.id}>
+                <Link
+                  href={hrefFor(b.id)}
+                  // Het vinkje is decoratief; dit is wat een schermlezer hoort.
+                  aria-current={isCurrent ? "true" : undefined}
+                  onClick={() => {
+                    setOpen(false);
+                    onNavigate?.();
+                  }}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 text-[0.85rem] no-underline",
+                    "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--primary)]",
+                    isCurrent
+                      ? "bg-primary-soft font-semibold text-primary"
+                      : "text-ink-soft hover:bg-surface-2",
+                  )}
+                >
+                  <Check
+                    className={cn("size-4 shrink-0", !isCurrent && "opacity-0")}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 truncate">{b.name}</span>
+                </Link>
+              </li>
             );
           })}
-        </div>
+        </ul>
       ) : null}
     </div>
   );

@@ -44,7 +44,7 @@ export default function AppShell({
   const t = useTranslations("shell");
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const drawerRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLDialogElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   const buildingId = currentBuildingId(pathname);
@@ -68,26 +68,84 @@ export default function AppShell({
     if (drawerOpen) setDrawerOpen(false);
   }
 
-  // Escape sluit, focus keert terug naar de knop die de lade opende, en de
-  // pagina eronder scrollt niet mee zolang de lade open is.
+  /**
+   * De lade is een native <dialog> die met showModal() wordt geopend.
+   *
+   * Daarmee levert de BROWSER de drie dingen die een handgeschreven overlay niet
+   * betrouwbaar krijgt: de top layer, een echt inerte achtergrond (alles buiten
+   * de dialoog is niet klikbaar én niet focusbaar) en een focus trap waar Tab en
+   * Shift+Tab niet uit ontsnappen. Escape komt er gratis bij.
+   *
+   * Dit is hetzelfde patroon dat ReversalDialog al gebruikt; er zit geen eigen
+   * toetsenbordafhandeling meer in dit bestand.
+   *
+   * De React-state blijft leidend voor "moet hij open zijn", dit effect
+   * synchroniseert de DOM ernaartoe. De `open`-controle voorkomt dat een
+   * hernieuwde render showModal() een tweede keer aanroept (dat gooit).
+   */
+  useEffect(() => {
+    const dialog = drawerRef.current;
+    if (!dialog) return;
+    if (drawerOpen && !dialog.open) dialog.showModal();
+    else if (!drawerOpen && dialog.open) dialog.close();
+  }, [drawerOpen]);
+
+  /**
+   * Scrollvergrendeling van de pagina eronder.
+   *
+   * Browsers doen dit voor een modale <dialog> grotendeels zelf, maar niet
+   * overal even consistent. Dit blijft daarom expliciet: het is de garantie die
+   * de vorige versie ook al gaf, en hij is goedkoop.
+   */
   useEffect(() => {
     if (!drawerOpen) return;
-    const previousOverflow = document.body.style.overflow;
+    const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    drawerRef.current?.focus();
-
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setDrawerOpen(false);
-        menuButtonRef.current?.focus();
-      }
-    }
-    document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previousOverflow;
+      document.body.style.overflow = previous;
     };
   }, [drawerOpen]);
+
+  /**
+   * Boven de lg-grens bestaat de menuknop niet meer en staat de vaste sidebar er
+   * al. Een openstaande modale lade zou dan de hele pagina inert houden zonder
+   * dat de gebruiker begrijpt waarom. Sluiten dus, zodra het scherm groeit.
+   */
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1024px)");
+    function onChange(e: MediaQueryListEvent | MediaQueryList) {
+      if (e.matches) setDrawerOpen(false);
+    }
+    onChange(query);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  /**
+   * Eén sluitpad voor alle sluitpaden.
+   *
+   * Het `close`-event van <dialog> vuurt ongeacht de oorzaak: Escape, onze eigen
+   * close(), of de achtergrondklik. Door de focus hier te herstellen in plaats
+   * van bij elke knop apart, kan geen enkel pad het vergeten — dat was precies
+   * de fout in de vorige versie, waar de achtergrondklik de focus liet vallen.
+   *
+   * De zichtbaarheidscontrole is nodig omdat de menuknop boven 1024px verborgen
+   * is; focus zetten op een onzichtbare knop zou de focus laten verdwijnen.
+   */
+  function handleDialogClose() {
+    setDrawerOpen(false);
+    const button = menuButtonRef.current;
+    if (button && getComputedStyle(button).display !== "none") button.focus();
+  }
+
+  /**
+   * Een klik op de ::backdrop van een modale <dialog> heeft de dialoog zelf als
+   * target; een klik op de inhoud heeft een kind als target. Dat onderscheid is
+   * genoeg om "buiten geklikt" te herkennen zonder een eigen overlay-element.
+   */
+  function handleDialogClick(event: React.MouseEvent<HTMLDialogElement>) {
+    if (event.target === drawerRef.current) setDrawerOpen(false);
+  }
 
   const navContent = (onNavigate?: () => void) => (
     <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto">
@@ -159,6 +217,7 @@ export default function AppShell({
             type="button"
             onClick={() => setDrawerOpen(true)}
             aria-label={t("openMenu")}
+            aria-haspopup="dialog"
             aria-expanded={drawerOpen}
             data-testid="menu-button"
             className="grid size-9 shrink-0 place-items-center rounded-lg border border-line-strong bg-surface text-ink-soft hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary)] lg:hidden"
@@ -198,32 +257,32 @@ export default function AppShell({
         </main>
       </div>
 
-      {/* ── Mobiele lade ──────────────────────────────────────────────────── */}
-      {drawerOpen ? (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <button
-            type="button"
-            aria-label={t("closeMenu")}
-            onClick={() => setDrawerOpen(false)}
-            className="absolute inset-0 h-full w-full cursor-default border-0 bg-black/40 p-0"
-          />
-          <div
-            ref={drawerRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label={t("mainNav")}
-            data-testid="mobile-drawer"
-            tabIndex={-1}
-            className="absolute inset-y-0 start-0 flex w-[min(20rem,85vw)] flex-col gap-5 border-e border-line bg-surface p-4 shadow-xl focus:outline-none"
-          >
+      {/* ── Mobiele lade ──────────────────────────────────────────────────────
+          Native <dialog>: geen eigen overlay-element en geen `role`/`aria-modal`
+          meer. Beide zijn impliciet zodra de dialoog met showModal() opengaat,
+          en de browser maakt de achtergrond dan werkelijk inert in plaats van
+          het alleen aan te kondigen. De ::backdrop komt uit globals.css.
+          De dialoog blijft in de DOM staan; alleen zijn open-state wisselt. */}
+      <dialog
+        ref={drawerRef}
+        aria-label={t("mainNav")}
+        data-testid="mobile-drawer"
+        onClose={handleDialogClose}
+        onClick={handleDialogClick}
+        className="nav-drawer"
+      >
+        {/* De inhoud bestaat alleen zolang de lade open is. Het <dialog> zelf
+            blijft staan omdat de ref hem nodig heeft, maar de navigatie twee
+            keer in de DOM hebben — één keer in de sidebar, één keer hier —
+            zou de organisatienaam, de gebouwkiezer en elk menu-item dubbel
+            aankondigen aan een schermlezer. */}
+        {drawerOpen ? (
+          <div className="flex h-full flex-col gap-5 p-4">
             <div className="flex items-center justify-between gap-2">
               <span className="truncate font-semibold text-ink">Agio Syndic</span>
               <button
                 type="button"
-                onClick={() => {
-                  setDrawerOpen(false);
-                  menuButtonRef.current?.focus();
-                }}
+                onClick={() => setDrawerOpen(false)}
                 aria-label={t("closeMenu")}
                 data-testid="drawer-close"
                 className="grid size-9 shrink-0 place-items-center rounded-lg border border-line-strong text-ink-soft hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary)]"
@@ -233,8 +292,8 @@ export default function AppShell({
             </div>
             {navContent(() => setDrawerOpen(false))}
           </div>
-        </div>
-      ) : null}
+        ) : null}
+      </dialog>
     </div>
   );
 }

@@ -270,6 +270,7 @@
     "noBuildings": "Geen gebouwen",
     "allBuildings": "Alle gebouwen",
     "switchBuilding": "Gebouw wisselen",
+    "loading": "Bezig met laden…",
     "error": {
       "title": "Er is iets misgegaan",
       "body": "Deze pagina kon niet worden geladen. Probeer het opnieuw; blijft het misgaan, neem dan contact op met uw beheerder.",

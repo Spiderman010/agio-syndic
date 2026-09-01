@@ -270,6 +270,7 @@
     "noBuildings": "Aucun immeuble",
     "allBuildings": "Tous les immeubles",
     "switchBuilding": "Changer d'immeuble",
+    "loading": "Chargement…",
     "error": {
       "title": "Une erreur s'est produite",
       "body": "Cette page n'a pas pu être chargée. Réessayez ; si le problème persiste, contactez votre administrateur.",
