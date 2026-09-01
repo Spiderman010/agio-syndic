@@ -9,16 +9,18 @@ import Badge from "@/components/ui/Badge";
 import Table, { Td, Th } from "@/components/ui/Table";
 import { buttonClasses } from "@/components/ui/Button";
 import KpiCard from "@/components/dashboard/KpiCard";
-import { buildReversalIndex, emptyReversalIndex, type ReversalViewRow } from "@/lib/reversal";
+import { buildReversalIndex, type ReversalViewRow } from "@/lib/reversal";
 import { formatDate, formatMoney, formatMoneyRounded, formatPercent } from "@/lib/money";
 import {
+  assembleFinancials,
   buildAttentionItems,
-  computeKpis,
-  pickFiscalYear,
+  filterToSelectedFiscalYear,
   quickActions,
   recentActivity,
+  selectFiscalYears,
   topDebtors,
   type FiscalYearRow,
+  type ScopeSelection,
   type SettlementRow,
 } from "@/lib/dashboard";
 
@@ -26,24 +28,36 @@ import {
  * Financieel dashboard.
  *
  * ── SCOPE ──────────────────────────────────────────────────────────────────
- * Zonder `?building=` is het beeld organisatiebreed; met de parameter is het
- * één gebouw. Dat vraagt geen nieuwe route en geen wijziging aan de schil.
+ * Zonder `?building=` organisatiebreed, met de parameter één gebouw.
  *
- * Alle queries filteren EXPLICIET op `organization_id` van de actieve
- * organisatie, bovenop RLS. RLS scoopt op lidmaatschap en laat dus alle
- * organisaties van de gebruiker door; `requireOrg()` kiest er één. Zonder dat
- * expliciete filter zou een gebruiker met twee organisaties de cijfers van
- * beide opgeteld zien onder de naam van één — de contextmismatch uit sprint 1.
+ * Elke query filtert EXPLICIET op `organization_id` bovenop RLS. RLS scoopt op
+ * lidmaatschap en laat dus alle organisaties van de gebruiker door;
+ * `requireOrg()` kiest er één.
  *
  * ── BOEKJAAR ───────────────────────────────────────────────────────────────
- * Alles op dit scherm gaat over ÉÉN boekjaar; het jaartal staat in de kop. Dat
- * is een bewuste beperking: openstaande posten uit eerdere jaren tellen hier
- * niet mee. Een meerjarige ouderdomsanalyse is eigen functionaliteit.
+ * PER GEBOUW één boekjaar; zie `selectFiscalYears`. Een boekjaar hoort bij een
+ * gebouw, niet bij een organisatie, dus organisatiebreed rekenen is: per gebouw
+ * het eigen boekjaar kiezen en die uitkomsten optellen.
  *
- * ── AANTAL QUERIES ─────────────────────────────────────────────────────────
- * Vast, ongeacht het aantal gebouwen of eigenaren: er is geen enkele query in
- * een lus. Eigenaarsnamen worden pas opgehaald nadat de top is bepaald, met één
- * `in`-query over hoogstens vijf id's.
+ * ── FOUTEN ─────────────────────────────────────────────────────────────────
+ * Fail-closed. Een mislukte query op de financiële scope levert GEEN nullen op
+ * maar onderdrukt de bedragen en toont een melding. Een nul die eigenlijk een
+ * fout is, is op een financieel dashboard erger dan geen getal.
+ *
+ * Twee bewuste uitzonderingen:
+ *   - eigenaarsnamen: bij een fout tonen we "onbekend" en laten we de BEDRAGEN
+ *     ongemoeid, want de namen zijn presentatie en de bedragen komen elders
+ *     vandaan;
+ *   - integriteitscontroles: een mislukte controle wordt een aandachtspunt
+ *     ("kon niet worden gecontroleerd"), nooit een impliciete nul die het
+ *     dashboard gezond laat lijken.
+ *
+ * ── STORNO-INDEX ───────────────────────────────────────────────────────────
+ * De storno-index wordt ORGANISATIEBREED opgehaald, nooit per boekjaar. Bewezen
+ * met een rollback-probe: een correctie met een valutadatum in het volgende
+ * boekjaar boekt de storno in dát jaar, terwijl het origineel in het vorige
+ * staat. Een per-boekjaar gescoopte index zou die storno missen en het
+ * origineel ten onrechte volledig meetellen.
  */
 export default async function DashboardPage({
   params,
@@ -58,215 +72,260 @@ export default async function DashboardPage({
   const t = await getTranslations("dashboard");
   const supabase = await createClient();
   const mayWrite = canWrite(role);
-  // Kaartkoppen zonder centen: op 360px staan er twee naast elkaar en past een
-  // volledig opgemaakt bedrag niet. De exacte bedragen staan in de
-  // debiteurenlijst en op de detailschermen, waar de ruimte er wel is.
   const money = (n: number) => formatMoney(n, locale);
   const moneyKort = (n: number) => formatMoneyRounded(n, locale);
 
-  // ── 1. Gebouwen van deze organisatie ─────────────────────────────────────
-  const { data: buildingData } = await supabase
+  /** Financieel dragende bronnen die faalden. Niet leeg = geen bedragen tonen. */
+  const gefaald = new Set<string>();
+
+  // ── 1. Gebouwen ──────────────────────────────────────────────────────────
+  const buildingRes = await supabase
     .from("buildings")
     .select("id, name")
     .eq("organization_id", org.id)
     .order("name", { ascending: true });
-  const buildings = (buildingData ?? []) as { id: string; name: string }[];
+  if (buildingRes.error) gefaald.add("buildings");
+  const buildings = (buildingRes.data ?? []) as { id: string; name: string }[];
 
-  // Een onbekend of niet-toegankelijk id valt terug op organisatiebreed in
-  // plaats van een leeg scherm te tonen.
-  const scopedBuilding =
-    buildings.find((b) => b.id === buildingParam) ?? null;
+  if (gefaald.size > 0) return <Fout t={t} />;
+  if (buildings.length === 0) return <LegeOrganisatie t={t} />;
+
+  const gevraagdGebouw = buildingParam ?? null;
+  const scopedBuilding = buildings.find((b) => b.id === gevraagdGebouw) ?? null;
+  // Een onbekend of niet-toegankelijk id mag niet stil organisatiebrede cijfers
+  // opleveren alsof er niets aan de hand is.
+  const onbekendGebouwGevraagd = Boolean(gevraagdGebouw) && scopedBuilding === null;
+  const scopeBuildings = scopedBuilding ? [scopedBuilding] : buildings;
   const scopeLabel = scopedBuilding ? scopedBuilding.name : org.name;
+  const buildingHref = scopedBuilding ? `/buildings/${scopedBuilding.id}` : null;
 
-  if (buildings.length === 0) {
-    return <LegeOrganisatie t={t} />;
-  }
-
-  // ── 2. Boekjaarcontext ───────────────────────────────────────────────────
+  // ── 2. Boekjaar per gebouw ───────────────────────────────────────────────
   let fyQuery = supabase
     .from("fiscal_years")
     .select("id, building_id, year, start_date, end_date, status")
     .eq("organization_id", org.id);
   if (scopedBuilding) fyQuery = fyQuery.eq("building_id", scopedBuilding.id);
-  const { data: fyData } = await fyQuery;
-  const fiscalYears = (fyData ?? []) as FiscalYearRow[];
+  const fyRes = await fyQuery;
+  if (fyRes.error) gefaald.add("fiscalYears");
+  const fiscalYears = (fyRes.data ?? []) as FiscalYearRow[];
+
+  if (gefaald.size > 0) {
+    return (
+      <>
+        <Kop t={t} scope={scopeLabel} selection={null} />
+        <Fout t={t} />
+      </>
+    );
+  }
 
   const vandaag = new Date().toISOString().slice(0, 10);
-  const fyContext = pickFiscalYear(fiscalYears, vandaag);
-  const huidigJaar = fyContext.huidig?.year ?? null;
-
-  // Organisatiebreed telt "boekjaar 2026" van elk gebouw mee.
-  const scopedFy = fiscalYears.filter((f) => f.year === huidigJaar);
-  const scopedFyIds = scopedFy.map((f) => f.id);
-  const periodeStart = scopedFy.reduce<string | null>(
-    (min, f) => (min === null || f.start_date < min ? f.start_date : min),
-    null,
+  const selection = selectFiscalYears(
+    scopeBuildings.map((b) => b.id),
+    fiscalYears,
+    vandaag,
   );
-  const periodeEind = scopedFy.reduce<string | null>(
-    (max, f) => (max === null || f.end_date > max ? f.end_date : max),
-    null,
-  );
+  const scopedFyIds = selection.selected.map((s) => s.fiscalYear.id);
+  const scopedBuildingIds = selection.selected.map((s) => s.buildingId);
 
   if (scopedFyIds.length === 0) {
     return (
       <>
-        <Kop t={t} scope={scopeLabel} fy={null} context={fyContext} />
+        <Kop t={t} scope={scopeLabel} selection={selection} />
+        {onbekendGebouwGevraagd ? <OnbekendGebouw t={t} /> : null}
         <GeenBoekjaar t={t} building={scopedBuilding} mayWrite={mayWrite} />
       </>
     );
   }
 
-  // ── 3. Lastenoproepen van dit boekjaar ───────────────────────────────────
-  const { data: callData } = await supabase
+  // Begrensd venster voor de betalingsquery. Het echte filter — per gebouw het
+  // eigen boekjaar — gebeurt daarna in `filterToSelectedFiscalYear`.
+  const vensterVan = selection.selected.reduce(
+    (min, s) => (s.fiscalYear.start_date < min ? s.fiscalYear.start_date : min),
+    selection.selected[0].fiscalYear.start_date,
+  );
+  const vensterTot = selection.selected.reduce(
+    (max, s) => (s.fiscalYear.end_date > max ? s.fiscalYear.end_date : max),
+    selection.selected[0].fiscalYear.end_date,
+  );
+
+  // ── 3. Lastenoproepen van de geselecteerde boekjaren ─────────────────────
+  const callRes = await supabase
     .from("charge_calls")
     .select("id")
     .eq("organization_id", org.id)
     .in("fiscal_year_id", scopedFyIds);
-  const callIds = (callData ?? []).map((c) => c.id as string);
+  const callIds = (callRes.data ?? []).map((c) => c.id as string);
 
-  // ── 4. Vorderingen: appelé, restant dû, debiteuren én integriteit in één ─
-  const settlements: SettlementRow[] = callIds.length
-    ? (((
-        await supabase
-          .from("v_settlement_integrity")
-          .select("charge_allocation_id, building_id, owner_id, amount, settled_amount, ok")
-          .eq("organization_id", org.id)
-          .in("charge_call_id", callIds)
-      ).data ?? []) as SettlementRow[])
-    : [];
+  // ── 4. Vorderingen ───────────────────────────────────────────────────────
+  // Een mislukte oproepenquery telt hier mee: zonder oproep-id's zou de
+  // vorderingenlijst leeg zijn en appelé ten onrechte nul worden.
+  let settlements: SettlementRow[] | null = callRes.error ? null : [];
+  if (settlements !== null && callIds.length > 0) {
+    const settleRes = await supabase
+      .from("v_settlement_integrity")
+      .select("charge_allocation_id, building_id, owner_id, amount, settled_amount, ok")
+      .eq("organization_id", org.id)
+      .in("charge_call_id", callIds);
+    settlements = settleRes.error ? null : ((settleRes.data ?? []) as SettlementRow[]);
+  }
 
-  // ── 5. Betalingen binnen de periode van het boekjaar ─────────────────────
-  // `payments` draagt geen fiscal_year_id; de valutadatum is de enige
-  // koppeling aan een periode die het datamodel biedt.
-  let payQuery = supabase
+  // ── 5. Betalingen ────────────────────────────────────────────────────────
+  const payRes = await supabase
     .from("payments")
     .select("id, amount, building_id, owner_id, value_date")
-    .eq("organization_id", org.id);
-  if (scopedBuilding) payQuery = payQuery.eq("building_id", scopedBuilding.id);
-  if (periodeStart) payQuery = payQuery.gte("value_date", periodeStart);
-  if (periodeEind) payQuery = payQuery.lte("value_date", periodeEind);
-  const { data: payData } = await payQuery.order("value_date", { ascending: false });
-  const payments = (payData ?? []) as {
+    .eq("organization_id", org.id)
+    .in("building_id", scopedBuildingIds)
+    .gte("value_date", vensterVan)
+    .lte("value_date", vensterTot)
+    .order("value_date", { ascending: false });
+  const paymentsRuw = (payRes.data ?? []) as {
     id: string;
     amount: number;
     building_id: string | null;
     owner_id: string | null;
     value_date: string;
   }[];
+  // Het venster in de query is een begrensde SUPERSET; dit filter houdt per
+  // betaling alleen over wat binnen het boekjaar van zijn EIGEN gebouw valt.
+  const payments = payRes.error
+    ? null
+    : filterToSelectedFiscalYear(paymentsRuw, selection);
 
-  // ── 6. Uitgaven van dit boekjaar ─────────────────────────────────────────
-  const { data: expData } = await supabase
+  // ── 6. Uitgaven ──────────────────────────────────────────────────────────
+  const expRes = await supabase
     .from("expenses")
     .select("id, amount, building_id, supplier, description, expense_date")
     .eq("organization_id", org.id)
     .in("fiscal_year_id", scopedFyIds)
     .order("expense_date", { ascending: false });
-  const expenses = (expData ?? []) as {
-    id: string;
-    amount: number;
-    building_id: string | null;
-    supplier: string | null;
-    description: string | null;
-    expense_date: string;
-  }[];
+  const expenses = expRes.error
+    ? null
+    : ((expRes.data ?? []) as {
+        id: string;
+        amount: number;
+        building_id: string | null;
+        supplier: string | null;
+        description: string | null;
+        expense_date: string;
+      }[]);
 
-  // ── 7. Storno's en correcties ────────────────────────────────────────────
-  const { data: revData, error: revError } = await supabase
+  // ── 7. Storno's — ORGANISATIEBREED, zie de kop van dit bestand ───────────
+  const revRes = await supabase
     .from("v_financial_reversals")
     .select(
       "reversal_id, source_type, source_id, correction_source_id, reason, effective_date, is_correctie, is_correctie_vorig_boekjaar",
     )
     .eq("organization_id", org.id);
-  // Faalt deze query, dan zou netto stilzwijgend bruto worden — en dat is een
-  // te groot verschil om weg te moffelen. De totalen worden dan onderdrukt.
-  const reversalsBeschikbaar = !revError;
-  const reversals = reversalsBeschikbaar
-    ? buildReversalIndex((revData ?? []) as ReversalViewRow[])
-    : emptyReversalIndex();
+  const reversals = revRes.error
+    ? null
+    : buildReversalIndex((revRes.data ?? []) as ReversalViewRow[]);
 
-  // ── 8. Integriteitssignalen ──────────────────────────────────────────────
-  const { count: allocNok } = await supabase
+  // Alle financieel dragende bronnen zijn nu bekend. `assembleFinancials`
+  // beslist — en die beslissing is apart getest.
+  const financials = assembleFinancials({
+    selection,
+    settlements,
+    payments,
+    expenses,
+    reversals,
+  });
+
+  if (financials.status === "error") {
+    return (
+      <>
+        <Kop t={t} scope={scopeLabel} selection={selection} />
+        {onbekendGebouwGevraagd ? <OnbekendGebouw t={t} /> : null}
+        <Fout t={t} />
+      </>
+    );
+  }
+
+  // Vanaf hier komen de rijen UIT het resultaat, niet uit de losse variabelen:
+  // dat maakt de fail-closed controle de enige poort waar ze doorheen kunnen.
+  const { kpis, settlementNok } = financials;
+  const veiligeSettlements = financials.settlements;
+  const veiligeBetalingen = financials.payments;
+  const veiligeUitgaven = financials.expenses;
+  const veiligeReversals = financials.reversals;
+
+  // ── 8. Integriteit — mag falen, maar nooit als "gezond" lezen ────────────
+  const allocRes = await supabase
     .from("v_allocation_integrity")
     .select("charge_call_id", { count: "exact", head: true })
     .eq("organization_id", org.id)
     .in("fiscal_year_id", scopedFyIds)
     .eq("ok", false);
+  const allocationNok = allocRes.error ? null : (allocRes.count ?? 0);
 
-  const { data: reconData } = await supabase
+  const reconRes = await supabase
     .from("v_reconciliation_4111")
     .select("verschil")
     .eq("organization_id", org.id)
     .in("fiscal_year_id", scopedFyIds);
-  const reconVerschil = (reconData ?? []).reduce(
-    (sum, r) => sum + Math.abs(Number(r.verschil ?? 0)),
-    0,
-  );
+  const reconVerschil = reconRes.error
+    ? null
+    : (reconRes.data ?? []).reduce((sum, r) => sum + Math.abs(Number(r.verschil ?? 0)), 0);
 
   // ── 9. Rekenen ───────────────────────────────────────────────────────────
-  const kpis = computeKpis({ settlements, payments, expenses, reversals });
-  const settlementNok = settlements.filter((s) => !s.ok).length;
-
-  const debiteuren = topDebtors(settlements, new Map(), 5);
-  const { data: ownerData } = debiteuren.debtors.length
+  const debiteuren = topDebtors(veiligeSettlements, new Map(), 5);
+  const ownerRes = debiteuren.debtors.length
     ? await supabase
         .from("owners")
         .select("id, full_name")
         .eq("organization_id", org.id)
         .in("id", debiteuren.debtors.map((d) => d.ownerId))
-    : { data: [] };
+    : { data: [], error: null };
+  // Bewuste uitzondering: een fout hier raakt alleen de NAMEN, niet de bedragen.
   const ownerNames = new Map(
-    (ownerData ?? []).map((o) => [o.id as string, o.full_name as string]),
+    (ownerRes.error ? [] : (ownerRes.data ?? [])).map((o) => [
+      o.id as string,
+      o.full_name as string,
+    ]),
   );
   const debtors = debiteuren.debtors.map((d) => ({
     ...d,
     name: ownerNames.get(d.ownerId) ?? t("debtors.unknownOwner"),
   }));
 
-  const buildingHref = scopedBuilding ? `/buildings/${scopedBuilding.id}` : null;
   const attention = buildAttentionItems({
     restant: kpis.restant,
     aantalDebiteuren: debiteuren.totaalDebiteuren,
     zonderEigenaar: debiteuren.zonderEigenaar,
     settlementNok,
-    allocationNok: allocNok ?? 0,
+    allocationNok,
     reconciliatieVerschil: reconVerschil,
-    meerdereOpenBoekjaren: fyContext.aantalOpen,
+    buildingsWithMultipleOpen: selection.buildingsWithMultipleOpen.length,
+    buildingsWithoutFiscalYear: selection.buildingsWithoutFiscalYear.length,
     buildingHref,
   });
 
   const naamVanGebouw = new Map(buildings.map((b) => [b.id, b.name]));
   const activiteit = recentActivity(
-    payments.map((p) => ({
+    veiligeBetalingen.map((p) => ({
       id: p.id,
       amount: p.amount,
       building_id: p.building_id,
       date: p.value_date,
       context: naamVanGebouw.get(p.building_id ?? "") ?? "",
     })),
-    expenses.map((e) => ({
+    veiligeUitgaven.map((e) => ({
       id: e.id,
       amount: e.amount,
       building_id: e.building_id,
       date: e.expense_date,
       context: e.supplier ?? e.description ?? "",
     })),
-    reversals,
+    veiligeReversals,
     8,
   );
 
-  const geenActiviteit = kpis.appele === 0 && payments.length === 0 && expenses.length === 0;
+  const geenActiviteit =
+    kpis.appele === 0 && veiligeBetalingen.length === 0 && veiligeUitgaven.length === 0;
 
   return (
     <>
-      <Kop t={t} scope={scopeLabel} fy={fyContext.huidig} context={fyContext} />
-
-      {!reversalsBeschikbaar ? (
-        <Card className="mb-4 border-crit">
-          <p className="m-0 text-[0.88rem] text-crit" role="alert">
-            {t("netUnavailable")}
-          </p>
-        </Card>
-      ) : null}
+      <Kop t={t} scope={scopeLabel} selection={selection} />
+      {onbekendGebouwGevraagd ? <OnbekendGebouw t={t} /> : null}
 
       {geenActiviteit ? (
         <GeenActiviteit t={t} building={scopedBuilding} mayWrite={mayWrite} />
@@ -276,18 +335,8 @@ export default async function DashboardPage({
             {t("kpi.sectionTitle")}
           </h2>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <KpiCard
-              id="kpi-appele"
-              label={t("kpi.called")}
-              value={moneyKort(kpis.appele)}
-              hint={t("kpi.calledHint")}
-            />
-            <KpiCard
-              id="kpi-encaisse"
-              label={t("kpi.collected")}
-              value={moneyKort(kpis.encaisse)}
-              hint={t("kpi.collectedHint")}
-            />
+            <KpiCard id="kpi-appele" label={t("kpi.called")} value={moneyKort(kpis.appele)} hint={t("kpi.calledHint")} />
+            <KpiCard id="kpi-encaisse" label={t("kpi.collected")} value={moneyKort(kpis.encaisse)} hint={t("kpi.collectedHint")} />
             <KpiCard
               id="kpi-restant"
               label={t("kpi.outstanding")}
@@ -320,19 +369,13 @@ export default async function DashboardPage({
             <CardHeader title={<span id="attention-kop">{t("attention.title")}</span>} />
             <ul className="m-0 flex list-none flex-col gap-2 p-0">
               {attention.map((item) => (
-                <li
-                  key={item.key}
-                  className="flex flex-wrap items-center gap-2 text-[0.875rem]"
-                >
+                <li key={item.key} className="flex flex-wrap items-center gap-2 text-[0.875rem]">
                   <Badge tone={item.tone}>{t(`attention.tone.${item.tone}`)}</Badge>
                   <span className="min-w-0 text-ink-soft">
                     {t(`attention.${item.labelKey}`, item.values ?? {})}
                   </span>
                   {item.href ? (
-                    <Link
-                      href={item.href}
-                      className="text-[0.82rem] text-primary hover:underline"
-                    >
+                    <Link href={item.href} className="text-[0.82rem] text-primary hover:underline">
                       {t("attention.open")}
                     </Link>
                   ) : null}
@@ -350,9 +393,7 @@ export default async function DashboardPage({
               <CardHeader title={<span id="debtors-kop">{t("debtors.title")}</span>} />
             </div>
             {debtors.length === 0 ? (
-              <p className="m-0 p-4 pt-0 text-[0.875rem] text-ink-soft">
-                {t("debtors.empty")}
-              </p>
+              <p className="m-0 p-4 pt-0 text-[0.875rem] text-ink-soft">{t("debtors.empty")}</p>
             ) : (
               <Table caption={t("debtors.title")} className="rounded-none border-0 shadow-none">
                 <thead>
@@ -402,17 +443,11 @@ export default async function DashboardPage({
                       <span className="min-w-0 truncate text-[0.85rem] text-ink">
                         {a.context || t("activity.noContext")}
                       </span>
-                      {a.reversed ? (
-                        <Badge tone="crit">{t("activity.reversed")}</Badge>
-                      ) : null}
-                      {a.isCorrection ? (
-                        <Badge tone="info">{t("activity.correction")}</Badge>
-                      ) : null}
+                      {a.reversed ? <Badge tone="crit">{t("activity.reversed")}</Badge> : null}
+                      {a.isCorrection ? <Badge tone="info">{t("activity.correction")}</Badge> : null}
                     </span>
                     <span className="flex shrink-0 items-baseline gap-3">
-                      <span className="text-[0.75rem] text-ink-soft">
-                        {formatDate(a.date, locale)}
-                      </span>
+                      <span className="text-[0.75rem] text-ink-soft">{formatDate(a.date, locale)}</span>
                       <span
                         className={
                           a.reversed
@@ -434,7 +469,7 @@ export default async function DashboardPage({
       <SnelleActies
         t={t}
         building={scopedBuilding}
-        fyId={scopedBuilding ? (fyContext.huidig?.id ?? null) : null}
+        fyId={scopedBuilding ? (selection.selected[0]?.fiscalYear.id ?? null) : null}
         mayWrite={mayWrite}
       />
     </>
@@ -445,42 +480,80 @@ export default async function DashboardPage({
 
 type T = Awaited<ReturnType<typeof getTranslations<"dashboard">>>;
 
+/**
+ * Kop met scope en boekjaarlabel.
+ *
+ * Dekt de selectie meerdere jaartallen — mogelijk wanneer gebouwen verschillende
+ * boekjaren voeren — dan verschijnt er BEWUST geen "Exercice 2026", want dat zou
+ * suggereren dat alles precies één boekjaar beslaat. Er komt dan een label dat
+ * het bereik benoemt, plus het aantal meegetelde gebouwen.
+ */
 function Kop({
   t,
   scope,
-  fy,
-  context,
+  selection,
 }: {
   t: T;
   scope: string;
-  fy: FiscalYearRow | null;
-  context: { meerdereOpen: boolean; aantalOpen: number };
+  selection: ScopeSelection | null;
 }) {
+  const jaren = selection?.years ?? [];
+  const enkelBoekjaar =
+    selection && jaren.length === 1 && selection.selected.length === 1
+      ? selection.selected[0].fiscalYear
+      : null;
+
   return (
     <header className="mb-5">
       <h1 className="mt-0 mb-1 text-2xl font-semibold text-ink">{t("title")}</h1>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <p className="m-0 text-[0.9rem] text-ink-soft">{scope}</p>
-        {fy ? (
+        {jaren.length > 0 ? (
           <>
             <span aria-hidden="true" className="text-ink-faint">
               ·
             </span>
             <p className="m-0 text-[0.9rem] text-ink-soft">
-              {t("fiscalYear", { year: fy.year })}
+              {jaren.length === 1
+                ? t("fiscalYear", { year: jaren[0] })
+                : t("fiscalYearRange", { from: jaren[0], to: jaren[jaren.length - 1] })}
             </p>
-            <Badge tone={fy.status === "open" ? "good" : "neutral"}>
-              {t(`status.${fy.status}`)}
-            </Badge>
+            {enkelBoekjaar ? (
+              <Badge tone={enkelBoekjaar.status === "open" ? "good" : "neutral"}>
+                {t(`status.${enkelBoekjaar.status}`)}
+              </Badge>
+            ) : null}
+            {selection && selection.selected.length > 1 ? (
+              <span className="text-[0.78rem] text-ink-faint">
+                {t("buildingsCounted", { count: selection.selected.length })}
+              </span>
+            ) : null}
           </>
-        ) : null}
-        {context.meerdereOpen ? (
-          <Badge tone="warn">
-            {t("multipleOpenBadge", { count: context.aantalOpen })}
-          </Badge>
         ) : null}
       </div>
     </header>
+  );
+}
+
+/** Fail-closed melding: liever geen cijfer dan een verkeerd cijfer. */
+function Fout({ t }: { t: T }) {
+  return (
+    <Card className="border-crit">
+      <p role="alert" className="m-0 text-[0.9rem] font-medium text-crit">
+        {t("loadError.title")}
+      </p>
+      <p className="mt-1 mb-0 text-[0.875rem] text-ink-soft">{t("loadError.body")}</p>
+    </Card>
+  );
+}
+
+function OnbekendGebouw({ t }: { t: T }) {
+  return (
+    <Card className="mb-4 border-warn">
+      <p role="status" className="m-0 text-[0.875rem] text-ink-soft">
+        {t("unknownBuilding")}
+      </p>
+    </Card>
   );
 }
 
@@ -489,12 +562,8 @@ function LegeOrganisatie({ t }: { t: T }) {
     <>
       <h1 className="mt-0 mb-1 text-2xl font-semibold text-ink">{t("title")}</h1>
       <Card className="mt-4 text-center">
-        <h2 className="mt-0 mb-1.5 text-base font-semibold text-ink">
-          {t("empty.title")}
-        </h2>
-        <p className="mx-auto mb-4 max-w-prose text-[0.9rem] text-ink-soft">
-          {t("empty.body")}
-        </p>
+        <h2 className="mt-0 mb-1.5 text-base font-semibold text-ink">{t("empty.title")}</h2>
+        <p className="mx-auto mb-4 max-w-prose text-[0.9rem] text-ink-soft">{t("empty.body")}</p>
         <Link href="/buildings" className={buttonClasses("primary", "md")}>
           {t("empty.cta")}
         </Link>
@@ -514,17 +583,10 @@ function GeenBoekjaar({
 }) {
   return (
     <Card className="text-center">
-      <h2 className="mt-0 mb-1.5 text-base font-semibold text-ink">
-        {t("noFiscalYear.title")}
-      </h2>
-      <p className="mx-auto mb-4 max-w-prose text-[0.9rem] text-ink-soft">
-        {t("noFiscalYear.body")}
-      </p>
+      <h2 className="mt-0 mb-1.5 text-base font-semibold text-ink">{t("noFiscalYear.title")}</h2>
+      <p className="mx-auto mb-4 max-w-prose text-[0.9rem] text-ink-soft">{t("noFiscalYear.body")}</p>
       {building && mayWrite ? (
-        <Link
-          href={`/buildings/${building.id}/boekjaren`}
-          className={buttonClasses("primary", "md")}
-        >
+        <Link href={`/buildings/${building.id}/boekjaren`} className={buttonClasses("primary", "md")}>
           {t("noFiscalYear.cta")}
         </Link>
       ) : null}
@@ -543,17 +605,10 @@ function GeenActiviteit({
 }) {
   return (
     <Card className="mb-6 text-center">
-      <h2 className="mt-0 mb-1.5 text-base font-semibold text-ink">
-        {t("noActivity.title")}
-      </h2>
-      <p className="mx-auto mb-4 max-w-prose text-[0.9rem] text-ink-soft">
-        {t("noActivity.body")}
-      </p>
+      <h2 className="mt-0 mb-1.5 text-base font-semibold text-ink">{t("noActivity.title")}</h2>
+      <p className="mx-auto mb-4 max-w-prose text-[0.9rem] text-ink-soft">{t("noActivity.body")}</p>
       {building && mayWrite ? (
-        <Link
-          href={`/buildings/${building.id}/boekjaren`}
-          className={buttonClasses("primary", "md")}
-        >
+        <Link href={`/buildings/${building.id}/boekjaren`} className={buttonClasses("primary", "md")}>
           {t("noActivity.cta")}
         </Link>
       ) : null}
@@ -561,14 +616,6 @@ function GeenActiviteit({
   );
 }
 
-/**
- * Snelkoppelingen.
- *
- * Alleen naar schermen die bestaan, en muterende acties alleen voor wie mag
- * schrijven — een `reader` krijgt de leeslinks, niet de invoerlinks. De
- * database weigert het sowieso; dit voorkomt dat we een knop aanbieden waarvan
- * we weten dat hij faalt.
- */
 const ACTIE_ICONEN: Record<string, typeof Wallet> = {
   payment: Wallet,
   expense: Receipt,
@@ -604,11 +651,7 @@ function SnelleActies({
         {acties.map((actie) => {
           const Icon = ACTIE_ICONEN[actie.key] ?? Building2;
           return (
-            <Link
-              key={actie.key}
-              href={actie.href}
-              className={buttonClasses("secondary", "sm")}
-            >
+            <Link key={actie.key} href={actie.href} className={buttonClasses("secondary", "sm")}>
               <Icon className="size-4" aria-hidden="true" />
               {t(`actions.${actie.labelKey}`)}
               <ArrowRight className="size-3.5 rtl:rotate-180" aria-hidden="true" />

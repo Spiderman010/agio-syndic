@@ -286,7 +286,6 @@
       "closed": "Clôturé"
     },
     "multipleOpenBadge": "{count, plural, one {# exercice ouvert} other {# exercices ouverts}}",
-    "netUnavailable": "Les annulations n'ont pas pu être chargées. Les totaux nets ne sont pas affichés pour éviter des montants bruts trompeurs.",
     "kpi": {
       "sectionTitle": "Indicateurs financiers",
       "called": "Appels de fonds",
@@ -314,7 +313,9 @@
       "reconciliationMismatch": "La comptabilité et le détail des créances ne concordent pas. Les montants affichés peuvent être incomplets.",
       "allocationWithoutOwner": "Des créances ne sont rattachées à aucun copropriétaire et ne peuvent pas être recouvrées.",
       "multipleOpenFiscalYears": "{count, plural, other {# exercices sont ouverts en même temps}}. Le tableau de bord en retient un seul.",
-      "outstanding": "{count, plural, one {Un copropriétaire a un solde impayé} other {# copropriétaires ont un solde impayé}}."
+      "outstanding": "{count, plural, one {Un copropriétaire a un solde impayé} other {# copropriétaires ont un solde impayé}}.",
+      "integrityUnavailable": "Les contrôles de cohérence n’ont pas pu être exécutés. L’absence d’alerte ne signifie donc pas que tout est correct.",
+      "buildingsWithoutFiscalYear": "{count, plural, one {# immeuble n’a pas d’exercice} other {# immeubles n’ont pas d’exercice}} et n’est donc pas compté dans les totaux."
     },
     "debtors": {
       "title": "Principaux impayés",
@@ -358,6 +359,13 @@
       "title": "Aucun mouvement sur cet exercice",
       "body": "Dès qu'un appel de fonds est émis, les indicateurs financiers apparaissent ici.",
       "cta": "Créer un appel de fonds"
+    },
+    "fiscalYearRange": "Exercices {from} à {to}",
+    "buildingsCounted": "{count, plural, one {# immeuble} other {# immeubles}}",
+    "unknownBuilding": "L’immeuble demandé n’existe pas ou n’est pas accessible. Les chiffres ci-dessous couvrent l’ensemble de l’organisation.",
+    "loadError": {
+      "title": "Les chiffres n’ont pas pu être chargés",
+      "body": "Pour éviter d’afficher des montants incomplets ou nuls qui paraîtraient corrects, aucun indicateur n’est présenté. Réessayez ; si le problème persiste, contactez votre administrateur."
     }
   }
 }

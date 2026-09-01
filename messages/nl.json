@@ -286,7 +286,6 @@
       "closed": "Afgesloten"
     },
     "multipleOpenBadge": "{count, plural, one {# open boekjaar} other {# open boekjaren}}",
-    "netUnavailable": "De storno's konden niet worden geladen. De nettototalen worden niet getoond, om misleidende brutobedragen te voorkomen.",
     "kpi": {
       "sectionTitle": "Financiële kerncijfers",
       "called": "Lastenoproepen",
@@ -314,7 +313,9 @@
       "reconciliationMismatch": "De boekhouding en de vorderingenadministratie sluiten niet op elkaar aan. De getoonde bedragen kunnen onvolledig zijn.",
       "allocationWithoutOwner": "Er zijn vorderingen zonder eigenaar; die zijn niet te innen.",
       "multipleOpenFiscalYears": "{count, plural, other {Er staan # boekjaren tegelijk open}}. Het dashboard rekent er met één.",
-      "outstanding": "{count, plural, one {Eén eigenaar heeft een openstaand saldo} other {# eigenaren hebben een openstaand saldo}}."
+      "outstanding": "{count, plural, one {Eén eigenaar heeft een openstaand saldo} other {# eigenaren hebben een openstaand saldo}}.",
+      "integrityUnavailable": "De consistentiecontroles konden niet worden uitgevoerd. Het ontbreken van meldingen betekent dus niet dat alles klopt.",
+      "buildingsWithoutFiscalYear": "{count, plural, one {# gebouw heeft geen boekjaar} other {# gebouwen hebben geen boekjaar}} en telt daardoor niet mee in de totalen."
     },
     "debtors": {
       "title": "Grootste openstaande posten",
@@ -358,6 +359,13 @@
       "title": "Geen mutaties in dit boekjaar",
       "body": "Zodra er een lastenoproep is uitgestuurd, verschijnen de kerncijfers hier.",
       "cta": "Lastenoproep aanmaken"
+    },
+    "fiscalYearRange": "Boekjaren {from} tot en met {to}",
+    "buildingsCounted": "{count, plural, one {# gebouw} other {# gebouwen}}",
+    "unknownBuilding": "Het opgevraagde gebouw bestaat niet of is niet toegankelijk. De cijfers hieronder gaan over de hele organisatie.",
+    "loadError": {
+      "title": "De cijfers konden niet worden geladen",
+      "body": "Om te voorkomen dat onvolledige of nulbedragen worden getoond die er correct uitzien, worden er geen kerncijfers gepresenteerd. Probeer het opnieuw; blijft het misgaan, neem dan contact op met uw beheerder."
     }
   }
 }

@@ -109,6 +109,77 @@ export function computeKpis(input: {
   };
 }
 
+// ── Fail-closed samenstelling ───────────────────────────────────────────────
+
+/**
+ * De financieel dragende bronnen. `null` betekent: deze query is MISLUKT.
+ *
+ * Het onderscheid tussen "leeg" en "mislukt" is het hele punt. `[]` is een
+ * antwoord — er is niets — en mag nul opleveren. `null` is géén antwoord, en
+ * mag daarom nooit als nul worden gepresenteerd.
+ */
+export type FinancialResult<P extends MoneyRow, E extends MoneyRow> =
+  | { status: "error"; failed: string[] }
+  | {
+      status: "ok";
+      kpis: Kpis;
+      settlementNok: number;
+      /** Dezelfde rijen, nu bewezen niet-null; de pagina rekent hier verder mee. */
+      settlements: SettlementRow[];
+      payments: readonly P[];
+      expenses: readonly E[];
+      reversals: ReversalIndex;
+    };
+
+/**
+ * Zet de opgehaalde bronnen om in bedragen, of weigert dat.
+ *
+ * Fail-closed en ONDEELBAAR: faalt één bron, dan worden ALLE bedragen
+ * onderdrukt. Dat is geen overdreven voorzichtigheid maar noodzaak — de KPI's
+ * hangen samen. Bij een mislukte betalingsquery zou "encaissé 0" naast een
+ * kloppende appelé een taux van 0% opleveren en het beeld ontstaan dat er niets
+ * geïnd is, terwijl er in werkelijkheid alleen niets gelezen kón worden.
+ *
+ * De succesvariant geeft de bronnen terug. Daardoor is dit de ENIGE plek die
+ * bepaalt wat fataal is: de pagina kan niet per ongeluk een eigen, afwijkende
+ * nullcontrole gaan voeren, want zij krijgt haar rijen hiervandaan.
+ */
+export function assembleFinancials<P extends MoneyRow, E extends MoneyRow>(sources: {
+  /** `null` wanneer de boekjaren niet konden worden geladen. */
+  selection: ScopeSelection | null;
+  settlements: SettlementRow[] | null;
+  payments: readonly P[] | null;
+  expenses: readonly E[] | null;
+  reversals: ReversalIndex | null;
+}): FinancialResult<P, E> {
+  const failed: string[] = [];
+  if (sources.selection === null) failed.push("fiscalYears");
+  if (sources.settlements === null) failed.push("settlements");
+  if (sources.payments === null) failed.push("payments");
+  if (sources.expenses === null) failed.push("expenses");
+  if (sources.reversals === null) failed.push("reversals");
+  if (
+    failed.length > 0 ||
+    sources.settlements === null ||
+    sources.payments === null ||
+    sources.expenses === null ||
+    sources.reversals === null
+  ) {
+    return { status: "error", failed };
+  }
+
+  const { settlements, payments, expenses, reversals } = sources;
+  return {
+    status: "ok",
+    kpis: computeKpis({ settlements, payments, expenses, reversals }),
+    settlementNok: settlements.filter((s) => !s.ok).length,
+    settlements,
+    payments,
+    expenses,
+    reversals,
+  };
+}
+
 // ── Debiteuren ──────────────────────────────────────────────────────────────
 
 export type Debtor = {
@@ -188,39 +259,130 @@ export type FiscalYearRow = {
   status: "open" | "closed";
 };
 
-export type FiscalYearContext = {
-  /** Het boekjaar waarop het dashboard rekent, of null. */
-  huidig: FiscalYearRow | null;
-  /** Meer dan één open boekjaar binnen de scope: de keuze is dan ambigu. */
-  meerdereOpen: boolean;
-  aantalOpen: number;
+/** Het gekozen boekjaar van één gebouw. */
+export type BuildingSelection = {
+  buildingId: string;
+  fiscalYear: FiscalYearRow;
+  /** Aantal OPEN boekjaren dat dit gebouw heeft. Twee of meer is ambigu. */
+  openCount: number;
+};
+
+export type ScopeSelection = {
+  /** Eén regel per gebouw dat meedoet, met exact één boekjaar. */
+  selected: BuildingSelection[];
+  /** Gebouwen in de scope die geen enkel boekjaar hebben; tellen niet mee. */
+  buildingsWithoutFiscalYear: string[];
+  /** Gebouwen met twee of meer open boekjaren; daar is de keuze een aanname. */
+  buildingsWithMultipleOpen: string[];
+  /** De jaartallen die in de selectie voorkomen, oplopend en ontdubbeld. */
+  years: number[];
 };
 
 /**
- * Kiest het boekjaar waarop het dashboard rekent.
+ * Kiest PER GEBOUW maximaal één boekjaar.
  *
- * Voorkeur: het OPEN boekjaar waarin vandaag valt. Anders het meest recente
- * open jaar. Anders het meest recente jaar überhaupt, zodat een volledig
- * afgesloten gebouw nog steeds cijfers toont in plaats van een leeg scherm.
+ * WAAROM PER GEBOUW EN NIET ORGANISATIEBREED
  *
- * Zijn er meerdere open jaren, dan wordt dat gemeld in plaats van weggepoetst:
- * de keuze is dan een aanname en de gebruiker hoort te weten dat hij die maakt.
+ * Een boekjaar hóórt bij een gebouw: `fiscal_years` draagt `building_id` en een
+ * unieke sleutel op (building_id, year). Er bestaat geen boekjaar op
+ * organisatieniveau. Organisatiebreed rekenen betekent dus: per gebouw het
+ * eigen boekjaar kiezen en die uitkomsten optellen.
+ *
+ * De vorige versie deed twee dingen fout die allebei uit dat misverstand
+ * volgden. Ze telde alle open boekjaren van álle gebouwen bij elkaar op en
+ * meldde "vijf boekjaren staan open" bij vijf gebouwen die er ieder netjes één
+ * hadden. En ze koos één jaartal en filterde daar organisatiebreed op, waardoor
+ * een gebouw met een afwijkend boekjaarnummer stilzwijgend wegviel of juist
+ * onterecht meedeed.
+ *
+ * KEUZEVOLGORDE PER GEBOUW
+ *   1. het OPEN boekjaar waarin de peildatum valt;
+ *   2. anders het meest recente OPEN boekjaar;
+ *   3. anders het meest recente boekjaar, ongeacht status — een volledig
+ *      afgesloten gebouw hoort cijfers te tonen, geen leeg scherm.
+ *
+ * Wat er NIET gebeurt: gebouwen zonder boekjaar stilzwijgend laten verdwijnen.
+ * Ze komen terug in `buildingsWithoutFiscalYear` zodat de pagina de onvolledige
+ * dekking kan tonen in plaats van een totaal te presenteren dat minder gebouwen
+ * dekt dan de gebruiker denkt.
  */
-export function pickFiscalYear(
+export function selectFiscalYears(
+  buildingIds: readonly string[],
   rows: readonly FiscalYearRow[],
   today: string,
-): FiscalYearContext {
-  const open = rows.filter((r) => r.status === "open");
-  const lopend = open.filter((r) => r.start_date <= today && today <= r.end_date);
+): ScopeSelection {
+  const perBuilding = new Map<string, FiscalYearRow[]>();
+  for (const row of rows) {
+    const lijst = perBuilding.get(row.building_id);
+    if (lijst) lijst.push(row);
+    else perBuilding.set(row.building_id, [row]);
+  }
+
+  const selected: BuildingSelection[] = [];
+  const buildingsWithoutFiscalYear: string[] = [];
+  const buildingsWithMultipleOpen: string[] = [];
   const opJaarAflopend = (a: FiscalYearRow, b: FiscalYearRow) => b.year - a.year;
 
-  const huidig =
-    [...lopend].sort(opJaarAflopend)[0] ??
-    [...open].sort(opJaarAflopend)[0] ??
-    [...rows].sort(opJaarAflopend)[0] ??
-    null;
+  for (const buildingId of buildingIds) {
+    const eigen = perBuilding.get(buildingId) ?? [];
+    if (eigen.length === 0) {
+      buildingsWithoutFiscalYear.push(buildingId);
+      continue;
+    }
 
-  return { huidig, meerdereOpen: open.length > 1, aantalOpen: open.length };
+    const open = eigen.filter((r) => r.status === "open");
+    if (open.length > 1) buildingsWithMultipleOpen.push(buildingId);
+
+    const lopend = open.filter((r) => r.start_date <= today && today <= r.end_date);
+    const gekozen =
+      [...lopend].sort(opJaarAflopend)[0] ??
+      [...open].sort(opJaarAflopend)[0] ??
+      [...eigen].sort(opJaarAflopend)[0];
+
+    if (gekozen) {
+      selected.push({ buildingId, fiscalYear: gekozen, openCount: open.length });
+    }
+  }
+
+  const years = [...new Set(selected.map((s) => s.fiscalYear.year))].sort((a, b) => a - b);
+  return { selected, buildingsWithoutFiscalYear, buildingsWithMultipleOpen, years };
+}
+
+/**
+ * Houdt uitsluitend de betalingen over die binnen het boekjaar van HUN EIGEN
+ * gebouw vallen.
+ *
+ * De databasequery haalt een begrensde superset op — alle betalingen van de
+ * geselecteerde gebouwen tussen de vroegste en de laatste boekjaardatum — omdat
+ * PostgREST geen "per rij een andere periode" kent. Zonder deze functie zou dat
+ * ruwe venster het antwoord zijn, en dan telt een betaling van gebouw A mee
+ * zolang hij binnen de periode van gebouw B valt. Precies die fout zat er.
+ *
+ * Vier voorwaarden, alle vier hier afgedwongen:
+ *   1. het gebouw zit in de geselecteerde scope;
+ *   2. voor dat gebouw is een boekjaar gekozen;
+ *   3. de valutadatum ligt binnen start- en einddatum van DAT boekjaar;
+ *   4. rijen zonder gebouw tellen nooit mee — die zijn niet toewijsbaar.
+ *
+ * De organisatie zelf is al in de query afgedwongen; dat blijft daar, omdat een
+ * app-side filter een tenantgrens niet hoort te dragen.
+ */
+export function filterToSelectedFiscalYear<
+  T extends { building_id: string | null; value_date: string },
+>(rijen: readonly T[], selection: ScopeSelection): T[] {
+  const periode = new Map(
+    selection.selected.map((s) => [
+      s.buildingId,
+      { van: s.fiscalYear.start_date, tot: s.fiscalYear.end_date },
+    ]),
+  );
+
+  return rijen.filter((rij) => {
+    if (!rij.building_id) return false;
+    const p = periode.get(rij.building_id);
+    if (!p) return false;
+    return rij.value_date >= p.van && rij.value_date <= p.tot;
+  });
 }
 
 // ── Aandachtspunten ─────────────────────────────────────────────────────────
@@ -250,17 +412,41 @@ export function buildAttentionItems(input: {
   restant: number;
   aantalDebiteuren: number;
   zonderEigenaar: number;
-  settlementNok: number;
-  allocationNok: number;
-  reconciliatieVerschil: number;
-  meerdereOpenBoekjaren: number;
+  /** `null` betekent: de controle kon NIET worden uitgevoerd. */
+  settlementNok: number | null;
+  allocationNok: number | null;
+  reconciliatieVerschil: number | null;
+  /** Aantal GEBOUWEN met twee of meer open boekjaren. */
+  buildingsWithMultipleOpen: number;
+  /** Aantal gebouwen in de scope zonder enig boekjaar; die tellen niet mee. */
+  buildingsWithoutFiscalYear: number;
   buildingHref: string | null;
 }): AttentionItem[] {
   const items: AttentionItem[] = [];
 
+  /**
+   * Een integriteitscontrole die niet kón draaien is GEEN groen vinkje.
+   * Dat onderscheid is de kern: `null` (niet gecontroleerd) en `0` (wel
+   * gecontroleerd, niets gevonden) mogen nooit hetzelfde signaal geven, anders
+   * ziet een dashboard er gezond uit doordat de controle stuk is.
+   */
+  const nietGecontroleerd =
+    input.settlementNok === null ||
+    input.allocationNok === null ||
+    input.reconciliatieVerschil === null;
+
+  if (nietGecontroleerd) {
+    items.push({
+      key: "integrity-unavailable",
+      labelKey: "integrityUnavailable",
+      tone: "crit",
+      href: null,
+    });
+  }
+
   // Technische integriteit eerst: als de cijfers zelf niet kloppen, is de rest
   // van het dashboard geen betrouwbare basis om op te handelen.
-  if (input.settlementNok > 0) {
+  if (input.settlementNok !== null && input.settlementNok > 0) {
     items.push({
       key: "settlement",
       labelKey: "settlementMismatch",
@@ -269,7 +455,7 @@ export function buildAttentionItems(input: {
       href: null,
     });
   }
-  if (input.allocationNok > 0) {
+  if (input.allocationNok !== null && input.allocationNok > 0) {
     items.push({
       key: "allocation",
       labelKey: "allocationMismatch",
@@ -278,7 +464,10 @@ export function buildAttentionItems(input: {
       href: null,
     });
   }
-  if (Math.abs(input.reconciliatieVerschil) > 0.005) {
+  if (
+    input.reconciliatieVerschil !== null &&
+    Math.abs(input.reconciliatieVerschil) > 0.005
+  ) {
     items.push({
       key: "reconciliation",
       labelKey: "reconciliationMismatch",
@@ -294,15 +483,31 @@ export function buildAttentionItems(input: {
       href: null,
     });
   }
-  if (input.meerdereOpenBoekjaren > 1) {
+
+  // Onvolledige dekking: het totaal dekt minder gebouwen dan de gebruiker
+  // vermoedelijk denkt. Dat hoort zichtbaar te zijn, niet stil.
+  if (input.buildingsWithoutFiscalYear > 0) {
+    items.push({
+      key: "coverage",
+      labelKey: "buildingsWithoutFiscalYear",
+      tone: "warn",
+      values: { count: input.buildingsWithoutFiscalYear },
+      href: input.buildingHref ? `${input.buildingHref}/boekjaren` : null,
+    });
+  }
+
+  // PER GEBOUW geteld. Vijf gebouwen met ieder één open boekjaar is normaal en
+  // levert hier niets op; één gebouw met twee open boekjaren wel.
+  if (input.buildingsWithMultipleOpen > 0) {
     items.push({
       key: "fiscal-years",
       labelKey: "multipleOpenFiscalYears",
       tone: "warn",
-      values: { count: input.meerdereOpenBoekjaren },
+      values: { count: input.buildingsWithMultipleOpen },
       href: input.buildingHref ? `${input.buildingHref}/boekjaren` : null,
     });
   }
+
   if (input.restant > 0) {
     items.push({
       key: "arrears",

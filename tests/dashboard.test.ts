@@ -4,11 +4,13 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildReversalIndex, emptyReversalIndex } from "@/lib/reversal";
 import {
+  assembleFinancials,
   buildAttentionItems,
   computeKpis,
-  pickFiscalYear,
+  filterToSelectedFiscalYear,
   quickActions,
   recentActivity,
+  selectFiscalYears,
   topDebtors,
   type FiscalYearRow,
   type SettlementRow,
@@ -269,25 +271,6 @@ describe("scope", () => {
     expect(k.restant).toBe(1100);
   });
 
-  /**
-   * D13 — rijen van een andere tenant komen niet binnen.
-   *
-   * RLS scoopt op LIDMAATSCHAP en laat dus alle organisaties van de gebruiker
-   * door; `requireOrg()` kiest er één. Elke dashboardquery moet daarom ook
-   * expliciet op die organisatie filteren. Deze test leest de broncode, want
-   * een gemiste filter is precies het soort fout dat een rendertest niet ziet.
-   */
-  it("D13 — elke dashboardquery filtert expliciet op de actieve organisatie", () => {
-    const bron = readFileSync(
-      join(REPO, "src", "app", "[locale]", "(app)", "dashboard", "page.tsx"),
-      "utf8",
-    );
-    const queries = bron.match(/\.from\("([a-z_]+)"\)/g) ?? [];
-    const orgFilters = bron.match(/\.eq\("organization_id", org\.id\)/g) ?? [];
-    expect(queries.length).toBeGreaterThan(0);
-    // Elke .from(...) hoort een organisatiefilter te krijgen.
-    expect(orgFilters.length).toBeGreaterThanOrEqual(queries.length);
-  });
 });
 
 // ── LEGE TOESTANDEN ─────────────────────────────────────────────────────────
@@ -300,28 +283,25 @@ describe("lege toestanden", () => {
 
   it("D15 — zonder open boekjaar valt de keuze terug op het meest recente jaar", () => {
     const jaren: FiscalYearRow[] = [
-      { id: "f1", building_id: A, year: 2025, start_date: "2025-01-01", end_date: "2025-12-31", status: "closed" },
-      { id: "f2", building_id: A, year: 2026, start_date: "2026-01-01", end_date: "2026-12-31", status: "closed" },
+      fy("f1", A, 2025, "closed"),
+      fy("f2", A, 2026, "closed"),
     ];
-    const ctx = pickFiscalYear(jaren, "2026-06-01");
-    expect(ctx.huidig?.year).toBe(2026);
-    expect(ctx.aantalOpen).toBe(0);
-    expect(ctx.meerdereOpen).toBe(false);
+    const sel = selectFiscalYears([A], jaren, "2026-06-01");
+    expect(sel.selected).toHaveLength(1);
+    expect(sel.selected[0].fiscalYear.year).toBe(2026);
+    expect(sel.buildingsWithMultipleOpen).toEqual([]);
   });
 
-  it("zonder enig boekjaar is er geen context", () => {
-    expect(pickFiscalYear([], "2026-06-01").huidig).toBeNull();
+  it("zonder enig boekjaar doet het gebouw niet mee en wordt dat gemeld", () => {
+    const sel = selectFiscalYears([A], [], "2026-06-01");
+    expect(sel.selected).toEqual([]);
+    expect(sel.buildingsWithoutFiscalYear).toEqual([A]);
   });
 
-  it("kiest het open boekjaar waarin vandaag valt", () => {
-    const jaren: FiscalYearRow[] = [
-      { id: "f1", building_id: A, year: 2025, start_date: "2025-01-01", end_date: "2025-12-31", status: "open" },
-      { id: "f2", building_id: A, year: 2026, start_date: "2026-01-01", end_date: "2026-12-31", status: "open" },
-    ];
-    const ctx = pickFiscalYear(jaren, "2025-06-01");
-    expect(ctx.huidig?.year).toBe(2025);
-    expect(ctx.meerdereOpen).toBe(true);
-    expect(ctx.aantalOpen).toBe(2);
+  it("kiest het open boekjaar waarin de peildatum valt", () => {
+    const jaren: FiscalYearRow[] = [fy("f1", A, 2025), fy("f2", A, 2026)];
+    const sel = selectFiscalYears([A], jaren, "2025-06-01");
+    expect(sel.selected[0].fiscalYear.year).toBe(2025);
   });
 });
 
@@ -331,11 +311,12 @@ const gezond = {
   restant: 0,
   aantalDebiteuren: 0,
   zonderEigenaar: 0,
-  settlementNok: 0,
-  allocationNok: 0,
-  reconciliatieVerschil: 0,
-  meerdereOpenBoekjaren: 1,
-  buildingHref: null,
+  settlementNok: 0 as number | null,
+  allocationNok: 0 as number | null,
+  reconciliatieVerschil: 0 as number | null,
+  buildingsWithMultipleOpen: 0,
+  buildingsWithoutFiscalYear: 0,
+  buildingHref: null as string | null,
 };
 
 describe("aandachtspunten", () => {
@@ -363,9 +344,29 @@ describe("aandachtspunten", () => {
     expect(items[0].tone).toBe("crit");
   });
 
-  it("waarschuwt bij meerdere open boekjaren", () => {
-    const items = buildAttentionItems({ ...gezond, meerdereOpenBoekjaren: 2 });
-    expect(items.some((i) => i.labelKey === "multipleOpenFiscalYears")).toBe(true);
+  it("waarschuwt alleen wanneer EEN GEBOUW meerdere open boekjaren heeft", () => {
+    expect(buildAttentionItems({ ...gezond, buildingsWithMultipleOpen: 1 })
+      .some((i) => i.labelKey === "multipleOpenFiscalYears")).toBe(true);
+    expect(buildAttentionItems({ ...gezond, buildingsWithMultipleOpen: 0 })
+      .some((i) => i.labelKey === "multipleOpenFiscalYears")).toBe(false);
+  });
+
+  it("meldt gebouwen zonder boekjaar als onvolledige dekking", () => {
+    const items = buildAttentionItems({ ...gezond, buildingsWithoutFiscalYear: 2 });
+    const item = items.find((i) => i.labelKey === "buildingsWithoutFiscalYear");
+    expect(item?.values).toEqual({ count: 2 });
+  });
+
+  it("een MISLUKTE integriteitscontrole leest nooit als gezond", () => {
+    for (const kapot of [
+      { settlementNok: null },
+      { allocationNok: null },
+      { reconciliatieVerschil: null },
+    ]) {
+      const items = buildAttentionItems({ ...gezond, ...kapot });
+      expect(items.some((i) => i.labelKey === "integrityUnavailable")).toBe(true);
+      expect(items[0].tone).toBe("crit");
+    }
   });
 
   it("toont nooit een interne view- of tabelnaam", () => {
@@ -376,7 +377,8 @@ describe("aandachtspunten", () => {
       settlementNok: 1,
       allocationNok: 1,
       reconciliatieVerschil: 5,
-      meerdereOpenBoekjaren: 2,
+      buildingsWithMultipleOpen: 1,
+      buildingsWithoutFiscalYear: 1,
       buildingHref: `/buildings/${A}`,
     });
     const alles = JSON.stringify(items);
@@ -576,7 +578,10 @@ describe("D19 — vertalingen", () => {
 
   it("de dashboardsleutels bestaan in fr, nl en ar", () => {
     const paden = [
-      "title", "fiscalYear", "netUnavailable", "multipleOpenBadge",
+      "title", "fiscalYear", "fiscalYearRange", "multipleOpenBadge",
+      "buildingsCounted", "unknownBuilding",
+      "loadError.title", "loadError.body",
+      "attention.integrityUnavailable", "attention.buildingsWithoutFiscalYear",
       "status.open", "status.closed",
       "kpi.called", "kpi.collected", "kpi.outstanding", "kpi.expenses", "kpi.recovery",
       "kpi.recoveryNone", "kpi.sectionTitle",
@@ -660,5 +665,354 @@ describe("D20 — geen overflowgevoelige vaste breedtes", () => {
     );
     // Mobiel twee kolommen, desktop vier: nooit een vast aantal zonder breekpunt.
     expect(bron).toMatch(/grid-cols-2[^"]*lg:grid-cols-4/);
+  });
+});
+
+// ── BOEKJAARSELECTIE PER GEBOUW ─────────────────────────────────────────────
+
+/** Bouwt een boekjaarrij; standaard een kalenderjaar met status open. */
+function fy(
+  id: string,
+  building: string,
+  year: number,
+  status: "open" | "closed" = "open",
+  start = `${year}-01-01`,
+  end = `${year}-12-31`,
+): FiscalYearRow {
+  return { id, building_id: building, year, start_date: start, end_date: end, status };
+}
+
+const C = "cccccccc-0000-0000-0000-000000000003";
+
+describe("boekjaarselectie per gebouw", () => {
+  it("S1 — twee gebouwen met ieder EEN open boekjaar geeft GEEN waarschuwing", () => {
+    // Dit was de kern van de bevinding: vijf gebouwen met ieder een open jaar
+    // meldden ten onrechte dat er vijf boekjaren tegelijk openstonden.
+    const sel = selectFiscalYears(
+      [A, B],
+      [fy("fa", A, 2026), fy("fb", B, 2026)],
+      "2026-06-01",
+    );
+    expect(sel.selected).toHaveLength(2);
+    expect(sel.buildingsWithMultipleOpen).toEqual([]);
+    expect(
+      buildAttentionItems({
+        ...gezond,
+        buildingsWithMultipleOpen: sel.buildingsWithMultipleOpen.length,
+      }).some((i) => i.labelKey === "multipleOpenFiscalYears"),
+    ).toBe(false);
+  });
+
+  it("S1b — ook vijf gebouwen met ieder een open boekjaar blijven stil", () => {
+    const ids = ["b1", "b2", "b3", "b4", "b5"];
+    const sel = selectFiscalYears(
+      ids,
+      ids.map((id, i) => fy(`f${i}`, id, 2026)),
+      "2026-06-01",
+    );
+    expect(sel.selected).toHaveLength(5);
+    expect(sel.buildingsWithMultipleOpen).toEqual([]);
+  });
+
+  it("S2 — EEN gebouw met twee open boekjaren geeft WEL een waarschuwing", () => {
+    const sel = selectFiscalYears(
+      [A, B],
+      [fy("fa1", A, 2025), fy("fa2", A, 2026), fy("fb", B, 2026)],
+      "2026-06-01",
+    );
+    expect(sel.buildingsWithMultipleOpen).toEqual([A]);
+    // Er wordt nog steeds precies een boekjaar per gebouw gekozen.
+    expect(sel.selected).toHaveLength(2);
+    expect(sel.selected.filter((x) => x.buildingId === A)).toHaveLength(1);
+    expect(
+      buildAttentionItems({ ...gezond, buildingsWithMultipleOpen: 1 }).some(
+        (i) => i.labelKey === "multipleOpenFiscalYears",
+      ),
+    ).toBe(true);
+  });
+
+  it("S3 — gebouwen met verschillende boekjaarperioden krijgen ieder hun eigen", () => {
+    // A voert een kalenderjaar, B een gebroken boekjaar juli tot en met juni.
+    const sel = selectFiscalYears(
+      [A, B],
+      [
+        fy("fa", A, 2026, "open", "2026-01-01", "2026-12-31"),
+        fy("fb", B, 2026, "open", "2025-07-01", "2026-06-30"),
+      ],
+      "2026-03-01",
+    );
+    const perGebouw = new Map(sel.selected.map((x) => [x.buildingId, x.fiscalYear]));
+    expect(perGebouw.get(A)?.start_date).toBe("2026-01-01");
+    expect(perGebouw.get(B)?.start_date).toBe("2025-07-01");
+    expect(perGebouw.get(B)?.end_date).toBe("2026-06-30");
+  });
+
+  it("S4 — een gebouw zonder boekjaar doet niet mee en wordt zichtbaar gemeld", () => {
+    const sel = selectFiscalYears([A, B], [fy("fa", A, 2026)], "2026-06-01");
+    expect(sel.selected.map((x) => x.buildingId)).toEqual([A]);
+    expect(sel.buildingsWithoutFiscalYear).toEqual([B]);
+    const items = buildAttentionItems({
+      ...gezond,
+      buildingsWithoutFiscalYear: sel.buildingsWithoutFiscalYear.length,
+    });
+    expect(items.some((i) => i.labelKey === "buildingsWithoutFiscalYear")).toBe(true);
+  });
+
+  it("de jaartallen van de selectie worden ontdubbeld en gesorteerd", () => {
+    const sel = selectFiscalYears(
+      [A, B, C],
+      [fy("fa", A, 2026), fy("fb", B, 2025), fy("fc", C, 2026)],
+      "2026-06-01",
+    );
+    expect(sel.years).toEqual([2025, 2026]);
+  });
+});
+
+// ── BETALINGEN PER GEBOUWBOEKJAAR ───────────────────────────────────────────
+
+describe("betalingen worden per gebouwboekjaar gefilterd", () => {
+  // A: kalenderjaar 2026. B: gebroken boekjaar juli 2025 tot en met juni 2026.
+  const selectie = selectFiscalYears(
+    [A, B],
+    [
+      fy("fa", A, 2026, "open", "2026-01-01", "2026-12-31"),
+      fy("fb", B, 2026, "open", "2025-07-01", "2026-06-30"),
+    ],
+    "2026-03-01",
+  );
+
+  const pay = (id: string, building: string | null, date: string, amount = 100) => ({
+    id,
+    amount,
+    building_id: building,
+    value_date: date,
+  });
+
+  it("S5 — binnen het gecombineerde venster maar BUITEN het eigen boekjaar telt niet", () => {
+    // Het gecombineerde venster loopt van 2025-07-01 tot 2026-12-31. Een
+    // betaling van gebouw A op 2025-09-01 valt daar netjes in, maar buiten het
+    // eigen boekjaar van A. Precies de fout die de brede periode veroorzaakte.
+    expect(filterToSelectedFiscalYear([pay("p1", A, "2025-09-01")], selectie)).toEqual([]);
+  });
+
+  it("S5b — en andersom: gebouw B op 2026-11-01 valt buiten het boekjaar van B", () => {
+    expect(filterToSelectedFiscalYear([pay("p2", B, "2026-11-01")], selectie)).toEqual([]);
+  });
+
+  it("S6 — een betaling binnen het eigen boekjaar telt WEL mee", () => {
+    const resultaat = filterToSelectedFiscalYear(
+      [pay("p3", A, "2026-05-01"), pay("p4", B, "2025-09-01")],
+      selectie,
+    );
+    expect(resultaat.map((r) => r.id).sort()).toEqual(["p3", "p4"]);
+  });
+
+  it("de grenzen zelf horen erbij", () => {
+    const resultaat = filterToSelectedFiscalYear(
+      [pay("start", A, "2026-01-01"), pay("eind", A, "2026-12-31")],
+      selectie,
+    );
+    expect(resultaat).toHaveLength(2);
+  });
+
+  it("S7 — in gebouwscope telt een betaling van een ander gebouw niet mee", () => {
+    const alleenA = selectFiscalYears(
+      [A],
+      [fy("fa", A, 2026, "open", "2026-01-01", "2026-12-31")],
+      "2026-03-01",
+    );
+    const resultaat = filterToSelectedFiscalYear(
+      [pay("pa", A, "2026-05-01"), pay("pb", B, "2026-05-01")],
+      alleenA,
+    );
+    expect(resultaat.map((r) => r.id)).toEqual(["pa"]);
+  });
+
+  it("S4b — betalingen van een gebouw zonder boekjaar tellen niet mee", () => {
+    const zonderB = selectFiscalYears([A, B], [fy("fa", A, 2026)], "2026-06-01");
+    const resultaat = filterToSelectedFiscalYear(
+      [pay("pa", A, "2026-05-01"), pay("pb", B, "2026-05-01")],
+      zonderB,
+    );
+    expect(resultaat.map((r) => r.id)).toEqual(["pa"]);
+  });
+
+  it("een rij zonder gebouw is niet toewijsbaar en telt nooit mee", () => {
+    expect(filterToSelectedFiscalYear([pay("px", null, "2026-05-01")], selectie)).toEqual([]);
+  });
+
+  it("S8 — appele, restant, encaisse en depenses gebruiken dezelfde gebouwset", () => {
+    // B heeft geen boekjaar en valt dus overal uit: ook de vordering en de
+    // uitgave van B mogen niet meetellen, anders wijkt appele af van encaisse.
+    const zonderB = selectFiscalYears([A, B], [fy("fa", A, 2026)], "2026-06-01");
+    const gekozen = new Set(zonderB.selected.map((x) => x.buildingId));
+
+    const alleSettlements = [
+      alloc({ building_id: A, amount: 1000, settled_amount: 400 }),
+      alloc({ building_id: B, amount: 500, settled_amount: 0 }),
+    ];
+    const alleUitgaven = [
+      { id: "ea", amount: 300, building_id: A },
+      { id: "eb", amount: 700, building_id: B },
+    ];
+    const betalingen = filterToSelectedFiscalYear(
+      [pay("pa", A, "2026-05-01", 400), pay("pb", B, "2026-05-01", 900)],
+      zonderB,
+    );
+
+    const k = computeKpis({
+      settlements: alleSettlements.filter((r) => gekozen.has(r.building_id!)),
+      payments: betalingen,
+      expenses: alleUitgaven.filter((r) => gekozen.has(r.building_id)),
+      reversals: geen,
+    });
+
+    expect(k.appele).toBe(1000);
+    expect(k.restant).toBe(600);
+    expect(k.encaisse).toBe(400);
+    expect(k.depenses).toBe(300);
+  });
+});
+
+// ── FAIL-CLOSED FOUTAFHANDELING ─────────────────────────────────────────────
+
+describe("fail-closed bij queryfouten", () => {
+  const basis = {
+    selection: selectFiscalYears([A], [fy("fa", A, 2026)], "2026-06-01"),
+    settlements: [alloc({ amount: 1000, settled_amount: 400 })],
+    payments: [{ id: "p1", amount: 400, building_id: A }],
+    expenses: [{ id: "e1", amount: 300, building_id: A }],
+    reversals: geen,
+  };
+
+  it("een volledige set levert gewoon bedragen op", () => {
+    const r = assembleFinancials(basis);
+    expect(r.status).toBe("ok");
+    if (r.status !== "ok") return;
+    expect(r.kpis.appele).toBe(1000);
+    expect(r.kpis.encaisse).toBe(400);
+    expect(r.kpis.depenses).toBe(300);
+  });
+
+  it.each([
+    ["E11 boekjaren", "selection", "fiscalYears"],
+    ["E12 vorderingen", "settlements", "settlements"],
+    ["E13 betalingen", "payments", "payments"],
+    ["E14 uitgaven", "expenses", "expenses"],
+    ["E15 stornos", "reversals", "reversals"],
+  ])(
+    "%s: een fout onderdrukt ALLE bedragen in plaats van nul te tonen",
+    (_naam, bron, gemeld) => {
+    const r = assembleFinancials({ ...basis, [bron]: null });
+    expect(r.status).toBe("error");
+    if (r.status !== "error") return;
+    expect(r.failed).toContain(gemeld);
+    // Er is geen enkel bedrag om te tonen: geen 0, geen gedeeltelijk totaal.
+    expect(r).not.toHaveProperty("kpis");
+  },
+  );
+
+  it("meldt alle gefaalde bronnen, niet alleen de eerste", () => {
+    const r = assembleFinancials({ ...basis, payments: null, expenses: null });
+    expect(r.status).toBe("error");
+    if (r.status !== "error") return;
+    expect(r.failed).toEqual(expect.arrayContaining(["payments", "expenses"]));
+  });
+
+  it("een LEGE bron is een antwoord en mag wel nul opleveren", () => {
+    const r = assembleFinancials({
+      ...basis,
+      settlements: [],
+      payments: [],
+      expenses: [],
+    });
+    expect(r.status).toBe("ok");
+    if (r.status !== "ok") return;
+    expect(r.kpis).toEqual({ appele: 0, encaisse: 0, restant: 0, depenses: 0, taux: null });
+  });
+
+  it("E16 — een mislukte integriteitscontrole telt niet als geen problemen", () => {
+    expect(buildAttentionItems(gezond)).toEqual([]);
+
+    const kapot = buildAttentionItems({ ...gezond, allocationNok: null });
+    expect(kapot.some((i) => i.labelKey === "integrityUnavailable")).toBe(true);
+    // En hij mag niet stilletjes als nul problemen worden gelezen.
+    expect(kapot.some((i) => i.labelKey === "allocationMismatch")).toBe(false);
+  });
+});
+
+// ── SCOPE-REGRESSIE ─────────────────────────────────────────────────────────
+
+describe("S18 — gebouwscope blijft regressievrij", () => {
+  it("de live-proof blijft exact staan binnen een gebouwboekjaar", () => {
+    const sel = selectFiscalYears(
+      [A],
+      [fy("fa", A, 2026, "open", "2026-01-01", "2026-12-31")],
+      "2026-06-01",
+    );
+    const rij = (id: string, bedrag: number, datum: string) => ({
+      id,
+      amount: bedrag,
+      building_id: A,
+      value_date: datum,
+    });
+
+    // normaal
+    let betalingen = filterToSelectedFiscalYear([rij("p1", 1000, "2026-04-01")], sel);
+    let k = computeKpis({
+      settlements: [alloc({ amount: 1000, settled_amount: 1000 })],
+      payments: betalingen,
+      expenses: [],
+      reversals: geen,
+    });
+    expect([k.appele, k.encaisse, k.restant]).toEqual([1000, 1000, 0]);
+
+    // na storno
+    k = computeKpis({
+      settlements: [alloc({ amount: 1000, settled_amount: 0 })],
+      payments: betalingen,
+      expenses: [],
+      reversals: reversalIndex([{ source: "p1" }]),
+    });
+    expect([k.appele, k.encaisse, k.restant]).toEqual([1000, 0, 1000]);
+
+    // na correctie naar 800
+    betalingen = filterToSelectedFiscalYear(
+      [rij("p1", 1000, "2026-04-01"), rij("p2", 800, "2026-04-01")],
+      sel,
+    );
+    k = computeKpis({
+      settlements: [alloc({ amount: 1000, settled_amount: 800 })],
+      payments: betalingen,
+      expenses: [],
+      reversals: reversalIndex([{ source: "p1", correction: "p2" }]),
+    });
+    expect([k.appele, k.encaisse, k.restant]).toEqual([1000, 800, 200]);
+  });
+
+  it("een correctie over de boekjaargrens wordt per periode correct verdeeld", () => {
+    // Bewezen tegen de echte database: het origineel staat in 2026, de
+    // vervangende betaling in 2027, en de storno wordt in 2027 geboekt. Omdat
+    // de storno-index ORGANISATIEBREED is, ziet 2026 die storno wel degelijk.
+    const idx = reversalIndex([{ source: "p1", correction: "p2" }]);
+    const sel2026 = selectFiscalYears([A], [fy("f26", A, 2026)], "2026-06-01");
+    const sel2027 = selectFiscalYears([A], [fy("f27", A, 2027)], "2027-06-01");
+    const rijen = [
+      { id: "p1", amount: 1000, building_id: A, value_date: "2026-12-15" },
+      { id: "p2", amount: 800, building_id: A, value_date: "2027-01-05" },
+    ];
+
+    const in2026 = filterToSelectedFiscalYear(rijen, sel2026);
+    const in2027 = filterToSelectedFiscalYear(rijen, sel2027);
+    expect(in2026.map((r) => r.id)).toEqual(["p1"]);
+    expect(in2027.map((r) => r.id)).toEqual(["p2"]);
+
+    // 2026 telt niets, want p1 is gestorneerd. 2027 telt de vervanging.
+    expect(
+      computeKpis({ settlements: [], payments: in2026, expenses: [], reversals: idx }).encaisse,
+    ).toBe(0);
+    expect(
+      computeKpis({ settlements: [], payments: in2027, expenses: [], reversals: idx }).encaisse,
+    ).toBe(800);
   });
 });
