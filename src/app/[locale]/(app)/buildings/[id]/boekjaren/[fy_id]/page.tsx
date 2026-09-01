@@ -1,8 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
-import TopBar from "@/components/TopBar";
-import { Link } from "@/navigation";
 import { getTranslations } from "next-intl/server";
 import { createChargeCall, createPayment } from "../actions";
 import ActionForm from "@/components/ActionForm";
@@ -79,7 +77,7 @@ export default async function FiscalYearDetail({
   params: Promise<{ id: string; fy_id: string }>;
 }) {
   const { id: buildingId, fy_id: fyId } = await params;
-  const { org, role } = await requireOrg();
+  const { role } = await requireOrg();
   const supabase = await createClient();
   const tr = await getTranslations("reversal");
 
@@ -229,17 +227,6 @@ export default async function FiscalYearDetail({
 
   return (
     <>
-      <TopBar orgName={org.name} />
-      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "1.6rem 1.3rem 4rem" }}>
-        <div style={{ fontSize: "0.82rem", display: "flex", gap: 6, alignItems: "center" }} className="muted">
-          <Link href="/buildings" className="muted">Bâtiments</Link>
-          <span>/</span>
-          <Link href={`/buildings/${buildingId}`} className="muted">{b.name}</Link>
-          <span>/</span>
-          <Link href={`/buildings/${buildingId}/boekjaren`} className="muted">Exercices</Link>
-          <span>/</span>
-          <span style={{ color: "var(--ink)" }}>Exercice {fy.year}</span>
-        </div>
 
         <div className="card" style={{ padding: "1.1rem 1.4rem", margin: "0.7rem 0 1.4rem", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <div>
@@ -258,7 +245,7 @@ export default async function FiscalYearDetail({
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: "1.4rem", alignItems: "start" }}>
+        <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.3fr_1fr]">
           <div>
             <section>
               <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>
@@ -331,7 +318,7 @@ export default async function FiscalYearDetail({
                 <input type="hidden" name="fiscal_year_id" value={fyId} />
                 <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.9rem" }}>Nouvel appel de charges</h3>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.7rem", marginBottom: "0.7rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.7rem", marginBottom: "0.7rem" }}>
                   <div>
                     <label className="label" htmlFor="cc_type">Type</label>
                     <select className="input" id="cc_type" name="type" defaultValue="regulier">
@@ -371,7 +358,7 @@ export default async function FiscalYearDetail({
                       Chaque lot participant doit avoir un montant. Un champ vide compte comme 0,00 MAD.
                       La somme doit correspondre exactement au montant de l&apos;appel.
                     </p>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.5rem" }}>
                       {lots.map((u) => (
                         <div key={u.id}>
                           <label className="label" htmlFor={`manual_${u.id}`}>{u.label}</label>
@@ -389,7 +376,7 @@ export default async function FiscalYearDetail({
                   </details>
                 )}
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.7rem", marginBottom: "0.9rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.7rem", marginBottom: "0.9rem" }}>
                   <div>
                     <label className="label" htmlFor="total_amount">Montant (MAD)</label>
                     <input className="input" id="total_amount" name="total_amount" type="text" placeholder="1200.00" required />
@@ -520,7 +507,7 @@ export default async function FiscalYearDetail({
                     </select>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginBottom: "0.6rem" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.6rem", marginBottom: "0.6rem" }}>
                     <div>
                       <label className="label" htmlFor="pay_amount">Montant (MAD)</label>
                       <input className="input" id="pay_amount" name="amount" type="text" placeholder="300.00" required />
@@ -531,7 +518,7 @@ export default async function FiscalYearDetail({
                     </div>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginBottom: "0.75rem" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.6rem", marginBottom: "0.75rem" }}>
                     <div>
                       <label className="label" htmlFor="method">Mode</label>
                       <select className="input" id="method" name="method" defaultValue="virement">
@@ -611,7 +598,6 @@ export default async function FiscalYearDetail({
             </section>
           </div>
         </div>
-      </main>
     </>
   );
 }

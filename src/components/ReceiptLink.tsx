@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { getReceiptUrl } from "@/app/[locale]/buildings/[id]/expenses/actions";
+import { getReceiptUrl } from "@/app/[locale]/(app)/buildings/[id]/expenses/actions";
 
 /**
  * P0-3: opent een bewijsstuk via een kortlevende, server-side gegenereerde

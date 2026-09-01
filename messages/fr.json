@@ -249,5 +249,47 @@
       "receiptTooLarge": "Le justificatif dépasse 10 Mo.",
       "receiptTypeInvalid": "Seuls les fichiers JPG, PNG, WEBP, HEIC ou PDF sont acceptés comme justificatif."
     }
+  },
+  "nav": {
+    "dashboard": "Tableau de bord",
+    "buildings": "Immeubles",
+    "overview": "Vue d'ensemble",
+    "fiscalYears": "Exercices",
+    "expenses": "Dépenses",
+    "building": "Immeuble",
+    "breadcrumb": "Fil d'Ariane"
+  },
+  "shell": {
+    "organisation": "Organisation",
+    "building": "Immeuble",
+    "signOut": "Déconnexion",
+    "skipToContent": "Aller au contenu",
+    "mainNav": "Navigation principale",
+    "openMenu": "Ouvrir le menu",
+    "closeMenu": "Fermer le menu",
+    "noBuildings": "Aucun immeuble",
+    "allBuildings": "Tous les immeubles",
+    "switchBuilding": "Changer d'immeuble",
+    "loading": "Chargement…",
+    "error": {
+      "title": "Une erreur s'est produite",
+      "body": "Cette page n'a pas pu être chargée. Réessayez ; si le problème persiste, contactez votre administrateur.",
+      "retry": "Réessayer",
+      "reference": "Référence"
+    }
+  },
+  "dashboard": {
+    "title": "Tableau de bord",
+    "subtitle": "{org} — vue d'ensemble de vos copropriétés.",
+    "empty": {
+      "title": "Aucun immeuble pour l'instant",
+      "body": "Créez votre premier immeuble pour commencer à gérer les exercices, les appels de charges et les dépenses.",
+      "cta": "Créer un immeuble"
+    },
+    "buildings": {
+      "title": "Vos immeubles",
+      "all": "Voir les {count}",
+      "audit": "Audit requis"
+    }
   }
 }

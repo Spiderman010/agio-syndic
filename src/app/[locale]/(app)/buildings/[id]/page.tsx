@@ -1,7 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
-import TopBar from "@/components/TopBar";
 import { Link } from "@/navigation";
 import { createUnit, createOwner, assignOwner, updateBankInfo } from "./actions";
 import ActionForm from "@/components/ActionForm";
@@ -22,7 +21,7 @@ export default async function BuildingDetail({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const { org } = await requireOrg();
+  await requireOrg();
   const supabase = await createClient();
 
   const { data: building } = await supabase.from("buildings").select("*").eq("id", id).maybeSingle();
@@ -52,12 +51,6 @@ export default async function BuildingDetail({
 
   return (
     <>
-      <TopBar orgName={org.name} />
-      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "1.6rem 1.3rem 4rem" }}>
-        <Link href="/buildings" className="muted" style={{ fontSize: "0.82rem" }}>
-          ← Tous les bâtiments
-        </Link>
-
         <div className="card" style={{ padding: "1.3rem 1.4rem", margin: "0.7rem 0 1.4rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
             <div>
@@ -115,7 +108,7 @@ export default async function BuildingDetail({
         {/* Bankgegevens */}
         <div className="card" style={{ padding: "1.1rem 1.4rem", marginBottom: "1.4rem" }}>
           <h2 style={{ fontSize: "1rem", margin: "0 0 0.8rem" }}>Coordonnées bancaires</h2>
-          <ActionForm action={updateBankInfo} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: "0.7rem", alignItems: "end" }}>
+          <ActionForm action={updateBankInfo} className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
             <input type="hidden" name="building_id" value={b.id} />
             <div>
               <label className="label" htmlFor="bank_name">Banque</label>
@@ -129,7 +122,7 @@ export default async function BuildingDetail({
           </ActionForm>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "1.4rem", alignItems: "start" }}>
+        <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.4fr_1fr]">
           {/* Units */}
           <section>
             <h2 style={{ fontSize: "1.1rem", margin: "0 0 0.7rem" }}>Lots ({units.length})</h2>
@@ -230,7 +223,6 @@ export default async function BuildingDetail({
             </ActionForm>
           </section>
         </div>
-      </main>
     </>
   );
 }

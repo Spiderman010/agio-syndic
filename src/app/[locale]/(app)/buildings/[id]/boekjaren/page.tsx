@@ -1,7 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
-import TopBar from "@/components/TopBar";
 import { Link } from "@/navigation";
 import { getTranslations } from "next-intl/server";
 import type { Building, FiscalYear } from "@/lib/types";
@@ -13,7 +11,6 @@ export default async function BoekjarenPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const { org } = await requireOrg();
   const supabase = await createClient();
   const t = await getTranslations("boekjaren");
 
@@ -45,13 +42,10 @@ export default async function BoekjarenPage({
 
   return (
     <>
-      <TopBar orgName={org.name} />
-      <main style={{ maxWidth: 860, margin: "0 auto", padding: "1.6rem 1.3rem 4rem" }}>
-        <Link href={`/buildings/${id}`} className="muted" style={{ fontSize: "0.82rem" }}>
-          ← {b.name}
-        </Link>
-
-        <h1 style={{ margin: "0.7rem 0 0", fontSize: "1.4rem" }}>{t("title")}</h1>
+      {/* De terugkoppeling naar het gebouw zit nu in de broodkruimels van de
+          schil; een tweede "← naam" erboven zou hetzelfde twee keer zeggen. */}
+      <h1 className="mt-0 mb-0 text-2xl font-semibold text-ink">{t("title")}</h1>
+      <p className="muted mt-1 mb-0 text-[0.9rem]">{b.name}</p>
 
         <section style={{ marginTop: "1.2rem" }}>
           {fiscalYears.length === 0 && (
@@ -90,8 +84,7 @@ export default async function BoekjarenPage({
           </div>
         </section>
 
-        <BoekjaarForm buildingId={b.id} existingYears={existingYears} huidigJaar={huidigJaar} />
-      </main>
+      <BoekjaarForm buildingId={b.id} existingYears={existingYears} huidigJaar={huidigJaar} />
     </>
   );
 }
