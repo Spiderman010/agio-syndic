@@ -280,16 +280,84 @@
   },
   "dashboard": {
     "title": "Dashboard",
-    "subtitle": "{org} — overzicht van uw copropriétés.",
+    "fiscalYear": "Boekjaar {year}",
+    "status": {
+      "open": "Open",
+      "closed": "Afgesloten"
+    },
+    "multipleOpenBadge": "{count, plural, one {# open boekjaar} other {# open boekjaren}}",
+    "netUnavailable": "De storno's konden niet worden geladen. De nettototalen worden niet getoond, om misleidende brutobedragen te voorkomen.",
+    "kpi": {
+      "sectionTitle": "Financiële kerncijfers",
+      "called": "Lastenoproepen",
+      "calledHint": "Totaal verdeeld over de lots",
+      "collected": "Geïnd",
+      "collectedHint": "Netto, storno's eraf",
+      "outstanding": "Openstaand",
+      "outstandingHint": "Nog niet afgeboekte vorderingen",
+      "expenses": "Uitgaven",
+      "expensesHint": "Netto, storno's eraf",
+      "recovery": "Inningsgraad",
+      "recoveryHint": "Deel van de oproepen dat is afgeboekt",
+      "recoveryNone": "Geen lastenoproepen in dit boekjaar"
+    },
+    "attention": {
+      "title": "Te behandelen",
+      "open": "Openen",
+      "tone": {
+        "crit": "Kritiek",
+        "warn": "Let op",
+        "info": "Info"
+      },
+      "settlementMismatch": "{count, plural, one {Eén vordering komt niet overeen} other {# vorderingen komen niet overeen}} met de geboekte betalingen. Neem contact op met support voordat u op deze bedragen handelt.",
+      "allocationMismatch": "{count, plural, one {De verdeling van één lastenoproep telt niet op} other {De verdelingen van # lastenoproepen tellen niet op}} tot het opgeroepen bedrag.",
+      "reconciliationMismatch": "De boekhouding en de vorderingenadministratie sluiten niet op elkaar aan. De getoonde bedragen kunnen onvolledig zijn.",
+      "allocationWithoutOwner": "Er zijn vorderingen zonder eigenaar; die zijn niet te innen.",
+      "multipleOpenFiscalYears": "{count, plural, other {Er staan # boekjaren tegelijk open}}. Het dashboard rekent er met één.",
+      "outstanding": "{count, plural, one {Eén eigenaar heeft een openstaand saldo} other {# eigenaren hebben een openstaand saldo}}."
+    },
+    "debtors": {
+      "title": "Grootste openstaande posten",
+      "owner": "Eigenaar",
+      "called": "Opgeroepen",
+      "outstanding": "Openstaand",
+      "openItems": "{count, plural, one {# open post} other {# open posten}}",
+      "empty": "Geen openstaande posten in dit boekjaar.",
+      "unknownOwner": "Onbekende eigenaar"
+    },
+    "activity": {
+      "title": "Recente financiële activiteit",
+      "empty": "Nog geen mutaties geboekt.",
+      "noContext": "Zonder omschrijving",
+      "reversed": "Gestorneerd",
+      "correction": "Correctie",
+      "kind": {
+        "payment": "Betaling",
+        "expense": "Uitgave"
+      }
+    },
+    "actions": {
+      "title": "Acties",
+      "recordPayment": "Betaling boeken",
+      "addExpense": "Uitgave toevoegen",
+      "fiscalYears": "Boekjaren bekijken",
+      "manageBuilding": "Gebouw beheren",
+      "allBuildings": "Gebouwen bekijken"
+    },
     "empty": {
       "title": "Nog geen gebouwen",
       "body": "Maak uw eerste gebouw aan om boekjaren, lastenoproepen en uitgaven te kunnen beheren.",
       "cta": "Gebouw aanmaken"
     },
-    "buildings": {
-      "title": "Uw gebouwen",
-      "all": "Alle {count} bekijken",
-      "audit": "Audit vereist"
+    "noFiscalYear": {
+      "title": "Geen boekjaar",
+      "body": "Maak een boekjaar aan om lastenoproepen, betalingen en uitgaven te kunnen boeken.",
+      "cta": "Boekjaar aanmaken"
+    },
+    "noActivity": {
+      "title": "Geen mutaties in dit boekjaar",
+      "body": "Zodra er een lastenoproep is uitgestuurd, verschijnen de kerncijfers hier.",
+      "cta": "Lastenoproep aanmaken"
     }
   }
 }
