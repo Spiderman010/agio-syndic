@@ -39,6 +39,13 @@ import { isReversed, netTotal, type ReversalIndex } from "@/lib/reversal";
 export type SettlementRow = {
   charge_allocation_id: string;
   building_id: string | null;
+  /**
+   * De lastenoproep waar deze vordering aan hangt. In de database NOT NULL, maar
+   * hier als nullable getypeerd omdat PostgREST bij een ontbrekende kolom
+   * `undefined` levert — en dat mag niet stilzwijgend als "toewijsbaar" gelden.
+   * Via deze sleutel wordt het boekjaar van de vordering bepaald.
+   */
+  charge_call_id: string | null;
   owner_id: string | null;
   amount: number | string;
   settled_amount: number | string;
@@ -274,6 +281,17 @@ export type ScopeSelection = {
   buildingsWithoutFiscalYear: string[];
   /** Gebouwen met twee of meer open boekjaren; daar is de keuze een aanname. */
   buildingsWithMultipleOpen: string[];
+  /**
+   * Gebouwen waarvan het GEKOZEN boekjaar de peildatum niet omvat.
+   *
+   * De keuzevolgorde blijft ongewijzigd en de bedragen ook: dit is puur een
+   * signaal. Het treedt op bij een boekjaar dat nog moet beginnen, een open
+   * boekjaar dat al verlopen is, en bij een afgesloten boekjaar dat als laatste
+   * terugvaloptie wordt gekozen. In alle drie de gevallen tonen de cijfers een
+   * andere periode dan de gebruiker vermoedelijk verwacht — een betaling van
+   * vandaag valt er dan terecht buiten, maar zonder uitleg is dat onbegrijpelijk.
+   */
+  buildingsOutsideReferenceDate: string[];
   /** De jaartallen die in de selectie voorkomen, oplopend en ontdubbeld. */
   years: number[];
 };
@@ -321,6 +339,7 @@ export function selectFiscalYears(
   const selected: BuildingSelection[] = [];
   const buildingsWithoutFiscalYear: string[] = [];
   const buildingsWithMultipleOpen: string[] = [];
+  const buildingsOutsideReferenceDate: string[] = [];
   const opJaarAflopend = (a: FiscalYearRow, b: FiscalYearRow) => b.year - a.year;
 
   for (const buildingId of buildingIds) {
@@ -341,11 +360,23 @@ export function selectFiscalYears(
 
     if (gekozen) {
       selected.push({ buildingId, fiscalYear: gekozen, openCount: open.length });
+      // Dezelfde vergelijking als regel 1 van de keuzevolgorde, nu toegepast op
+      // wat er daadwerkelijk gekozen is. Valt de peildatum erbuiten, dan is er
+      // via regel 2 of 3 gekozen en toont het dashboard een andere periode.
+      const omvatPeildatum =
+        gekozen.start_date <= today && today <= gekozen.end_date;
+      if (!omvatPeildatum) buildingsOutsideReferenceDate.push(buildingId);
     }
   }
 
   const years = [...new Set(selected.map((s) => s.fiscalYear.year))].sort((a, b) => a - b);
-  return { selected, buildingsWithoutFiscalYear, buildingsWithMultipleOpen, years };
+  return {
+    selected,
+    buildingsWithoutFiscalYear,
+    buildingsWithMultipleOpen,
+    buildingsOutsideReferenceDate,
+    years,
+  };
 }
 
 /**
@@ -385,6 +416,98 @@ export function filterToSelectedFiscalYear<
   });
 }
 
+// ── Aansluiting grootboek 4111 ──────────────────────────────────────────────
+
+/** Rij uit `v_reconciliation_4111`. */
+export type ReconciliationRow = {
+  fiscal_year_id: string | null;
+  verschil: number | string | null;
+};
+
+/**
+ * Beoordeelt of de aansluiting tussen grootboek 4111 en de vorderingen-
+ * administratie DAADWERKELIJK IS VASTGESTELD, en zo ja met welk verschil.
+ *
+ * ── WAAROM DIT GEEN SIMPELE SOM IS ─────────────────────────────────────────
+ *
+ * `v_reconciliation_4111` bouwt op:
+ *     journal_entries
+ *       JOIN journal_lines
+ *       JOIN accounts ON code = '4111'
+ *     WHERE source = 'charge'
+ *
+ * Drie inner joins en een filter. Een boekjaar dat wél vorderingen heeft maar
+ * (nog) geen 4111-chargejournaalregel levert daardoor GEEN RIJ op. De view zegt
+ * dan niet "verschil nul", de view zegt niets.
+ *
+ * Optellen met `reduce(..., 0)` maakt van dat zwijgen een nul, en een nul leest
+ * op dit scherm als "de boekhouding sluit aan". Precies omgekeerd: er is een
+ * vorderingenpositie zonder tegenhanger in het grootboek, wat een van de
+ * ernstiger toestanden is die dit dashboard kan tegenkomen.
+ *
+ * Daarom wordt hier eerst DEKKING vastgesteld en pas daarna gerekend.
+ *
+ * ── VIER UITKOMSTEN ────────────────────────────────────────────────────────
+ *
+ *   query mislukt                          → null  (niets vastgesteld)
+ *   vordering niet aan boekjaar toewijsbaar → null  (dekking onbewijsbaar)
+ *   boekjaar met vorderingen mist een rij   → null  (controle niet uitgevoerd)
+ *   alle vereiste boekjaren gedekt          → som van absolute verschillen
+ *
+ * `null` komt via `buildAttentionItems` naar buiten als `integrityUnavailable`
+ * en dus als kritiek signaal — nooit als een geruststellende nul.
+ *
+ * ── WAT ER GESOMMEERD WORDT ────────────────────────────────────────────────
+ *
+ * Alle meegegeven rijen, niet alleen die van boekjaren met vorderingen. De
+ * rijen zijn in de query al op de geselecteerde boekjaren begrensd, en een
+ * verschil binnen die scope is altijd een echte breuk: 4111-chargeregels zonder
+ * bijbehorende allocaties betekent dat het grootboek lasten kent die de
+ * subadministratie niet heeft. Zo'n rij wegfilteren omdat er toevallig geen
+ * vordering tegenover staat, zou hetzelfde soort blindheid herintroduceren die
+ * deze functie juist wegneemt.
+ */
+export function evaluateReconciliation(input: {
+  /** Rijen uit de view; `null` betekent: de query is MISLUKT. */
+  rows: readonly ReconciliationRow[] | null;
+  /** De vorderingen in de scope, uit `v_settlement_integrity`. */
+  settlements: readonly SettlementRow[];
+  /** `charge_call_id` → `fiscal_year_id`, uit de al opgehaalde lastenoproepen. */
+  chargeCallFiscalYear: ReadonlyMap<string, string>;
+}): number | null {
+  if (input.rows === null) return null;
+
+  // 1. In welke boekjaren bestaan er werkelijk vorderingen? Alleen dáár is een
+  //    aansluitcontrole van toepassing, en dus vereist.
+  const vereist = new Set<string>();
+  for (const rij of input.settlements) {
+    const boekjaar = rij.charge_call_id
+      ? input.chargeCallFiscalYear.get(rij.charge_call_id)
+      : undefined;
+    // Een vordering die we niet aan een boekjaar kunnen knopen, maakt de dekking
+    // onbewijsbaar. Fail-closed: dan liever "niet gecontroleerd" dan een getal
+    // waarvan we de volledigheid niet kunnen onderbouwen.
+    if (!boekjaar) return null;
+    vereist.add(boekjaar);
+  }
+
+  // 2. Dekking. Een ontbrekende rij is geen verschil van nul.
+  const gedekt = new Set(
+    input.rows
+      .map((r) => r.fiscal_year_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
+  for (const boekjaar of vereist) {
+    if (!gedekt.has(boekjaar)) return null;
+  }
+
+  // 3. Pas nu rekenen. Geen vorderingen en geen rijen levert 0 op: er valt niets
+  //    aan te sluiten, en dat is een geldige uitkomst — geen ontbrekende controle.
+  return cents(
+    input.rows.reduce((som, r) => som + Math.abs(num(r.verschil ?? 0)), 0),
+  );
+}
+
 // ── Aandachtspunten ─────────────────────────────────────────────────────────
 
 export type AttentionTone = "crit" | "warn" | "info";
@@ -420,6 +543,8 @@ export function buildAttentionItems(input: {
   buildingsWithMultipleOpen: number;
   /** Aantal gebouwen in de scope zonder enig boekjaar; die tellen niet mee. */
   buildingsWithoutFiscalYear: number;
+  /** Aantal GEBOUWEN waarvan het getoonde boekjaar de peildatum niet omvat. */
+  buildingsOutsideReferenceDate: number;
   buildingHref: string | null;
 }): AttentionItem[] {
   const items: AttentionItem[] = [];
@@ -496,12 +621,27 @@ export function buildAttentionItems(input: {
     });
   }
 
+  // Het getoonde boekjaar omvat vandaag niet. De bedragen kloppen, maar ze gaan
+  // over een andere periode dan de gebruiker verwacht; zonder dit signaal lijkt
+  // een betaling van vandaag simpelweg te ontbreken.
+  if (input.buildingsOutsideReferenceDate > 0) {
+    items.push({
+      key: "period",
+      labelKey: "periodExcludesToday",
+      tone: "warn",
+      values: { count: input.buildingsOutsideReferenceDate },
+      href: input.buildingHref ? `${input.buildingHref}/boekjaren` : null,
+    });
+  }
+
   // PER GEBOUW geteld. Vijf gebouwen met ieder één open boekjaar is normaal en
-  // levert hier niets op; één gebouw met twee open boekjaren wel.
+  // levert hier niets op; één gebouw met twee open boekjaren wel. De sleutel
+  // heet naar wat er GETELD wordt — gebouwen — want de vorige naam nodigde uit
+  // tot een vertaling die over boekjaren sprak en dus "1 boekjaren" opleverde.
   if (input.buildingsWithMultipleOpen > 0) {
     items.push({
       key: "fiscal-years",
-      labelKey: "multipleOpenFiscalYears",
+      labelKey: "buildingsWithMultipleOpenFiscalYears",
       tone: "warn",
       values: { count: input.buildingsWithMultipleOpen },
       href: input.buildingHref ? `${input.buildingHref}/boekjaren` : null,

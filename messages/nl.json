@@ -312,7 +312,8 @@
       "allocationMismatch": "{count, plural, one {De verdeling van één lastenoproep telt niet op} other {De verdelingen van # lastenoproepen tellen niet op}} tot het opgeroepen bedrag.",
       "reconciliationMismatch": "De boekhouding en de vorderingenadministratie sluiten niet op elkaar aan. De getoonde bedragen kunnen onvolledig zijn.",
       "allocationWithoutOwner": "Er zijn vorderingen zonder eigenaar; die zijn niet te innen.",
-      "multipleOpenFiscalYears": "{count, plural, other {Er staan # boekjaren tegelijk open}}. Het dashboard rekent er met één.",
+      "buildingsWithMultipleOpenFiscalYears": "{count, plural, one {# gebouw heeft meerdere open boekjaren} other {# gebouwen hebben meerdere open boekjaren}}. Het dashboard rekent per gebouw met één boekjaar.",
+      "periodExcludesToday": "{count, plural, one {Bij # gebouw valt de datum van vandaag buiten het getoonde boekjaar} other {Bij # gebouwen valt de datum van vandaag buiten het getoonde boekjaar}}. De bedragen gaan uitsluitend over de getoonde periode.",
       "outstanding": "{count, plural, one {Eén eigenaar heeft een openstaand saldo} other {# eigenaren hebben een openstaand saldo}}.",
       "integrityUnavailable": "De consistentiecontroles konden niet worden uitgevoerd. Het ontbreken van meldingen betekent dus niet dat alles klopt.",
       "buildingsWithoutFiscalYear": "{count, plural, one {# gebouw heeft geen boekjaar} other {# gebouwen hebben geen boekjaar}} en telt daardoor niet mee in de totalen."

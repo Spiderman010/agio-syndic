@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createTranslator } from "next-intl";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -7,6 +8,7 @@ import {
   assembleFinancials,
   buildAttentionItems,
   computeKpis,
+  evaluateReconciliation,
   filterToSelectedFiscalYear,
   quickActions,
   recentActivity,
@@ -26,11 +28,16 @@ const A = "aaaaaaaa-0000-0000-0000-000000000001"; // gebouw A
 const B = "bbbbbbbb-0000-0000-0000-000000000002"; // gebouw B
 const O1 = "11111111-0000-0000-0000-000000000001";
 const O2 = "22222222-0000-0000-0000-000000000002";
+const CALL_A = "ca110000-0000-0000-0000-00000000000a"; // lastenoproep in boekjaar 1
+const CALL_B = "ca110000-0000-0000-0000-00000000000b"; // lastenoproep in boekjaar 2
+const FY1 = "f7000000-0000-0000-0000-000000000001";
+const FY2 = "f7000000-0000-0000-0000-000000000002";
 
 function alloc(over: Partial<SettlementRow> = {}): SettlementRow {
   return {
     charge_allocation_id: crypto.randomUUID(),
     building_id: A,
+    charge_call_id: CALL_A,
     owner_id: O1,
     amount: 1000,
     settled_amount: 0,
@@ -316,6 +323,7 @@ const gezond = {
   reconciliatieVerschil: 0 as number | null,
   buildingsWithMultipleOpen: 0,
   buildingsWithoutFiscalYear: 0,
+  buildingsOutsideReferenceDate: 0,
   buildingHref: null as string | null,
 };
 
@@ -346,9 +354,9 @@ describe("aandachtspunten", () => {
 
   it("waarschuwt alleen wanneer EEN GEBOUW meerdere open boekjaren heeft", () => {
     expect(buildAttentionItems({ ...gezond, buildingsWithMultipleOpen: 1 })
-      .some((i) => i.labelKey === "multipleOpenFiscalYears")).toBe(true);
+      .some((i) => i.labelKey === "buildingsWithMultipleOpenFiscalYears")).toBe(true);
     expect(buildAttentionItems({ ...gezond, buildingsWithMultipleOpen: 0 })
-      .some((i) => i.labelKey === "multipleOpenFiscalYears")).toBe(false);
+      .some((i) => i.labelKey === "buildingsWithMultipleOpenFiscalYears")).toBe(false);
   });
 
   it("meldt gebouwen zonder boekjaar als onvolledige dekking", () => {
@@ -379,6 +387,7 @@ describe("aandachtspunten", () => {
       reconciliatieVerschil: 5,
       buildingsWithMultipleOpen: 1,
       buildingsWithoutFiscalYear: 1,
+      buildingsOutsideReferenceDate: 1,
       buildingHref: `/buildings/${A}`,
     });
     const alles = JSON.stringify(items);
@@ -588,7 +597,8 @@ describe("D19 — vertalingen", () => {
       "attention.title", "attention.open", "attention.outstanding",
       "attention.settlementMismatch", "attention.allocationMismatch",
       "attention.reconciliationMismatch", "attention.allocationWithoutOwner",
-      "attention.multipleOpenFiscalYears",
+      "attention.buildingsWithMultipleOpenFiscalYears",
+      "attention.periodExcludesToday",
       "attention.tone.crit", "attention.tone.warn", "attention.tone.info",
       "debtors.title", "debtors.owner", "debtors.called", "debtors.outstanding",
       "debtors.openItems", "debtors.empty", "debtors.unknownOwner",
@@ -617,7 +627,8 @@ describe("D19 — vertalingen", () => {
     const meervoud = [
       "multipleOpenBadge",
       "attention.outstanding",
-      "attention.multipleOpenFiscalYears",
+      "attention.buildingsWithMultipleOpenFiscalYears",
+      "attention.periodExcludesToday",
       "debtors.openItems",
     ];
     for (const [naam, berichten] of Object.entries(locales)) {
@@ -699,7 +710,7 @@ describe("boekjaarselectie per gebouw", () => {
       buildAttentionItems({
         ...gezond,
         buildingsWithMultipleOpen: sel.buildingsWithMultipleOpen.length,
-      }).some((i) => i.labelKey === "multipleOpenFiscalYears"),
+      }).some((i) => i.labelKey === "buildingsWithMultipleOpenFiscalYears"),
     ).toBe(false);
   });
 
@@ -726,7 +737,7 @@ describe("boekjaarselectie per gebouw", () => {
     expect(sel.selected.filter((x) => x.buildingId === A)).toHaveLength(1);
     expect(
       buildAttentionItems({ ...gezond, buildingsWithMultipleOpen: 1 }).some(
-        (i) => i.labelKey === "multipleOpenFiscalYears",
+        (i) => i.labelKey === "buildingsWithMultipleOpenFiscalYears",
       ),
     ).toBe(true);
   });
@@ -1014,5 +1025,406 @@ describe("S18 — gebouwscope blijft regressievrij", () => {
     expect(
       computeKpis({ settlements: [], payments: in2027, expenses: [], reversals: idx }).encaisse,
     ).toBe(800);
+  });
+});
+
+// ── AANSLUITING GROOTBOEK 4111 ──────────────────────────────────────────────
+
+/**
+ * De koppeling die de pagina uit `charge_calls` bouwt: oproep → boekjaar.
+ * Oproep A hoort bij boekjaar 1, oproep B bij boekjaar 2.
+ */
+const oproepen = new Map([
+  [CALL_A, FY1],
+  [CALL_B, FY2],
+]);
+
+describe("R — aansluiting grootboek 4111 wordt pas geteld als hij is vastgesteld", () => {
+  it("R1 — geen vorderingen en geen rij: nul, en geen onbeschikbaarheidsmelding", () => {
+    const uitkomst = evaluateReconciliation({
+      rows: [],
+      settlements: [],
+      chargeCallFiscalYear: oproepen,
+    });
+    expect(uitkomst).toBe(0);
+    expect(
+      buildAttentionItems({ ...gezond, reconciliatieVerschil: uitkomst }).some(
+        (i) => i.labelKey === "integrityUnavailable",
+      ),
+    ).toBe(false);
+  });
+
+  it("R2 — vorderingen met een sluitende rij: de controle geldt als uitgevoerd", () => {
+    const uitkomst = evaluateReconciliation({
+      rows: [{ fiscal_year_id: FY1, verschil: 0 }],
+      settlements: [alloc()],
+      chargeCallFiscalYear: oproepen,
+    });
+    expect(uitkomst).toBe(0);
+    expect(buildAttentionItems({ ...gezond, reconciliatieVerschil: uitkomst })).toEqual([]);
+  });
+
+  it("R3 — vorderingen ZONDER rij is niet nul maar onbekend", () => {
+    // De kern van de bevinding. `v_reconciliation_4111` begint bij de
+    // chargejournaalposten en joint door naar rekening 4111; een boekjaar met
+    // vorderingen maar zonder zo'n journaalregel levert dus GEEN rij. Optellen
+    // maakte daar stilletjes nul van, en nul leest als "de boekhouding sluit
+    // aan" terwijl er juist een vordering zonder tegenhanger staat.
+    const uitkomst = evaluateReconciliation({
+      rows: [],
+      settlements: [alloc()],
+      chargeCallFiscalYear: oproepen,
+    });
+    expect(uitkomst).toBeNull();
+    const items = buildAttentionItems({ ...gezond, reconciliatieVerschil: uitkomst });
+    const melding = items.find((i) => i.labelKey === "integrityUnavailable");
+    expect(melding).toBeDefined();
+    expect(melding?.tone).toBe("crit");
+  });
+
+  it("R4 — twee boekjaren met vorderingen en maar één rij: onbekend", () => {
+    expect(
+      evaluateReconciliation({
+        rows: [{ fiscal_year_id: FY1, verschil: 0 }],
+        settlements: [alloc(), alloc({ charge_call_id: CALL_B })],
+        chargeCallFiscalYear: oproepen,
+      }),
+    ).toBeNull();
+  });
+
+  it("R5 — volledige dekking telt de ABSOLUTE verschillen op", () => {
+    // Tegengestelde afwijkingen mogen elkaar niet opheffen: +120 en -80 is een
+    // afwijking van 200, geen gezonde 40.
+    expect(
+      evaluateReconciliation({
+        rows: [
+          { fiscal_year_id: FY1, verschil: 120 },
+          { fiscal_year_id: FY2, verschil: -80 },
+        ],
+        settlements: [alloc(), alloc({ charge_call_id: CALL_B })],
+        chargeCallFiscalYear: oproepen,
+      }),
+    ).toBe(200);
+  });
+
+  it("R6 — een mislukte query is nooit nul", () => {
+    expect(
+      evaluateReconciliation({
+        rows: null,
+        settlements: [alloc()],
+        chargeCallFiscalYear: oproepen,
+      }),
+    ).toBeNull();
+    // Ook zonder enige vordering blijft een mislukte query onbekend: er is dan
+    // niets vastgesteld, en dat is iets anders dan niets gevonden.
+    expect(
+      evaluateReconciliation({ rows: null, settlements: [], chargeCallFiscalYear: oproepen }),
+    ).toBeNull();
+  });
+
+  it("R7 — een sluitende rij voor een boekjaar zonder vorderingen verandert niets", () => {
+    const zonder = evaluateReconciliation({
+      rows: [{ fiscal_year_id: FY1, verschil: 0 }],
+      settlements: [alloc()],
+      chargeCallFiscalYear: oproepen,
+    });
+    const met = evaluateReconciliation({
+      rows: [
+        { fiscal_year_id: FY1, verschil: 0 },
+        { fiscal_year_id: FY2, verschil: 0 },
+      ],
+      settlements: [alloc()],
+      chargeCallFiscalYear: oproepen,
+    });
+    expect(met).toBe(zonder);
+    expect(met).toBe(0);
+  });
+
+  it("R7b — een SCHEVE rij voor een boekjaar zonder vorderingen wordt wél gemeld", () => {
+    // Bewust strenger dan R7. De rijen zijn in de query al tot de geselecteerde
+    // boekjaren beperkt, en een verschil daarbinnen is altijd een echte breuk:
+    // 4111-chargeregels zonder ook maar één allocatie betekent dat het grootboek
+    // lasten kent die de vorderingenadministratie niet heeft. Zo'n rij
+    // wegfilteren omdat er toevallig geen vordering tegenover staat, zou
+    // dezelfde blindheid herintroduceren die R3 wegneemt.
+    expect(
+      evaluateReconciliation({
+        rows: [
+          { fiscal_year_id: FY1, verschil: 0 },
+          { fiscal_year_id: FY2, verschil: 500 },
+        ],
+        settlements: [alloc()],
+        chargeCallFiscalYear: oproepen,
+      }),
+    ).toBe(500);
+  });
+
+  it("R8 — een vordering zonder herleidbaar boekjaar maakt de dekking onbewijsbaar", () => {
+    // Kolom ontbreekt in het antwoord.
+    expect(
+      evaluateReconciliation({
+        rows: [{ fiscal_year_id: FY1, verschil: 0 }],
+        settlements: [alloc({ charge_call_id: null })],
+        chargeCallFiscalYear: oproepen,
+      }),
+    ).toBeNull();
+    // Oproep die niet in de opgehaalde koppeling voorkomt.
+    expect(
+      evaluateReconciliation({
+        rows: [{ fiscal_year_id: FY1, verschil: 0 }],
+        settlements: [alloc({ charge_call_id: "ca110000-0000-0000-0000-0000000000ff" })],
+        chargeCallFiscalYear: oproepen,
+      }),
+    ).toBeNull();
+  });
+
+  it("R9 — leeg antwoord en mislukte query lopen niet door elkaar", () => {
+    expect(
+      evaluateReconciliation({ rows: [], settlements: [], chargeCallFiscalYear: oproepen }),
+    ).toBe(0);
+    expect(
+      evaluateReconciliation({ rows: null, settlements: [], chargeCallFiscalYear: oproepen }),
+    ).toBeNull();
+  });
+
+  it("R10 — numerieke tekst uit de view telt gewoon mee", () => {
+    // PostgREST levert `numeric` als string.
+    expect(
+      evaluateReconciliation({
+        rows: [{ fiscal_year_id: FY1, verschil: "-12.34" }],
+        settlements: [alloc()],
+        chargeCallFiscalYear: oproepen,
+      }),
+    ).toBe(12.34);
+  });
+
+  it("R11 — een rij zonder boekjaar dekt niets af", () => {
+    expect(
+      evaluateReconciliation({
+        rows: [{ fiscal_year_id: null, verschil: 0 }],
+        settlements: [alloc()],
+        chargeCallFiscalYear: oproepen,
+      }),
+    ).toBeNull();
+  });
+});
+
+// ── GERENDERDE MELDINGEN ────────────────────────────────────────────────────
+
+/**
+ * Rendert een vertaalsleutel met de ECHTE ICU-pipeline van next-intl.
+ *
+ * Niet met een eigen nabootsing: juist de pluralisatie is wat misging, en die
+ * is alleen te controleren met de formatter die in productie draait.
+ */
+const maakVertaler = createTranslator as unknown as (opties: {
+  locale: string;
+  messages: unknown;
+  namespace: string;
+}) => (sleutel: string, waarden?: Record<string, string | number>) => string;
+
+const talen: Record<string, unknown> = { fr, nl, ar };
+
+function tekst(
+  locale: string,
+  sleutel: string,
+  waarden?: Record<string, string | number>,
+): string {
+  return maakVertaler({
+    locale,
+    messages: talen[locale],
+    namespace: "dashboard.attention",
+  })(sleutel, waarden);
+}
+
+describe("M — melding over gebouwen met meerdere open boekjaren", () => {
+  function melding(aantalGebouwen: number, locale: string): string {
+    const item = buildAttentionItems({
+      ...gezond,
+      buildingsWithMultipleOpen: aantalGebouwen,
+    }).find((i) => i.labelKey === "buildingsWithMultipleOpenFiscalYears");
+    if (!item) throw new Error("melding ontbreekt");
+    return tekst(locale, item.labelKey, item.values);
+  }
+
+  it("M8 — één gebouw levert een enkelvoudszin over GEBOUWEN op", () => {
+    const zin = melding(1, "nl");
+    // De bevinding: het getal telde gebouwen, de zin sprak over boekjaren, en
+    // er was alleen een `other`-tak. Resultaat: "Er staan 1 boekjaren open".
+    expect(zin).not.toMatch(/1 boekjaren/);
+    expect(zin).toContain("1 gebouw ");
+    expect(zin).toContain("heeft meerdere open boekjaren");
+  });
+
+  it("M9 — twee gebouwen leveren de meervoudsvorm op", () => {
+    const zin = melding(2, "nl");
+    expect(zin).toContain("2 gebouwen");
+    expect(zin).toContain("hebben meerdere open boekjaren");
+  });
+
+  it("M9b — het getal blijft het aantal GEBOUWEN, niet het aantal boekjaren", () => {
+    // Eén gebouw met drie open boekjaren telt als één gebouw.
+    const sel = selectFiscalYears(
+      [A],
+      [fy("f1", A, 2024), fy("f2", A, 2025), fy("f3", A, 2026)],
+      "2026-06-01",
+    );
+    expect(sel.buildingsWithMultipleOpen).toEqual([A]);
+    const item = buildAttentionItems({
+      ...gezond,
+      buildingsWithMultipleOpen: sel.buildingsWithMultipleOpen.length,
+    }).find((i) => i.labelKey === "buildingsWithMultipleOpenFiscalYears");
+    expect(item?.values).toEqual({ count: 1 });
+    expect(melding(1, "fr")).toContain("1 immeuble ");
+  });
+
+  it("M10 — de ICU-vormen zijn geldig in fr, nl en ar voor 0, 1, 2, 3 en 11", () => {
+    const sleutels = ["buildingsWithMultipleOpenFiscalYears", "periodExcludesToday"];
+    for (const locale of Object.keys(talen)) {
+      for (const sleutel of sleutels) {
+        for (const count of [0, 1, 2, 3, 11]) {
+          const uit = tekst(locale, sleutel, { count });
+          const waar = `${locale} ${sleutel} ${count}`;
+          expect(uit.length, waar).toBeGreaterThan(0);
+          // Een niet-afgehandelde tak laat de ICU-syntaxis staan.
+          expect(uit, waar).not.toContain("{");
+          expect(uit, waar).not.toContain("plural");
+        }
+      }
+    }
+  });
+
+  it("M10b — het Arabisch gebruikt de dualis bij twee gebouwen", () => {
+    expect(tekst("ar", "buildingsWithMultipleOpenFiscalYears", { count: 2 })).toContain(
+      "عمارتان",
+    );
+    expect(tekst("ar", "periodExcludesToday", { count: 2 })).toContain("عمارتين");
+    // En Latijnse cijfers vanaf drie, net als de rest van het dashboard.
+    expect(tekst("ar", "buildingsWithMultipleOpenFiscalYears", { count: 3 })).toContain("3");
+  });
+});
+
+// ── PEILDATUM BUITEN HET GETOONDE BOEKJAAR ──────────────────────────────────
+
+describe("P — het getoonde boekjaar omvat de peildatum niet", () => {
+  it("P11 — een boekjaar dat de peildatum omvat geeft geen waarschuwing", () => {
+    const sel = selectFiscalYears([A], [fy("f1", A, 2026)], "2026-09-02");
+    expect(sel.buildingsOutsideReferenceDate).toEqual([]);
+    expect(
+      buildAttentionItems({ ...gezond, buildingsOutsideReferenceDate: 0 }).some(
+        (i) => i.labelKey === "periodExcludesToday",
+      ),
+    ).toBe(false);
+  });
+
+  it("P12 — een TOEKOMSTIG open boekjaar wordt gekozen én gemarkeerd", () => {
+    // Exact de productiesituatie op 2 september 2026: het enige boekjaar loopt
+    // van 1 oktober tot en met 31 december en staat open.
+    const sel = selectFiscalYears(
+      [A],
+      [fy("f1", A, 2026, "open", "2026-10-01", "2026-12-31")],
+      "2026-09-02",
+    );
+    // De keuzevolgorde blijft ongewijzigd: regel 2 kiest dit jaar.
+    expect(sel.selected[0].fiscalYear.id).toBe("f1");
+    expect(sel.buildingsOutsideReferenceDate).toEqual([A]);
+
+    const item = buildAttentionItems({
+      ...gezond,
+      buildingsOutsideReferenceDate: 1,
+    }).find((i) => i.labelKey === "periodExcludesToday");
+    expect(item?.tone).toBe("warn");
+    expect(item?.values).toEqual({ count: 1 });
+  });
+
+  it("P13 — een VERLOPEN maar nog open boekjaar wordt gemarkeerd", () => {
+    const sel = selectFiscalYears(
+      [A],
+      [fy("f1", A, 2025, "open", "2025-01-01", "2025-12-31")],
+      "2026-09-02",
+    );
+    expect(sel.selected[0].fiscalYear.id).toBe("f1");
+    expect(sel.buildingsOutsideReferenceDate).toEqual([A]);
+  });
+
+  it("P14 — een AFGESLOTEN boekjaar als laatste terugval wordt gemarkeerd", () => {
+    const sel = selectFiscalYears(
+      [A],
+      [fy("f1", A, 2025, "closed", "2025-01-01", "2025-12-31")],
+      "2026-09-02",
+    );
+    expect(sel.selected[0].fiscalYear.status).toBe("closed");
+    expect(sel.buildingsOutsideReferenceDate).toEqual([A]);
+  });
+
+  it("P15 — met twee gebouwen telt alleen het gebouw zonder passende periode", () => {
+    const sel = selectFiscalYears(
+      [A, B],
+      [
+        fy("fa", A, 2026, "open", "2026-01-01", "2026-12-31"), // omvat de peildatum
+        fy("fb", B, 2026, "open", "2026-10-01", "2026-12-31"), // begint later
+      ],
+      "2026-09-02",
+    );
+    expect(sel.selected).toHaveLength(2);
+    expect(sel.buildingsOutsideReferenceDate).toEqual([B]);
+    expect(
+      buildAttentionItems({
+        ...gezond,
+        buildingsOutsideReferenceDate: sel.buildingsOutsideReferenceDate.length,
+      }).find((i) => i.labelKey === "periodExcludesToday")?.values,
+    ).toEqual({ count: 1 });
+  });
+
+  it("P15b — de randdatums zelf vallen binnen de periode", () => {
+    const jaren = [fy("f1", A, 2026, "open", "2026-10-01", "2026-12-31")];
+    expect(selectFiscalYears([A], jaren, "2026-10-01").buildingsOutsideReferenceDate).toEqual([]);
+    expect(selectFiscalYears([A], jaren, "2026-12-31").buildingsOutsideReferenceDate).toEqual([]);
+    expect(selectFiscalYears([A], jaren, "2026-09-30").buildingsOutsideReferenceDate).toEqual([A]);
+    expect(selectFiscalYears([A], jaren, "2027-01-01").buildingsOutsideReferenceDate).toEqual([A]);
+  });
+
+  it("P16 — de waarschuwing verandert geen bedrag en geen filter", () => {
+    const sel = selectFiscalYears(
+      [A],
+      [fy("f1", A, 2026, "open", "2026-10-01", "2026-12-31")],
+      "2026-09-02",
+    );
+    expect(sel.buildingsOutsideReferenceDate).toEqual([A]);
+
+    const betalingen = [
+      { id: "p1", amount: 500, building_id: A, value_date: "2026-09-02" }, // vandaag, buiten
+      { id: "p2", amount: 300, building_id: A, value_date: "2026-11-15" }, // binnen
+    ];
+    // Onveranderd gedrag: het filter blijft de periode volgen, niet de melding.
+    expect(filterToSelectedFiscalYear(betalingen, sel).map((p) => p.id)).toEqual(["p2"]);
+
+    const uitgaven = [{ id: "e1", amount: 100, building_id: A }];
+    const kpi = computeKpis({
+      settlements: [alloc({ amount: 1000, settled_amount: 300 })],
+      payments: filterToSelectedFiscalYear(betalingen, sel),
+      expenses: uitgaven,
+      reversals: emptyReversalIndex(),
+    });
+    expect(kpi.encaisse).toBe(300);
+    expect(kpi.appele).toBe(1000);
+    expect(kpi.restant).toBe(700);
+    expect(kpi.depenses).toBe(100);
+  });
+
+  it("P17 — de nieuwe sleutel bestaat en pluraliseert in fr, nl en ar", () => {
+    for (const [naam, berichten] of Object.entries(talen)) {
+      const attention = (
+        (berichten as Record<string, Record<string, unknown>>).dashboard as Record<
+          string,
+          unknown
+        >
+      ).attention as Record<string, unknown>;
+      const waarde = attention.periodExcludesToday;
+      expect(typeof waarde, `periodExcludesToday ontbreekt in ${naam}`).toBe("string");
+      expect(waarde as string, naam).toContain("{count, plural,");
+      // Geen technische termen op het scherm.
+      expect(waarde as string, naam).not.toMatch(/4111|v_|fiscal_year|peildatum/i);
+    }
   });
 });

@@ -14,12 +14,14 @@ import { formatDate, formatMoney, formatMoneyRounded, formatPercent } from "@/li
 import {
   assembleFinancials,
   buildAttentionItems,
+  evaluateReconciliation,
   filterToSelectedFiscalYear,
   quickActions,
   recentActivity,
   selectFiscalYears,
   topDebtors,
   type FiscalYearRow,
+  type ReconciliationRow,
   type ScopeSelection,
   type SettlementRow,
 } from "@/lib/dashboard";
@@ -149,12 +151,18 @@ export default async function DashboardPage({
   );
 
   // ── 3. Lastenoproepen van de geselecteerde boekjaren ─────────────────────
+  // `fiscal_year_id` komt mee omdat het de enige brug is tussen een vordering en
+  // haar boekjaar: `v_settlement_integrity` draagt wel de oproep, niet het
+  // boekjaar. Zonder die brug is niet vast te stellen in welke boekjaren een
+  // aansluitcontrole vereist is — zie `evaluateReconciliation`.
   const callRes = await supabase
     .from("charge_calls")
-    .select("id")
+    .select("id, fiscal_year_id")
     .eq("organization_id", org.id)
     .in("fiscal_year_id", scopedFyIds);
-  const callIds = (callRes.data ?? []).map((c) => c.id as string);
+  const calls = (callRes.data ?? []) as { id: string; fiscal_year_id: string }[];
+  const callIds = calls.map((c) => c.id);
+  const callFiscalYear = new Map(calls.map((c) => [c.id, c.fiscal_year_id]));
 
   // ── 4. Vorderingen ───────────────────────────────────────────────────────
   // Een mislukte oproepenquery telt hier mee: zonder oproep-id's zou de
@@ -163,7 +171,9 @@ export default async function DashboardPage({
   if (settlements !== null && callIds.length > 0) {
     const settleRes = await supabase
       .from("v_settlement_integrity")
-      .select("charge_allocation_id, building_id, owner_id, amount, settled_amount, ok")
+      .select(
+        "charge_allocation_id, building_id, charge_call_id, owner_id, amount, settled_amount, ok",
+      )
       .eq("organization_id", org.id)
       .in("charge_call_id", callIds);
     settlements = settleRes.error ? null : ((settleRes.data ?? []) as SettlementRow[]);
@@ -257,14 +267,21 @@ export default async function DashboardPage({
     .eq("ok", false);
   const allocationNok = allocRes.error ? null : (allocRes.count ?? 0);
 
+  // `fiscal_year_id` komt mee om DEKKING te kunnen vaststellen. De view ontstaat
+  // uit drie inner joins op de chargejournaalposten; een boekjaar met
+  // vorderingen maar zonder 4111-chargeregel levert geen rij. Optellen zou dat
+  // zwijgen tot "verschil nul" maken en een ontbrekende controle als gezond
+  // presenteren. `evaluateReconciliation` maakt er `null` van.
   const reconRes = await supabase
     .from("v_reconciliation_4111")
-    .select("verschil")
+    .select("fiscal_year_id, verschil")
     .eq("organization_id", org.id)
     .in("fiscal_year_id", scopedFyIds);
-  const reconVerschil = reconRes.error
-    ? null
-    : (reconRes.data ?? []).reduce((sum, r) => sum + Math.abs(Number(r.verschil ?? 0)), 0);
+  const reconVerschil = evaluateReconciliation({
+    rows: reconRes.error ? null : ((reconRes.data ?? []) as ReconciliationRow[]),
+    settlements: veiligeSettlements,
+    chargeCallFiscalYear: callFiscalYear,
+  });
 
   // ── 9. Rekenen ───────────────────────────────────────────────────────────
   const debiteuren = topDebtors(veiligeSettlements, new Map(), 5);
@@ -296,6 +313,7 @@ export default async function DashboardPage({
     reconciliatieVerschil: reconVerschil,
     buildingsWithMultipleOpen: selection.buildingsWithMultipleOpen.length,
     buildingsWithoutFiscalYear: selection.buildingsWithoutFiscalYear.length,
+    buildingsOutsideReferenceDate: selection.buildingsOutsideReferenceDate.length,
     buildingHref,
   });
 

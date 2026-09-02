@@ -312,7 +312,8 @@
       "allocationMismatch": "{count, plural, one {La répartition d'un appel de fonds ne totalise pas} other {Les répartitions de # appels de fonds ne totalisent pas}} le montant appelé.",
       "reconciliationMismatch": "La comptabilité et le détail des créances ne concordent pas. Les montants affichés peuvent être incomplets.",
       "allocationWithoutOwner": "Des créances ne sont rattachées à aucun copropriétaire et ne peuvent pas être recouvrées.",
-      "multipleOpenFiscalYears": "{count, plural, other {# exercices sont ouverts en même temps}}. Le tableau de bord en retient un seul.",
+      "buildingsWithMultipleOpenFiscalYears": "{count, plural, one {# immeuble a plusieurs exercices ouverts} other {# immeubles ont plusieurs exercices ouverts}}. Le tableau de bord n'en retient qu'un seul par immeuble.",
+      "periodExcludesToday": "{count, plural, one {Pour # immeuble, la date du jour ne fait pas partie de l'exercice affiché} other {Pour # immeubles, la date du jour ne fait pas partie de l'exercice affiché}}. Les montants portent uniquement sur la période affichée.",
       "outstanding": "{count, plural, one {Un copropriétaire a un solde impayé} other {# copropriétaires ont un solde impayé}}.",
       "integrityUnavailable": "Les contrôles de cohérence n’ont pas pu être exécutés. L’absence d’alerte ne signifie donc pas que tout est correct.",
       "buildingsWithoutFiscalYear": "{count, plural, one {# immeuble n’a pas d’exercice} other {# immeubles n’ont pas d’exercice}} et n’est donc pas compté dans les totaux."
