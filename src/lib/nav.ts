@@ -27,7 +27,9 @@ export type NavIcon =
   | "buildings"
   | "overview"
   | "fiscalYears"
-  | "expenses";
+  | "expenses"
+  | "owners"
+  | "lots";
 
 export type NavItem = {
   /** Stabiele sleutel, ook gebruikt als React-key en als testanker. */
@@ -82,6 +84,17 @@ export function globalNavItems(): NavItem[] {
       icon: "buildings",
       exact: true,
     },
+    {
+      // Copropriétaires zijn ORGANISATIEBREED: een eigenaar hoort bij de
+      // organisatie en kan lots in meerdere gebouwen hebben. Daarom staat dit
+      // item hier en niet in de gebouwnavigatie. Prefix, zodat het actief blijft
+      // op de detailpagina van een eigenaar.
+      key: "owners",
+      href: "/owners",
+      labelKey: "owners",
+      icon: "owners",
+      exact: false,
+    },
   ];
 }
 
@@ -102,6 +115,14 @@ export function buildingNavItems(buildingId: string): NavItem[] {
       labelKey: "overview",
       icon: "overview",
       exact: true,
+    },
+    {
+      // Lots horen bij exact één gebouw; deze route toont er nooit meer dan dat.
+      key: "building-lots",
+      href: `${base}/lots`,
+      labelKey: "lots",
+      icon: "lots",
+      exact: false,
     },
     {
       key: "building-fiscal-years",
@@ -177,6 +198,13 @@ export function buildBreadcrumbs(args: {
     { labelKey: null, text: orgName, href: "/dashboard" },
   ];
 
+  if (segments[0] === "owners") {
+    // Op de detailpagina staat de naam van de eigenaar in de H1; de schil kent
+    // die naam niet, dus de keten stopt bij "Copropriétaires".
+    crumbs.push({ labelKey: "owners", text: null, href: null });
+    return crumbs;
+  }
+
   if (segments[0] !== "buildings") return crumbs;
 
   const buildingId = segments[1];
@@ -195,7 +223,9 @@ export function buildBreadcrumbs(args: {
   });
   if (!sub) return crumbs;
 
-  if (sub === "boekjaren") {
+  if (sub === "lots") {
+    crumbs.push({ labelKey: "lots", text: null, href: null });
+  } else if (sub === "boekjaren") {
     crumbs.push({ labelKey: "fiscalYears", text: null, href: null });
   } else if (sub === "expenses") {
     crumbs.push({ labelKey: "expenses", text: null, href: null });

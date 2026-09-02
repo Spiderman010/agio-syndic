@@ -257,7 +257,9 @@
     "fiscalYears": "Boekjaren",
     "expenses": "Uitgaven",
     "building": "Gebouw",
-    "breadcrumb": "Kruimelpad"
+    "breadcrumb": "Kruimelpad",
+    "owners": "Eigenaren",
+    "lots": "Lots"
   },
   "shell": {
     "organisation": "Organisatie",
@@ -367,6 +369,181 @@
     "loadError": {
       "title": "De cijfers konden niet worden geladen",
       "body": "Om te voorkomen dat onvolledige of nulbedragen worden getoond die er correct uitzien, worden er geen kerncijfers gepresenteerd. Probeer het opnieuw; blijft het misgaan, neem dan contact op met uw beheerder."
+    }
+  },
+  "owners": {
+    "title": "Eigenaren",
+    "subtitle": "Alle eigenaren van deze organisatie. Een eigenaar kan lots in meerdere gebouwen bezitten.",
+    "search": {
+      "label": "Zoeken",
+      "placeholder": "Naam, e-mail of telefoon",
+      "submit": "Zoeken",
+      "none": "Geen eigenaar gevonden voor “{term}”."
+    },
+    "table": {
+      "name": "Naam",
+      "contact": "Contact",
+      "language": "Taal",
+      "lots": "Lots",
+      "buildings": "Gebouwen"
+    },
+    "type": {
+      "person": "Particulier",
+      "company": "Bedrijf"
+    },
+    "mre": "MRE",
+    "noContact": "Niet ingevuld",
+    "noLots": "Geen actueel lot",
+    "unknownBuilding": "Onbekend gebouw",
+    "empty": {
+      "title": "Nog geen eigenaren",
+      "body": "Voeg hieronder de eerste eigenaar toe. Daarna kunt u hem aan een lot koppelen."
+    },
+    "loadError": {
+      "title": "De gegevens konden niet worden geladen",
+      "body": "Er wordt bewust niets getoond: een onvolledige lijst is hier misleidend. Probeer het opnieuw of neem contact op met support."
+    },
+    "create": {
+      "title": "Nieuwe eigenaar",
+      "submit": "Eigenaar aanmaken",
+      "fullName": "Volledige naam",
+      "email": "E-mail",
+      "phone": "Telefoon",
+      "language": "Voorkeurstaal",
+      "languageHint": "Taal waarin deze eigenaar berichten ontvangt.",
+      "isCompany": "Dit is een bedrijf",
+      "isMre": "Marokkaan in het buitenland (MRE)"
+    },
+    "detail": {
+      "contact": "Contactgegevens",
+      "currentLots": "Actuele lots",
+      "noCurrentLots": "Deze eigenaar bezit op dit moment geen enkel lot.",
+      "history": "Eigendomshistorie",
+      "historyEmpty": "Voor deze eigenaar is nog geen eigendom vastgelegd.",
+      "edit": "Gegevens bewerken",
+      "save": "Wijzigingen opslaan",
+      "backToList": "Terug naar eigenaren",
+      "notFound": "Deze eigenaar bestaat niet binnen deze organisatie",
+      "notFoundBody": "Controleer de link. Er worden bewust geen andere gegevens getoond."
+    },
+    "history": {
+      "building": "Gebouw",
+      "lot": "Lot",
+      "from": "Vanaf",
+      "to": "Tot en met",
+      "role": "Rol",
+      "ongoing": "Lopend",
+      "primary": "Aangewezen debiteur",
+      "coOwner": "Mede-eigenaar"
+    },
+    "errors": {
+      "forbidden": "Je hebt niet de juiste rechten voor deze actie.",
+      "ownerInvalid": "Deze eigenaar bestaat niet binnen deze organisatie.",
+      "dateInvalid": "Vul een geldige datum in.",
+      "dateFuture": "Een datum in de toekomst is niet mogelijk. Een geplande overdracht wordt nog niet ondersteund.",
+      "historyExists": "Dit lot heeft al eigendomshistorie. Gebruik een overdracht in plaats van een eerste koppeling.",
+      "noCurrent": "Dit lot heeft op dit moment geen eigenaar; er is dus niets over te dragen.",
+      "coowned": "Dit lot heeft meerdere gelijktijdige eigenaars. Overdracht bij mede-eigendom wordt nog niet ondersteund.",
+      "stale": "De eigenaar van dit lot is inmiddels gewijzigd. Ververs de pagina en probeer het opnieuw.",
+      "notPrimary": "De huidige eigenaar is niet de aangewezen debiteur. Overdracht is hier niet mogelijk.",
+      "notFull": "De huidige eigenaar bezit slechts een deel van dit lot. Overdracht is hier niet mogelijk.",
+      "sameOwner": "Deze eigenaar bezit het lot al.",
+      "dateNotAfterStart": "De overdrachtsdatum moet ná het begin van de huidige eigendomsperiode liggen.",
+      "overlap": "Deze periode overlapt met bestaande eigendomshistorie. Er is niets gewijzigd.",
+      "deleteForbidden": "Eigendomshistorie kan niet worden verwijderd zolang de organisatie bestaat.",
+      "generic": "De actie is mislukt. Er is niets gewijzigd."
+    }
+  },
+  "lots": {
+    "title": "Lots",
+    "subtitle": "Alle lots van {building}.",
+    "notFound": "Dit gebouw bestaat niet binnen deze organisatie",
+    "backToBuildings": "Terug naar gebouwen",
+    "table": {
+      "label": "Lot",
+      "type": "Type",
+      "floor": "Verdieping",
+      "area": "m²",
+      "tantiemes": "Tantièmes",
+      "owner": "Eigenaar",
+      "status": "Status"
+    },
+    "status": {
+      "compleet": "Compleet",
+      "zonderEigenaar": "Geen eigenaar",
+      "medeEigendom": "Mede-eigendom",
+      "zonderTantieme": "Geen tantième"
+    },
+    "unitType": {
+      "appartement": "Appartement",
+      "commerce": "Commerce",
+      "parking": "Parking",
+      "cave": "Cave",
+      "autre": "Autre"
+    },
+    "noOwner": "Geen eigenaar",
+    "unknownOwner": "Onbekende eigenaar",
+    "tantiemes": {
+      "title": "Tantièmes",
+      "assigned": "Toegekend",
+      "declared": "Verklaard",
+      "difference": "Verschil",
+      "lots": "Aantal lots",
+      "warning": "Deze gegevens zijn nog niet compleet. Zolang niet elk lot precies één eigenaar heeft en de toegekende tantièmes gelijk zijn aan het verklaarde totaal, kan een lastenoproep mislukken."
+    },
+    "search": {
+      "label": "Zoeken",
+      "placeholder": "Lot, type of verdieping",
+      "submit": "Zoeken",
+      "none": "Geen lot gevonden voor “{term}”."
+    },
+    "empty": {
+      "title": "Nog geen lots",
+      "body": "Voeg hieronder het eerste lot toe. Daarna kunt u er een eigenaar aan koppelen."
+    },
+    "loadError": {
+      "title": "De gegevens konden niet worden geladen",
+      "body": "Er wordt bewust niets getoond: een onvolledige lijst is hier misleidend. Probeer het opnieuw of neem contact op met support."
+    },
+    "actions": {
+      "title": "Lot bewerken en eigendom beheren"
+    },
+    "form": {
+      "createTitle": "Nieuw lot",
+      "editTitle": "Gegevens van het lot",
+      "create": "Lot aanmaken",
+      "save": "Wijzigingen opslaan",
+      "label": "Lot",
+      "type": "Type",
+      "floor": "Verdieping",
+      "area": "Oppervlakte in m²",
+      "tantiemes": "Tantièmes",
+      "tantiemesHint": "Aandeel van dit lot in de verdeling van de lasten."
+    },
+    "ownership": {
+      "title": "Eigendom",
+      "since": "Sinds {date}",
+      "coOwned": "Dit lot heeft meerdere gelijktijdige eigenaars. Mede-eigendom beheren valt buiten deze versie.",
+      "historyOnly": "Dit lot heeft eigendomshistorie maar geen actuele eigenaar. Neem contact op met support; heractiveren valt buiten deze versie."
+    },
+    "link": {
+      "owner": "Eigenaar",
+      "startDate": "Eigenaar sinds",
+      "dateHint": "Een datum in de toekomst is niet mogelijk.",
+      "submit": "Eigenaar koppelen",
+      "pending": "Bezig met koppelen…"
+    },
+    "transfer": {
+      "currentOwner": "Huidige eigenaar",
+      "currentPeriod": "Eigendomsperiode",
+      "newOwner": "Nieuwe eigenaar",
+      "date": "Overdrachtsdatum",
+      "dateHint": "De oude eigenaar blijft eigenaar tot en met de dag ervóór.",
+      "notice": "Bestaande lastenoproepen, betalingen en journaalposten blijven op naam van de huidige eigenaar staan. Alleen toekomstige lasten gaan naar de nieuwe eigenaar.",
+      "confirm": "Ik begrijp dat de bestaande vorderingen en betalingen niet meeverhuizen.",
+      "submit": "Eigendom overdragen",
+      "pending": "Bezig met overdragen…",
+      "noCandidates": "Er is geen andere eigenaar om aan over te dragen. Maak eerst een eigenaar aan."
     }
   }
 }

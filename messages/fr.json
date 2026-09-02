@@ -257,7 +257,9 @@
     "fiscalYears": "Exercices",
     "expenses": "Dépenses",
     "building": "Immeuble",
-    "breadcrumb": "Fil d'Ariane"
+    "breadcrumb": "Fil d'Ariane",
+    "owners": "Copropriétaires",
+    "lots": "Lots"
   },
   "shell": {
     "organisation": "Organisation",
@@ -367,6 +369,181 @@
     "loadError": {
       "title": "Les chiffres n’ont pas pu être chargés",
       "body": "Pour éviter d’afficher des montants incomplets ou nuls qui paraîtraient corrects, aucun indicateur n’est présenté. Réessayez ; si le problème persiste, contactez votre administrateur."
+    }
+  },
+  "owners": {
+    "title": "Copropriétaires",
+    "subtitle": "Tous les copropriétaires de cette organisation. Un copropriétaire peut détenir des lots dans plusieurs immeubles.",
+    "search": {
+      "label": "Rechercher",
+      "placeholder": "Nom, e-mail ou téléphone",
+      "submit": "Rechercher",
+      "none": "Aucun copropriétaire trouvé pour « {term} »."
+    },
+    "table": {
+      "name": "Nom",
+      "contact": "Contact",
+      "language": "Langue",
+      "lots": "Lots",
+      "buildings": "Immeubles"
+    },
+    "type": {
+      "person": "Particulier",
+      "company": "Société"
+    },
+    "mre": "MRE",
+    "noContact": "Non renseigné",
+    "noLots": "Aucun lot actuel",
+    "unknownBuilding": "Immeuble inconnu",
+    "empty": {
+      "title": "Aucun copropriétaire",
+      "body": "Ajoutez le premier copropriétaire ci-dessous. Vous pourrez ensuite le rattacher à un lot."
+    },
+    "loadError": {
+      "title": "Les données n'ont pas pu être chargées",
+      "body": "Rien n'est affiché volontairement : une liste incomplète serait trompeuse. Réessayez ou contactez le support."
+    },
+    "create": {
+      "title": "Nouveau copropriétaire",
+      "submit": "Créer le copropriétaire",
+      "fullName": "Nom complet",
+      "email": "E-mail",
+      "phone": "Téléphone",
+      "language": "Langue préférée",
+      "languageHint": "Langue dans laquelle ce copropriétaire reçoit les messages.",
+      "isCompany": "Il s'agit d'une société",
+      "isMre": "Marocain résidant à l'étranger (MRE)"
+    },
+    "detail": {
+      "contact": "Coordonnées",
+      "currentLots": "Lots actuels",
+      "noCurrentLots": "Ce copropriétaire ne détient actuellement aucun lot.",
+      "history": "Historique de propriété",
+      "historyEmpty": "Aucune propriété n'a encore été enregistrée pour ce copropriétaire.",
+      "edit": "Modifier les données",
+      "save": "Enregistrer les modifications",
+      "backToList": "Retour aux copropriétaires",
+      "notFound": "Ce copropriétaire n'existe pas dans cette organisation",
+      "notFoundBody": "Vérifiez le lien. Aucune autre donnée n'est affichée, volontairement."
+    },
+    "history": {
+      "building": "Immeuble",
+      "lot": "Lot",
+      "from": "À partir du",
+      "to": "Jusqu'au",
+      "role": "Rôle",
+      "ongoing": "En cours",
+      "primary": "Débiteur désigné",
+      "coOwner": "Copropriétaire indivis"
+    },
+    "errors": {
+      "forbidden": "Vous n'avez pas les droits nécessaires pour cette action.",
+      "ownerInvalid": "Ce copropriétaire n'existe pas dans cette organisation.",
+      "dateInvalid": "Saisissez une date valide.",
+      "dateFuture": "Une date future n'est pas possible. Une mutation planifiée n'est pas encore prise en charge.",
+      "historyExists": "Ce lot a déjà un historique de propriété. Utilisez une mutation plutôt qu'un premier rattachement.",
+      "noCurrent": "Ce lot n'a actuellement aucun propriétaire ; il n'y a donc rien à transférer.",
+      "coowned": "Ce lot a plusieurs propriétaires simultanés. La mutation en indivision n'est pas encore prise en charge.",
+      "stale": "Le propriétaire de ce lot a changé entre-temps. Actualisez la page et réessayez.",
+      "notPrimary": "Le propriétaire actuel n'est pas le débiteur désigné. La mutation n'est pas possible ici.",
+      "notFull": "Le propriétaire actuel ne détient qu'une partie de ce lot. La mutation n'est pas possible ici.",
+      "sameOwner": "Ce copropriétaire détient déjà ce lot.",
+      "dateNotAfterStart": "La date de mutation doit être postérieure au début de la période de propriété actuelle.",
+      "overlap": "Cette période chevauche un historique de propriété existant. Rien n'a été modifié.",
+      "deleteForbidden": "L'historique de propriété ne peut pas être supprimé tant que l'organisation existe.",
+      "generic": "L'action a échoué. Rien n'a été modifié."
+    }
+  },
+  "lots": {
+    "title": "Lots",
+    "subtitle": "Tous les lots de {building}.",
+    "notFound": "Cet immeuble n'existe pas dans cette organisation",
+    "backToBuildings": "Retour aux immeubles",
+    "table": {
+      "label": "Lot",
+      "type": "Type",
+      "floor": "Étage",
+      "area": "m²",
+      "tantiemes": "Tantièmes",
+      "owner": "Propriétaire",
+      "status": "Statut"
+    },
+    "status": {
+      "compleet": "Complet",
+      "zonderEigenaar": "Sans propriétaire",
+      "medeEigendom": "Indivision",
+      "zonderTantieme": "Sans tantième"
+    },
+    "unitType": {
+      "appartement": "Appartement",
+      "commerce": "Commerce",
+      "parking": "Parking",
+      "cave": "Cave",
+      "autre": "Autre"
+    },
+    "noOwner": "Sans propriétaire",
+    "unknownOwner": "Propriétaire inconnu",
+    "tantiemes": {
+      "title": "Tantièmes",
+      "assigned": "Attribués",
+      "declared": "Déclarés",
+      "difference": "Écart",
+      "lots": "Nombre de lots",
+      "warning": "Ces données ne sont pas encore complètes. Tant que chaque lot n'a pas exactement un propriétaire et que les tantièmes attribués n'égalent pas le total déclaré, un appel de fonds peut échouer."
+    },
+    "search": {
+      "label": "Rechercher",
+      "placeholder": "Lot, type ou étage",
+      "submit": "Rechercher",
+      "none": "Aucun lot trouvé pour « {term} »."
+    },
+    "empty": {
+      "title": "Aucun lot",
+      "body": "Ajoutez le premier lot ci-dessous. Vous pourrez ensuite y rattacher un propriétaire."
+    },
+    "loadError": {
+      "title": "Les données n'ont pas pu être chargées",
+      "body": "Rien n'est affiché volontairement : une liste incomplète serait trompeuse. Réessayez ou contactez le support."
+    },
+    "actions": {
+      "title": "Modifier le lot et gérer la propriété"
+    },
+    "form": {
+      "createTitle": "Nouveau lot",
+      "editTitle": "Données du lot",
+      "create": "Créer le lot",
+      "save": "Enregistrer les modifications",
+      "label": "Lot",
+      "type": "Type",
+      "floor": "Étage",
+      "area": "Superficie en m²",
+      "tantiemes": "Tantièmes",
+      "tantiemesHint": "Part de ce lot dans la répartition des charges."
+    },
+    "ownership": {
+      "title": "Propriété",
+      "since": "Depuis le {date}",
+      "coOwned": "Ce lot a plusieurs propriétaires simultanés. La gestion de l'indivision sort du cadre de cette version.",
+      "historyOnly": "Ce lot a un historique de propriété mais aucun propriétaire actuel. Contactez le support ; la réactivation sort du cadre de cette version."
+    },
+    "link": {
+      "owner": "Propriétaire",
+      "startDate": "Propriétaire depuis le",
+      "dateHint": "Une date future n'est pas possible.",
+      "submit": "Rattacher le propriétaire",
+      "pending": "Rattachement en cours…"
+    },
+    "transfer": {
+      "currentOwner": "Propriétaire actuel",
+      "currentPeriod": "Période de propriété",
+      "newOwner": "Nouveau propriétaire",
+      "date": "Date de mutation",
+      "dateHint": "L'ancien propriétaire le reste jusqu'à la veille incluse.",
+      "notice": "Les appels de fonds, paiements et écritures existants restent au nom du propriétaire actuel. Seules les charges futures reviennent au nouveau propriétaire.",
+      "confirm": "Je comprends que les créances et paiements existants ne sont pas transférés.",
+      "submit": "Transférer la propriété",
+      "pending": "Transfert en cours…",
+      "noCandidates": "Aucun autre copropriétaire disponible. Créez d'abord un copropriétaire."
     }
   }
 }

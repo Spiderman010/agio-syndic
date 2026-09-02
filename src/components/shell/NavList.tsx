@@ -7,6 +7,8 @@ import {
   LayoutList,
   CalendarRange,
   ReceiptText,
+  Users,
+  KeyRound,
 } from "lucide-react";
 import { Link } from "@/navigation";
 import { cn } from "@/lib/utils";
@@ -25,6 +27,8 @@ const ICONS: Record<NavIcon, React.ComponentType<{ className?: string }>> = {
   overview: LayoutList,
   fiscalYears: CalendarRange,
   expenses: ReceiptText,
+  owners: Users,
+  lots: KeyRound,
 };
 
 export default function NavList({
