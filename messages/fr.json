@@ -280,16 +280,93 @@
   },
   "dashboard": {
     "title": "Tableau de bord",
-    "subtitle": "{org} — vue d'ensemble de vos copropriétés.",
+    "fiscalYear": "Exercice {year}",
+    "status": {
+      "open": "Ouvert",
+      "closed": "Clôturé"
+    },
+    "multipleOpenBadge": "{count, plural, one {# exercice ouvert} other {# exercices ouverts}}",
+    "kpi": {
+      "sectionTitle": "Indicateurs financiers",
+      "called": "Appels de fonds",
+      "calledHint": "Total réparti sur les lots",
+      "collected": "Encaissé",
+      "collectedHint": "Net, annulations déduites",
+      "outstanding": "Restant dû",
+      "outstandingHint": "Créances non soldées",
+      "expenses": "Dépenses",
+      "expensesHint": "Net, annulations déduites",
+      "recovery": "Taux de recouvrement",
+      "recoveryHint": "Part des appels soldée",
+      "recoveryNone": "Aucun appel de fonds sur cet exercice"
+    },
+    "attention": {
+      "title": "À traiter",
+      "open": "Ouvrir",
+      "tone": {
+        "crit": "Critique",
+        "warn": "Attention",
+        "info": "Info"
+      },
+      "settlementMismatch": "{count, plural, one {Une créance ne correspond pas} other {# créances ne correspondent pas}} aux paiements enregistrés. Contactez le support avant d'agir sur ces montants.",
+      "allocationMismatch": "{count, plural, one {La répartition d'un appel de fonds ne totalise pas} other {Les répartitions de # appels de fonds ne totalisent pas}} le montant appelé.",
+      "reconciliationMismatch": "La comptabilité et le détail des créances ne concordent pas. Les montants affichés peuvent être incomplets.",
+      "allocationWithoutOwner": "Des créances ne sont rattachées à aucun copropriétaire et ne peuvent pas être recouvrées.",
+      "buildingsWithMultipleOpenFiscalYears": "{count, plural, one {# immeuble a plusieurs exercices ouverts} other {# immeubles ont plusieurs exercices ouverts}}. Le tableau de bord n'en retient qu'un seul par immeuble.",
+      "periodExcludesToday": "{count, plural, one {Pour # immeuble, la date du jour ne fait pas partie de l'exercice affiché} other {Pour # immeubles, la date du jour ne fait pas partie de l'exercice affiché}}. Les montants portent uniquement sur la période affichée.",
+      "outstanding": "{count, plural, one {Un copropriétaire a un solde impayé} other {# copropriétaires ont un solde impayé}}.",
+      "integrityUnavailable": "Les contrôles de cohérence n’ont pas pu être exécutés. L’absence d’alerte ne signifie donc pas que tout est correct.",
+      "buildingsWithoutFiscalYear": "{count, plural, one {# immeuble n’a pas d’exercice} other {# immeubles n’ont pas d’exercice}} et n’est donc pas compté dans les totaux."
+    },
+    "debtors": {
+      "title": "Principaux impayés",
+      "owner": "Copropriétaire",
+      "called": "Appelé",
+      "outstanding": "Restant dû",
+      "openItems": "{count, plural, one {# poste ouvert} other {# postes ouverts}}",
+      "empty": "Aucun impayé sur cet exercice.",
+      "unknownOwner": "Copropriétaire inconnu"
+    },
+    "activity": {
+      "title": "Activité financière récente",
+      "empty": "Aucun mouvement enregistré.",
+      "noContext": "Sans libellé",
+      "reversed": "Annulé",
+      "correction": "Correction",
+      "kind": {
+        "payment": "Paiement",
+        "expense": "Dépense"
+      }
+    },
+    "actions": {
+      "title": "Actions",
+      "recordPayment": "Enregistrer un paiement",
+      "addExpense": "Ajouter une dépense",
+      "fiscalYears": "Voir les exercices",
+      "manageBuilding": "Gérer l'immeuble",
+      "allBuildings": "Voir les immeubles"
+    },
     "empty": {
       "title": "Aucun immeuble pour l'instant",
       "body": "Créez votre premier immeuble pour commencer à gérer les exercices, les appels de charges et les dépenses.",
       "cta": "Créer un immeuble"
     },
-    "buildings": {
-      "title": "Vos immeubles",
-      "all": "Voir les {count}",
-      "audit": "Audit requis"
+    "noFiscalYear": {
+      "title": "Aucun exercice",
+      "body": "Créez un exercice pour pouvoir enregistrer des appels de fonds, des paiements et des dépenses.",
+      "cta": "Créer un exercice"
+    },
+    "noActivity": {
+      "title": "Aucun mouvement sur cet exercice",
+      "body": "Dès qu'un appel de fonds est émis, les indicateurs financiers apparaissent ici.",
+      "cta": "Créer un appel de fonds"
+    },
+    "fiscalYearRange": "Exercices {from} à {to}",
+    "buildingsCounted": "{count, plural, one {# immeuble} other {# immeubles}}",
+    "unknownBuilding": "L’immeuble demandé n’existe pas ou n’est pas accessible. Les chiffres ci-dessous couvrent l’ensemble de l’organisation.",
+    "loadError": {
+      "title": "Les chiffres n’ont pas pu être chargés",
+      "body": "Pour éviter d’afficher des montants incomplets ou nuls qui paraîtraient corrects, aucun indicateur n’est présenté. Réessayez ; si le problème persiste, contactez votre administrateur."
     }
   }
 }
