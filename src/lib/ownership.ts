@@ -114,7 +114,13 @@ export function currentOwnership(rows: readonly OwnershipRow[]): OwnershipRow | 
   return gesorteerd[0];
 }
 
-/** Alle actuele rijen van een lot; meer dan één betekent mede-eigendom. */
+/**
+ * Alle actuele rijen van een lot.
+ *
+ * Puur een filter, zonder oordeel. Meer dan één rij betekent NIET automatisch
+ * een probleem: of gedeelde eigendom toerekenbaar is hangt af van het aantal
+ * aangewezen debiteuren, en dat oordeel hoort thuis in `classifyOwnership`.
+ */
 export function currentOwnerships(rows: readonly OwnershipRow[]): OwnershipRow[] {
   return rows.filter(isCurrent);
 }
@@ -230,31 +236,132 @@ export function matchesUnitSearch(unit: UnitRow, term: string): boolean {
   );
 }
 
+// ── Eigendomsclassificatie ──────────────────────────────────────────────────
+
+/**
+ * De vier eigendomstoestanden die de allocation engine onderscheidt.
+ *
+ * Dit is GEEN eigen indeling maar een letterlijke vertaling van twee condities
+ * in `create_charge_call` (m20, regels 267 en 276):
+ *
+ *     WHERE ... o.owner_id IS NULL              -> ALLOC_NO_OWNER
+ *     WHERE ... o.n_active > 1 AND o.n_primary <> 1  -> ALLOC_AMBIGUOUS_OWNER
+ *
+ * waarbij `n_active` en `n_primary` uit `fn_alloc_resolve_owner` komen: het
+ * aantal eigendomsrijen dat op de oproepdatum actief is, en hoeveel daarvan
+ * `is_primary_debtor` dragen.
+ *
+ * Twee gevolgen die makkelijk over het hoofd worden gezien, en die deze module
+ * daarom expliciet vastlegt in plaats van te interpreteren:
+ *
+ *  1. MEDE-EIGENDOM IS GEEN FOUT. Meerdere actieve eigenaars met exact één
+ *     aangewezen debiteur is een ONDERSTEUNDE toestand: de ambiguïteitscontrole
+ *     eist `n_primary <> 1`, dus precies één primaire debiteur laat de oproep
+ *     gewoon slagen. De volledige lot-allocatie gaat naar die ene debiteur; zie
+ *     docs/known-issues.md paragraaf 0.
+ *  2. ÉÉN ACTIEVE, NIET-PRIMAIRE EIGENAAR IS TOEGESTAAN. De ambiguïteitscontrole
+ *     begint bij `n_active > 1`, dus bij één actieve rij wordt `n_primary` niet
+ *     eens gewogen. `fn_alloc_resolve_owner` retourneert die ene rij en de
+ *     oproep slaagt. Dat is misschien onbedoeld, maar het IS het gedrag, en dit
+ *     bestand mag er niet stilzwijgend van afwijken — anders waarschuwt het
+ *     scherm voor iets wat de database toestaat.
+ */
+export type OwnershipClass =
+  /** Nul actieve eigenaars: `ALLOC_NO_OWNER`. */
+  | "geenEigenaar"
+  /** Precies één actieve eigenaar, primair of niet: toegestaan. */
+  | "enkel"
+  /** Meerdere actieve eigenaars met exact één debiteur: toegestaan. */
+  | "medeEigendom"
+  /** Meerdere actieve eigenaars, nul of meer dan één debiteur: `ALLOC_AMBIGUOUS_OWNER`. */
+  | "ambigu";
+
+export type OwnershipClassification = {
+  /** Aantal actuele eigendomsrijen; spiegelt `n_active`. */
+  nActive: number;
+  /** Aantal daarvan met `is_primary_debtor`; spiegelt `n_primary`. */
+  nPrimary: number;
+  klasse: OwnershipClass;
+  /**
+   * De rij die de vordering zou krijgen, of `null` bij nul actieve eigenaars.
+   * Bij een ambigue toestand is dit de rij die `fn_alloc_resolve_owner` zou
+   * kiezen — de engine weigert dan alsnog, dus dit is informatie, geen belofte.
+   */
+  debiteur: OwnershipRow | null;
+  /**
+   * Kan de engine deze toestand toerekenen? Exact het complement van de twee
+   * SQL-condities hierboven — niets meer en niets minder.
+   */
+  toewijsbaar: boolean;
+};
+
+/**
+ * Classificeert de HUIDIGE eigendomstoestand van één lot.
+ *
+ * "Huidig" betekent `end_date IS NULL`. De engine rekent op een oproepdatum;
+ * sinds m30 kan geen enkele eigendomsrij vooruitlopen op vandaag, waardoor
+ * "huidig" en "actief op vandaag" samenvallen. Voor een oproepdatum in het
+ * VERLEDEN kan de uitkomst afwijken — dit is dus een uitspraak over nu, niet
+ * over elke denkbare oproepdatum. De schermteksten formuleren dat ook zo.
+ */
+export function classifyOwnership(
+  ownership: readonly OwnershipRow[],
+): OwnershipClassification {
+  const lopend = currentOwnerships(ownership);
+  const nActive = lopend.length;
+  const nPrimary = lopend.filter((r) => r.is_primary_debtor).length;
+
+  let klasse: OwnershipClass;
+  if (nActive === 0) klasse = "geenEigenaar";
+  else if (nActive === 1) klasse = "enkel";
+  else if (nPrimary === 1) klasse = "medeEigendom";
+  else klasse = "ambigu";
+
+  return {
+    nActive,
+    nPrimary,
+    klasse,
+    debiteur: currentOwnership(ownership),
+    toewijsbaar: klasse === "enkel" || klasse === "medeEigendom",
+  };
+}
+
 // ── Volledigheid ────────────────────────────────────────────────────────────
 
 export type LotStatus =
-  /** Precies één actuele eigenaar en een tantième groter dan nul. */
+  /** Eén eigenaar en een tantième groter dan nul. */
   | "compleet"
-  /** Geen actuele eigenaar: een lastenoproep zou hier hard falen. */
+  /** Geen actuele eigenaar: een lastenoproep faalt hier. */
   | "zonderEigenaar"
-  /** Meerdere actuele eigenaars; de aangewezen debiteur bepaalt de toerekening. */
+  /** Meerdere actuele eigenaars zonder eenduidige debiteur: de oproep faalt. */
+  | "ambigu"
+  /** Meerdere actuele eigenaars MET eenduidige debiteur: geldig, geen fout. */
   | "medeEigendom"
   /** Tantième nul: dit lot deelt niet mee in de verdeling. */
   | "zonderTantieme";
 
 /**
- * De volledigheidsstatus van één lot.
+ * De status van één lot voor het overzichtsscherm.
  *
- * De volgorde is niet willekeurig: "geen eigenaar" is ernstiger dan "geen
- * tantième", want zonder eigenaar faalt `create_charge_call` volledig
- * (`ALLOC_NO_OWNER`), terwijl een tantième van nul alleen betekent dat het lot
- * niet meedeelt.
+ * De precedentie volgt de ERNST, niet de volgorde van de controles:
+ *
+ *   zonderEigenaar  de oproep faalt volledig (ALLOC_NO_OWNER)
+ *   ambigu          de oproep faalt volledig (ALLOC_AMBIGUOUS_OWNER)
+ *   zonderTantieme  het lot deelt niet mee; wél een aandachtspunt
+ *   medeEigendom    geldig; puur informatief
+ *   compleet        niets aan de hand
+ *
+ * `medeEigendom` staat bewust ONDER `zonderTantieme`: een geldige mede-eigendom
+ * is geen probleem, een tantième van nul wel. Dat de eigendom gedeeld is blijft
+ * zichtbaar in de eigenaarskolom, die alle actuele eigenaars toont en de
+ * aangewezen debiteur markeert.
  */
 export function lotStatus(unit: UnitRow, ownership: readonly OwnershipRow[]): LotStatus {
-  const lopend = currentOwnerships(ownership);
-  if (lopend.length === 0) return "zonderEigenaar";
-  if (lopend.length > 1) return "medeEigendom";
+  const { klasse } = classifyOwnership(ownership);
+  if (klasse === "geenEigenaar") return "zonderEigenaar";
+  if (klasse === "ambigu") return "ambigu";
   if (unit.tantiemes <= 0) return "zonderTantieme";
+  if (klasse === "medeEigendom") return "medeEigendom";
   return "compleet";
 }
 
@@ -265,16 +372,38 @@ export type TantiemeOverzicht = {
   verklaard: number;
   /** Verschil; negatief betekent dat er minder is toegekend dan verklaard. */
   verschil: number;
-  /** Aantal lots zonder actuele eigenaar. */
+  /** Aantal lots zonder actuele eigenaar; blokkeert een oproep. */
   zonderEigenaar: number;
-  /** Aantal lots met meerdere actuele eigenaars. */
+  /** Aantal lots met GELDIGE mede-eigendom; blokkeert een oproep NIET. */
   medeEigendom: number;
-  /** Aantal lots met tantième nul. */
-  zonderTantieme: number;
+  /** Aantal lots met meerdere eigenaars zonder eenduidige debiteur; blokkeert. */
+  ambigu: number;
   /**
-   * Kan er veilig een lastenoproep worden gedaan? Alleen wanneer élk lot een
-   * eenduidige debiteur heeft én de toegekende tantièmes het verklaarde totaal
-   * halen. Dit is een WAARSCHUWING, geen blokkade: de database beslist.
+   * Aantal lots met tantième nul. Wordt ONAFHANKELIJK van de eigendomsklasse
+   * geteld: een lot kan tegelijk mede-eigendom hebben én geen tantième. De
+   * vorige versie telde elk lot in precies één emmer via `lotStatus` en verloor
+   * daardoor het tantièmeprobleem van een gedeeld lot.
+   */
+  zonderTantieme: number;
+  /** Elk lot is toerekenbaar volgens de engine: geen lot zonder eigenaar, geen ambiguïteit. */
+  eigendomVeilig: boolean;
+  /** De toegekende tantièmes halen het verklaarde totaal precies. */
+  tantiemesKloppen: boolean;
+  /**
+   * Kan er op dit moment veilig een lastenoproep worden gedaan?
+   *
+   * Uitsluitend de toestanden waarop `create_charge_call` werkelijk afketst:
+   * een lot zonder eigenaar en een lot met meerdere eigenaars zonder
+   * eenduidige debiteur. GELDIGE MEDE-EIGENDOM TELT HIER NIET MEE — die is
+   * ondersteund en de aangewezen debiteur krijgt de volledige allocatie.
+   *
+   * Het tantièmeverschil blijft een aparte voorwaarde: het is een declaratieve
+   * controlewaarde uit het règlement de copropriété, en een afwijking hoort de
+   * gebruiker te zien voordat hij oproept.
+   *
+   * Dit is een WAARSCHUWING op de HUIDIGE toestand, geen blokkade en geen
+   * uitspraak over elke denkbare oproepdatum: de database beslist, en zij
+   * rekent op de opgegeven `call_date`.
    */
   oproepVeilig: boolean;
 };
@@ -287,15 +416,23 @@ export function tantiemeOverzicht(
   let toegekend = 0;
   let zonderEigenaar = 0;
   let medeEigendom = 0;
+  let ambigu = 0;
   let zonderTantieme = 0;
 
   for (const unit of units) {
     toegekend += unit.tantiemes;
-    const status = lotStatus(unit, ownershipPerUnit.get(unit.id) ?? []);
-    if (status === "zonderEigenaar") zonderEigenaar += 1;
-    else if (status === "medeEigendom") medeEigendom += 1;
-    else if (status === "zonderTantieme") zonderTantieme += 1;
+
+    // Eigendom en tantième worden APART geteld; ze sluiten elkaar niet uit.
+    const { klasse } = classifyOwnership(ownershipPerUnit.get(unit.id) ?? []);
+    if (klasse === "geenEigenaar") zonderEigenaar += 1;
+    else if (klasse === "ambigu") ambigu += 1;
+    else if (klasse === "medeEigendom") medeEigendom += 1;
+
+    if (unit.tantiemes <= 0) zonderTantieme += 1;
   }
+
+  const eigendomVeilig = zonderEigenaar === 0 && ambigu === 0;
+  const tantiemesKloppen = toegekend === verklaard;
 
   return {
     toegekend,
@@ -303,9 +440,11 @@ export function tantiemeOverzicht(
     verschil: toegekend - verklaard,
     zonderEigenaar,
     medeEigendom,
+    ambigu,
     zonderTantieme,
-    oproepVeilig:
-      units.length > 0 && zonderEigenaar === 0 && medeEigendom === 0 && toegekend === verklaard,
+    eigendomVeilig,
+    tantiemesKloppen,
+    oproepVeilig: units.length > 0 && eigendomVeilig && tantiemesKloppen,
   };
 }
 

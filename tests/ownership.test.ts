@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { createTranslator } from "next-intl";
 import {
   assembleOwnership,
+  classifyOwnership,
   currentOwnership,
   currentOwnerships,
   groupByUnit,
@@ -20,6 +21,7 @@ import {
   sortHistory,
   tantiemeOverzicht,
   type OwnerRow,
+  type OwnershipClass,
   type OwnershipRow,
   type UnitRow,
 } from "@/lib/ownership";
@@ -250,10 +252,19 @@ describe("V — volledigheid van lots", () => {
     expect(lotStatus(unit({ tantiemes: 0 }), [own()])).toBe("zonderTantieme");
   });
 
-  it("V3 — twee actuele eigenaars is mede-eigendom", () => {
-    expect(
-      lotStatus(unit(), [own({ owner_id: O1 }), own({ owner_id: O2, is_primary_debtor: false })]),
-    ).toBe("medeEigendom");
+  it("V3 — twee actuele eigenaars: GELDIG met één debiteur, ambigu zonder", () => {
+    // Deze test bleef eerder groen ook zonder de reparatie, omdat de fixture per
+    // ongeluk al een geldige mede-eigendom was. Het onderscheid dat de reparatie
+    // aanbrengt wordt nu wél afgedwongen: dezelfde twee eigenaars leveren een
+    // ANDERE status op zodra de aangewezen debiteur ontbreekt.
+    const geldig = [own({ owner_id: O1 }), own({ owner_id: O2, is_primary_debtor: false })];
+    expect(lotStatus(unit(), geldig)).toBe("medeEigendom");
+
+    const ambigu = [
+      own({ owner_id: O1, is_primary_debtor: false }),
+      own({ owner_id: O2, is_primary_debtor: false }),
+    ];
+    expect(lotStatus(unit(), ambigu)).toBe("ambigu");
   });
 
   it("V4 — het tantièmetotaal wordt tegen de declaratie afgezet", () => {
@@ -699,5 +710,363 @@ describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
       expect(bron, pad).toContain("<Field");
       expect(bron, pad).toContain("SubmitButton");
     }
+  });
+});
+
+// ── MEDE-EIGENDOM VOLGENS DE ALLOCATION ENGINE ──────────────────────────────
+
+/**
+ * De engine, letterlijk. Uit `create_charge_call` (m20, regels 267 en 276):
+ *
+ *     WHERE ... o.owner_id IS NULL                   -> ALLOC_NO_OWNER
+ *     WHERE ... o.n_active > 1 AND o.n_primary <> 1  -> ALLOC_AMBIGUOUS_OWNER
+ *
+ * Alles wat door geen van beide condities wordt geraakt, slaagt. Deze suite legt
+ * dat vast als waarheidstabel, zodat de app-logica er niet ongemerkt van kan
+ * afdrijven — de vorige versie deed dat wél en noemde élke gedeelde eigendom
+ * financieel onveilig.
+ */
+describe("M — mede-eigendom: de app spiegelt de engine exact", () => {
+  /**
+   * Bouwt `aantal` actuele rijen waarvan `primair` er de debiteur zijn.
+   *
+   * De debiteuren staan bewust ACHTERAAN. Zetten we ze vooraan, dan is elke
+   * assertie op "welke rij wordt de debiteur" triviaal waar — ook wanneer de
+   * sorteervolgorde uit `fn_alloc_resolve_owner` helemaal niet zou worden
+   * toegepast. Zo dwingt de fixture af dat `is_primary_debtor DESC` echt werkt.
+   */
+  function actief(aantal: number, primair: number): OwnershipRow[] {
+    return Array.from({ length: aantal }, (_, i) =>
+      own({
+        id: `own-m-${aantal}-${primair}-${i}`,
+        owner_id: `owner-${i}`,
+        end_date: null,
+        is_primary_debtor: i >= aantal - primair,
+      }),
+    );
+  }
+
+  it("M1 — geen actieve eigenaar: geen debiteur en niet toerekenbaar", () => {
+    const rijen = actief(0, 0);
+    const c = classifyOwnership(rijen);
+    expect(c.nActive).toBe(0);
+    expect(c.klasse).toBe("geenEigenaar");
+    expect(c.debiteur).toBeNull();
+    expect(c.toewijsbaar).toBe(false);
+    expect(lotStatus(unit(), rijen)).toBe("zonderEigenaar");
+    expect(
+      tantiemeOverzicht([unit({ tantiemes: 1000 })], new Map(), 1000).oproepVeilig,
+    ).toBe(false);
+  });
+
+  it("M2 — één actieve primaire eigenaar: gewoon toerekenbaar", () => {
+    const rijen = actief(1, 1);
+    const c = classifyOwnership(rijen);
+    expect(c.klasse).toBe("enkel");
+    expect(c.nPrimary).toBe(1);
+    expect(c.toewijsbaar).toBe(true);
+    expect(lotStatus(unit(), rijen)).toBe("compleet");
+
+    const perUnit = new Map([[U1, rijen]]);
+    const uit = tantiemeOverzicht([unit({ tantiemes: 1000 })], perUnit, 1000);
+    expect(uit.oproepVeilig).toBe(true);
+    expect(uit.medeEigendom).toBe(0);
+    expect(uit.ambigu).toBe(0);
+  });
+
+  it("M3 — één actieve NIET-primaire eigenaar is toegestaan door de engine", () => {
+    // Vastgelegd omdat het contra-intuïtief is. De ambiguïteitscontrole begint
+    // bij `n_active > 1`; bij één actieve rij wordt `n_primary` niet eens
+    // gewogen, en `fn_alloc_resolve_owner` retourneert die ene rij. De oproep
+    // slaagt dus. Dat is mogelijk onbedoeld in de engine, maar het IS het
+    // gedrag; de UI mag er niet voor waarschuwen alsof het faalt.
+    const rijen = actief(1, 0);
+    const c = classifyOwnership(rijen);
+    expect(c.nActive).toBe(1);
+    expect(c.nPrimary).toBe(0);
+    expect(c.klasse).toBe("enkel");
+    expect(c.toewijsbaar).toBe(true);
+    expect(c.debiteur?.id).toBe(rijen[0].id);
+    expect(lotStatus(unit(), rijen)).toBe("compleet");
+
+    const uit = tantiemeOverzicht(
+      [unit({ tantiemes: 1000 })],
+      new Map([[U1, rijen]]),
+      1000,
+    );
+    expect(uit.oproepVeilig).toBe(true);
+  });
+
+  it("M4 — twee actieve eigenaars met exact één debiteur: GELDIG", () => {
+    // De kern van de bevinding. Dit is geen fout maar een ondersteunde
+    // toestand: de volledige last gaat naar de aangewezen debiteur.
+    const rijen = actief(2, 1);
+    const c = classifyOwnership(rijen);
+    expect(c.nActive).toBe(2);
+    expect(c.nPrimary).toBe(1);
+    expect(c.klasse).toBe("medeEigendom");
+    expect(c.toewijsbaar).toBe(true);
+    expect(c.debiteur?.is_primary_debtor).toBe(true);
+    // owner-1 is de LAATSTE rij; dat de classificatie hem toch kiest bewijst
+    // dat `is_primary_debtor DESC` uit de verdeelmotor daadwerkelijk wordt
+    // toegepast en niet simpelweg de eerste rij wordt gepakt.
+    expect(c.debiteur?.owner_id).toBe("owner-1");
+    expect(rijen[0].is_primary_debtor).toBe(false);
+    expect(lotStatus(unit(), rijen)).toBe("medeEigendom");
+
+    const uit = tantiemeOverzicht(
+      [unit({ tantiemes: 1000 })],
+      new Map([[U1, rijen]]),
+      1000,
+    );
+    expect(uit.medeEigendom).toBe(1);
+    expect(uit.ambigu).toBe(0);
+    expect(uit.eigendomVeilig).toBe(true);
+    expect(uit.oproepVeilig).toBe(true); // <- was onterecht false
+  });
+
+  it("M5 — twee actieve eigenaars ZONDER debiteur: ambigu en onveilig", () => {
+    const rijen = actief(2, 0);
+    const c = classifyOwnership(rijen);
+    expect(c.nPrimary).toBe(0);
+    expect(c.klasse).toBe("ambigu");
+    expect(c.toewijsbaar).toBe(false);
+    expect(lotStatus(unit(), rijen)).toBe("ambigu");
+
+    const uit = tantiemeOverzicht(
+      [unit({ tantiemes: 1000 })],
+      new Map([[U1, rijen]]),
+      1000,
+    );
+    expect(uit.ambigu).toBe(1);
+    expect(uit.medeEigendom).toBe(0);
+    expect(uit.eigendomVeilig).toBe(false);
+    expect(uit.oproepVeilig).toBe(false);
+  });
+
+  it("M6 — twee actieve eigenaars die BEIDE debiteur zijn: ambigu", () => {
+    // `n_primary = 2` voldoet aan `n_primary <> 1`, dus de engine weigert. m30
+    // hoort deze toestand op databaseniveau te verhinderen via
+    // ownership_primary_active_idx en ownership_primary_period_excl; de
+    // app-logica moet hem toch correct classificeren voor het geval een
+    // privileged pad hem alsnog aanmaakt.
+    const rijen = actief(2, 2);
+    const c = classifyOwnership(rijen);
+    expect(c.nPrimary).toBe(2);
+    expect(c.klasse).toBe("ambigu");
+    expect(c.toewijsbaar).toBe(false);
+    expect(lotStatus(unit(), rijen)).toBe("ambigu");
+  });
+
+  it("M7 — geldige mede-eigendom met scheve tantièmes blijft onveilig OM DE TANTIÈMES", () => {
+    const rijen = actief(2, 1);
+    const c = classifyOwnership(rijen);
+    expect(c.klasse).toBe("medeEigendom"); // eigendom is NIET het probleem
+
+    const uit = tantiemeOverzicht(
+      [unit({ id: U1, tantiemes: 400 }), unit({ id: U2, tantiemes: 100 })],
+      new Map([
+        [U1, rijen],
+        [U2, actief(1, 1).map((r) => ({ ...r, id: `${r.id}-u2` }))],
+      ]),
+      1000,
+    );
+    expect(uit.eigendomVeilig).toBe(true); // eigendom in orde
+    expect(uit.tantiemesKloppen).toBe(false); // tantièmes niet
+    expect(uit.verschil).toBe(-500);
+    expect(uit.oproepVeilig).toBe(false); // onveilig, maar om de juiste reden
+  });
+
+  it("M8 — de waarheidstabel volgt letterlijk n_active en n_primary", () => {
+    // Elke rij is een directe vertaling van:
+    //   owner_id IS NULL            -> ALLOC_NO_OWNER
+    //   n_active > 1 AND n_primary <> 1 -> ALLOC_AMBIGUOUS_OWNER
+    const tabel: Array<[number, number, OwnershipClass, boolean]> = [
+      [0, 0, "geenEigenaar", false],
+      [1, 0, "enkel", true],
+      [1, 1, "enkel", true],
+      [2, 0, "ambigu", false],
+      [2, 1, "medeEigendom", true],
+      [2, 2, "ambigu", false],
+      [3, 0, "ambigu", false],
+      [3, 1, "medeEigendom", true],
+      [3, 2, "ambigu", false],
+      [3, 3, "ambigu", false],
+    ];
+    for (const [nActive, nPrimary, klasse, toewijsbaar] of tabel) {
+      const c = classifyOwnership(actief(nActive, nPrimary));
+      const waar = `n_active=${nActive} n_primary=${nPrimary}`;
+      expect(c.nActive, waar).toBe(nActive);
+      expect(c.nPrimary, waar).toBe(nPrimary);
+      expect(c.klasse, waar).toBe(klasse);
+      expect(c.toewijsbaar, waar).toBe(toewijsbaar);
+      // Het complement van de twee SQL-condities, onafhankelijk nagerekend:
+      const sqlWeigert = nActive === 0 || (nActive > 1 && nPrimary !== 1);
+      expect(c.toewijsbaar, `${waar} tegenover de SQL`).toBe(!sqlWeigert);
+    }
+  });
+
+  it("M9 — gesloten perioden tellen niet mee in de classificatie", () => {
+    // Alle drie de rijen moeten in de database kunnen bestaan: end_date mag
+    // nooit vóór start_date liggen (CHECK ownership_check), en twee perioden van
+    // dezelfde primaire debiteur mogen elkaar niet overlappen (m30).
+    const rijen = [
+      own({
+        id: "oud-1",
+        owner_id: "owner-x",
+        start_date: "2024-01-01",
+        end_date: "2024-12-31",
+      }),
+      own({
+        id: "oud-2",
+        owner_id: "owner-y",
+        start_date: "2025-01-01",
+        end_date: "2025-12-31",
+      }),
+      own({ id: "nu", owner_id: "owner-z", start_date: "2026-01-01", end_date: null }),
+    ];
+    const c = classifyOwnership(rijen);
+    expect(c.nActive).toBe(1);
+    expect(c.klasse).toBe("enkel");
+    expect(c.debiteur?.id).toBe("nu");
+  });
+
+  it("M10 — eigendom en tantièmes worden APART geteld", () => {
+    // Een gedeeld lot met tantième nul moet in BEIDE emmers vallen. De vorige
+    // versie telde elk lot in precies één emmer via lotStatus en verloor
+    // daardoor het tantièmeprobleem van een gedeeld lot volledig.
+    const uit = tantiemeOverzicht(
+      [unit({ id: U1, tantiemes: 0 })],
+      new Map([[U1, actief(2, 1)]]),
+      0,
+    );
+    expect(uit.medeEigendom).toBe(1);
+    expect(uit.zonderTantieme).toBe(1);
+    expect(uit.eigendomVeilig).toBe(true);
+    expect(uit.tantiemesKloppen).toBe(true);
+    // De conclusie waar het om gaat: gedeelde eigendom met een aangewezen
+    // debiteur blokkeert een oproep NIET, ook niet met een tantième van nul.
+    expect(uit.oproepVeilig).toBe(true);
+    // De statusbadge toont het tantièmeprobleem; de eigenaarskolom toont de
+    // gedeelde eigendom. Zie de precedentie in lotStatus.
+    expect(lotStatus(unit({ tantiemes: 0 }), actief(2, 1))).toBe("zonderTantieme");
+  });
+
+  it("M11 — de statusbadge onderscheidt geldige van ambigue mede-eigendom", () => {
+    expect(lotStatus(unit(), actief(2, 1))).toBe("medeEigendom");
+    expect(lotStatus(unit(), actief(2, 0))).toBe("ambigu");
+    // En ambigu weegt zwaarder dan een tantièmeprobleem: de oproep faalt dan al.
+    expect(lotStatus(unit({ tantiemes: 0 }), actief(2, 0))).toBe("ambigu");
+  });
+
+  it("M11b — de app oordeelt over NU; op de laatste dag van een periode wijkt de engine af", () => {
+    // Bewust vastgelegd, niet gerepareerd. De app telt "actueel"
+    // (end_date IS NULL); de engine telt "actief op p_call_date"
+    // (end_date >= p_call_date). Op de LAATSTE dag van een aflopende periode
+    // ziet de engine dus één eigenaar meer dan het scherm.
+    const laatsteDag = "2026-09-03";
+    const aflopend = own({
+      id: "aflopend",
+      owner_id: "owner-oud",
+      start_date: "2026-01-01",
+      end_date: laatsteDag,
+      is_primary_debtor: false,
+    });
+    const nieuw = own({
+      id: "nieuw",
+      owner_id: "owner-nieuw",
+      start_date: laatsteDag,
+      end_date: null,
+      is_primary_debtor: false,
+    });
+
+    // Wat het SCHERM ziet: één actuele rij, dus "enkel" en toerekenbaar.
+    const c = classifyOwnership([aflopend, nieuw]);
+    expect(c.nActive).toBe(1);
+    expect(c.klasse).toBe("enkel");
+    expect(c.toewijsbaar).toBe(true);
+
+    // Wat de ENGINE op die dag ziet: beide rijen actief, geen debiteur.
+    const actiefVolgensEngine = [aflopend, nieuw].filter((r) => isActiveOn(r, laatsteDag));
+    expect(actiefVolgensEngine).toHaveLength(2);
+    const nPrimary = actiefVolgensEngine.filter((r) => r.is_primary_debtor).length;
+    expect(nPrimary).toBe(0);
+    // n_active > 1 AND n_primary <> 1 -> ALLOC_AMBIGUOUS_OWNER
+    expect(actiefVolgensEngine.length > 1 && nPrimary !== 1).toBe(true);
+
+    // Daarom formuleren de schermteksten zich als HUIDIGE stand en beloven ze
+    // niets over een oproep met een andere call_date.
+    expect(nl.lots.tantiemes.warningOwnership).toContain("Op dit moment");
+  });
+
+  it("M12 — de teksten bestaan in fr, nl en ar en noemen geen SQL of tabelnamen", () => {
+    const talen: Record<string, unknown> = { fr, nl, ar };
+    const sleutels = [
+      "status.ambigu",
+      "primaryDebtor",
+      "tantiemes.warningOwnership",
+      "tantiemes.warningTantiemes",
+      "tantiemes.coOwnershipNote",
+      "ownership.coOwned",
+      "ownership.ambiguous",
+    ];
+    for (const [naam, berichten] of Object.entries(talen)) {
+      const lots = (berichten as Record<string, unknown>).lots;
+      for (const sleutel of sleutels) {
+        const waarde = sleutel
+          .split(".")
+          .reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], lots) as string;
+        expect(typeof waarde, `${naam} lots.${sleutel}`).toBe("string");
+        expect(waarde.trim().length, `${naam} lots.${sleutel}`).toBeGreaterThan(0);
+        // Geen technische namen op het scherm.
+        expect(waarde, `${naam} lots.${sleutel}`).not.toMatch(
+          /n_active|n_primary|is_primary_debtor|charge_call|ownership|ALLOC_|SQL/i,
+        );
+      }
+    }
+  });
+
+  it("M13 — de nieuwe teksten renderen met de echte ICU-pipeline", () => {
+    const maak = createTranslator as unknown as (opties: {
+      locale: string;
+      messages: unknown;
+      namespace: string;
+    }) => (sleutel: string, waarden?: Record<string, string | number>) => string;
+
+    for (const [naam, berichten] of Object.entries({ fr, nl, ar })) {
+      const t = maak({ locale: naam, messages: berichten, namespace: "lots" });
+      for (const count of [0, 1, 2, 3, 11]) {
+        const zin = t("tantiemes.coOwnershipNote", { count });
+        expect(zin.length, `${naam} count=${count}`).toBeGreaterThan(0);
+        expect(zin, `${naam} count=${count}`).not.toContain("{");
+      }
+      const gedeeld = t("ownership.coOwned", { debiteur: "Yassine Belkacem" });
+      expect(gedeeld, naam).toContain("Yassine Belkacem");
+      expect(gedeeld, naam).not.toContain("{");
+    }
+  });
+
+  it("M14 — geldige mede-eigendom levert GEEN foutwaarschuwing op het scherm", () => {
+    // De pagina toont de waarschuwing alleen bij !oproepVeilig, en kiest dan
+    // tussen een eigendoms- en een tantièmetekst. Bij uitsluitend geldige
+    // mede-eigendom blijft ze dus weg.
+    const uit = tantiemeOverzicht(
+      [unit({ id: U1, tantiemes: 1000 })],
+      new Map([[U1, actief(2, 1)]]),
+      1000,
+    );
+    expect(uit.oproepVeilig).toBe(true);
+    expect(uit.medeEigendom).toBe(1);
+
+    const bron = readFileSync(
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
+      "utf8",
+    );
+    // De waarschuwing hangt aan oproepVeilig, de toelichting aan medeEigendom.
+    expect(bron).toContain("!overzicht.oproepVeilig");
+    expect(bron).toContain("overzicht.medeEigendom > 0");
+    expect(bron).toContain("tantiemes.coOwnershipNote");
+    // En de oude ongedifferentieerde waarschuwing bestaat niet meer.
+    expect(bron).not.toContain('t("tantiemes.warning")');
   });
 });

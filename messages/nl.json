@@ -472,7 +472,8 @@
       "compleet": "Compleet",
       "zonderEigenaar": "Geen eigenaar",
       "medeEigendom": "Mede-eigendom",
-      "zonderTantieme": "Geen tantième"
+      "zonderTantieme": "Geen tantième",
+      "ambigu": "Geen debiteur"
     },
     "unitType": {
       "appartement": "Appartement",
@@ -489,7 +490,9 @@
       "declared": "Verklaard",
       "difference": "Verschil",
       "lots": "Aantal lots",
-      "warning": "Deze gegevens zijn nog niet compleet. Zolang niet elk lot precies één eigenaar heeft en de toegekende tantièmes gelijk zijn aan het verklaarde totaal, kan een lastenoproep mislukken."
+      "warningOwnership": "Op dit moment heeft niet elk lot een eenduidige debiteur. Zolang een lot geen eigenaar heeft, of meerdere eigenaars zonder aangewezen debiteur, kan een lastenoproep voor dit gebouw niet worden vastgelegd.",
+      "warningTantiemes": "De toegekende tantièmes wijken af van het totaal uit het règlement de copropriété. Controleer de verdeling voordat u een lastenoproep vastlegt.",
+      "coOwnershipNote": "{count, plural, one {# lot heeft meerdere eigenaars} other {# lots hebben meerdere eigenaars}} met een aangewezen debiteur. Dat is toegestaan: de volledige last gaat naar die debiteur."
     },
     "search": {
       "label": "Zoeken",
@@ -523,8 +526,9 @@
     "ownership": {
       "title": "Eigendom",
       "since": "Sinds {date}",
-      "coOwned": "Dit lot heeft meerdere gelijktijdige eigenaars. Mede-eigendom beheren valt buiten deze versie.",
-      "historyOnly": "Dit lot heeft eigendomshistorie maar geen actuele eigenaar. Neem contact op met support; heractiveren valt buiten deze versie."
+      "coOwned": "Dit lot heeft meerdere eigenaars met {debiteur} als aangewezen debiteur. Lasten worden gewoon aan die debiteur toegerekend. Overdragen kan hier niet: deze eenvoudige flow werkt alleen bij één eigenaar.",
+      "historyOnly": "Dit lot heeft eigendomshistorie maar geen actuele eigenaar. Neem contact op met support; heractiveren valt buiten deze versie.",
+      "ambiguous": "Dit lot heeft meerdere eigenaars zonder aangewezen debiteur. Zolang dat zo is, kan er geen lastenoproep voor dit gebouw worden vastgelegd. Neem contact op met support om een debiteur aan te wijzen."
     },
     "link": {
       "owner": "Eigenaar",
@@ -544,6 +548,7 @@
       "submit": "Eigendom overdragen",
       "pending": "Bezig met overdragen…",
       "noCandidates": "Er is geen andere eigenaar om aan over te dragen. Maak eerst een eigenaar aan."
-    }
+    },
+    "primaryDebtor": "Debiteur"
   }
 }

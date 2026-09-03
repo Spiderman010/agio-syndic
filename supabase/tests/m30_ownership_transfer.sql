@@ -12,19 +12,24 @@
 -- NOOIT tegen productie. Alleen tegen een lokale Supabase of een expliciet
 -- toegestane niet-productieomgeving.
 --
--- Verwachte uitkomst: "48 geslaagd, 0 gefaald".
+-- Verwachte uitkomst: "55 geslaagd, 0 gefaald".
 --
--- Wat hier wordt vastgelegd:
---   C1-C12   cascadegedrag: losse owner-, unit- en building-deletes kunnen de
---            eigendomsketen niet meer wissen, terwijl een VOLLEDIGE
---            organisatieverwijdering de bestaande cascade behoudt;
---   L1-L6    eerste koppeling, inclusief tenantisolatie en bestaansorakel;
---   T1-T16   overdracht: datumgrenzen, share/primary, stale writes, rollback;
---   D1-D4    directe DML via de Data API is dicht;
---   I1-I5    historie-immutability onder privileged writes;
---   X1-X3    exclusion constraints, met behoud van mede-eigendom;
---   F1-F4    allocaties, betalingen en journaal blijven byte-identiek;
---   G1       grants, policies en triggerstatus.
+-- Wat hier wordt vastgelegd (55 asserties):
+--   L1-L6      eerste koppeling, inclusief tenantisolatie en bestaansorakel;
+--   T1-T16     overdracht: datumgrenzen, share/primary, stale writes, rollback;
+--   F1-F3      allocaties, betalingen en journaal blijven byte-identiek;
+--   D1-D6      directe DML via de Data API is dicht, ook voor service_role;
+--   I1-I6      historie-immutability onder privileged writes;
+--   X1-X3, X2b exclusion constraints, met BEHOUD van geldige mede-eigendom;
+--   C1-C9      cascadegedrag: losse owner-, unit- en building-deletes kunnen de
+--              eigendomsketen niet meer wissen, terwijl een VOLLEDIGE
+--              organisatieverwijdering de bestaande cascade behoudt;
+--   G1-G4      grants, policies, triggerstatus en constraints.
+--
+-- LET OP: dit bestand mag NERGENS een kale DELETE op public.ownership doen om
+-- op te ruimen. De historieguard uit m30 weigert die zolang de organisatie
+-- bestaat, en buiten een BEGIN/EXCEPTION-blok breekt dat het hele DO-blok af.
+-- Waar een schone uitgangssituatie nodig is, wordt een VERS lot gebruikt.
 --
 -- LET OP: een gefaalde plpgsql-subtransactie (elk BEGIN/EXCEPTION blok) rolt OOK
 -- set_config(..., is_local := true) terug. De JWT-context wordt daarom vlak voor
@@ -40,8 +45,8 @@ DECLARE
 
   vorgA uuid; vorgB uuid;
   vbA uuid; vbA2 uuid; vbB uuid;
-  u1 uuid; u2 uuid; u3 uuid; u4 uuid; u5 uuid; u6 uuid; ub uuid;
-  oA1 uuid; oA2 uuid; oA3 uuid; oB uuid;
+  u1 uuid; u2 uuid; u3 uuid; u4 uuid; u5 uuid; u6 uuid; u7 uuid; ub uuid;
+  oA1 uuid; oA2 uuid; oA3 uuid; oA4 uuid; oB uuid;
   ow1 uuid; ow2 uuid; ow_tmp uuid;
 
   vandaag date := CURRENT_DATE;
@@ -92,11 +97,14 @@ BEGIN
   INSERT INTO public.units(building_id, label, unit_type, tantiemes)
   VALUES (vbA2,'B2','appartement',100) RETURNING id INTO u6;
   INSERT INTO public.units(building_id, label, unit_type, tantiemes)
+  VALUES (vbA2,'B3','appartement',100) RETURNING id INTO u7;
+  INSERT INTO public.units(building_id, label, unit_type, tantiemes)
   VALUES (vbB,'X1','appartement',100) RETURNING id INTO ub;
 
   INSERT INTO public.owners(organization_id, full_name) VALUES (vorgA,'M30 Eigenaar 1') RETURNING id INTO oA1;
   INSERT INTO public.owners(organization_id, full_name) VALUES (vorgA,'M30 Eigenaar 2') RETURNING id INTO oA2;
   INSERT INTO public.owners(organization_id, full_name) VALUES (vorgA,'M30 Eigenaar 3') RETURNING id INTO oA3;
+  INSERT INTO public.owners(organization_id, full_name) VALUES (vorgA,'M30 Eigenaar 4') RETURNING id INTO oA4;
   INSERT INTO public.owners(organization_id, full_name) VALUES (vorgB,'M30 Eigenaar B') RETURNING id INTO oB;
 
   -- ═══════════════════════════════════════════ L — EERSTE KOPPELING ═══════
@@ -387,16 +395,20 @@ BEGIN
       || '  T15 fout na afsluitpoging: oude rij byte-identiek teruggerold';
 
   -- T16 overdracht met een datum in het verleden
+  -- Op een VERS lot. Opruimen met een DELETE kan niet: de historieguard weigert
+  -- elke ownership-delete zolang de organisatie bestaat, en die weigering zou
+  -- dit hele testblok afbreken.
   PERFORM set_config('role', 'postgres', true);
-  DELETE FROM public.ownership WHERE unit_id = u6 AND id <> ow_tmp;
+  INSERT INTO public.ownership(unit_id, owner_id, share, start_date, is_primary_debtor)
+  VALUES (u7, oA1, 1, vandaag - 60, true) RETURNING id INTO ow_tmp;
   BEGIN
     PERFORM set_config('request.jwt.claims', PU, true);
-    PERFORM public.transfer_ownership(u6, ow_tmp, oA2, vandaag - 30);
+    PERFORM public.transfer_ownership(u7, ow_tmp, oA2, vandaag - 30);
     SELECT count(*) INTO n FROM public.ownership
-     WHERE unit_id = u6 AND end_date = vandaag - 31;
+     WHERE unit_id = u7 AND end_date = vandaag - 31;
     ok := (n = 1);
     SELECT count(*) INTO n FROM public.ownership
-     WHERE unit_id = u6 AND start_date = vandaag - 30 AND end_date IS NULL;
+     WHERE unit_id = u7 AND start_date = vandaag - 30 AND end_date IS NULL;
     ok := ok AND (n = 1);
   EXCEPTION WHEN others THEN ok := false; msg := left(SQLERRM,70); END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
@@ -588,26 +600,41 @@ BEGIN
   -- X2 mede-eigendom blijft mogelijk: niet-primair mag wel overlappen
   BEGIN
     INSERT INTO public.ownership(unit_id, owner_id, share, start_date, is_primary_debtor)
-    VALUES (u1, oA3, 0.5, vandaag, false);
+    VALUES (u1, oA4, 0.5, vandaag, false);
     ok := true;
   EXCEPTION WHEN others THEN ok := false; msg := left(SQLERRM,60); END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
       || '  X2  toegestane mede-eigendom wordt NIET geblokkeerd' || coalesce(' — '||msg,''); msg := NULL;
 
+  -- X2b de zo ontstane mede-eigendom is GELDIG volgens de allocation engine:
+  -- twee actieve eigenaars met exact een aangewezen debiteur. create_charge_call
+  -- weigert alleen bij n_active > 1 AND n_primary <> 1, dus deze toestand is
+  -- toerekenbaar en hoort in de applicatie geen foutmelding op te leveren.
+  SELECT n_active, n_primary INTO v_rec
+    FROM public.fn_alloc_resolve_owner(u1, vandaag);
+  ok := (v_rec.n_active = 2 AND v_rec.n_primary = 1);
+  IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
+  rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
+      || '  X2b geldige mede-eigendom: n_active=2, n_primary=1 (toerekenbaar)';
+
   -- X3 dezelfde eigenaar twee keer tegelijk op hetzelfde lot
   BEGIN
     INSERT INTO public.ownership(unit_id, owner_id, share, start_date, is_primary_debtor)
-    VALUES (u1, oA3, 0.25, vandaag, false);
+    VALUES (u1, oA4, 0.25, vandaag, false);
     ok := false;
   EXCEPTION WHEN others THEN ok := (SQLSTATE = '23P01'); END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
       || '  X3  dezelfde eigenaar twee keer tegelijk op een lot geweigerd';
 
-  -- opruimen zodat de cascadetests met een schone situatie werken
+  -- GEEN opruim-DELETE: de historieguard weigert elke ownership-delete zolang
+  -- de organisatie bestaat, en die weigering zou dit testblok afbreken. X2 laat
+  -- daarom bewust een geldige mede-eigenaar (oA4) op u1 achter. De cascadetests
+  -- hieronder zijn daar ongevoelig voor: C6 verwijdert oA3, die nooit eigendom
+  -- heeft gekregen, en C1/C2 vergelijken md5-waarden die met drie rijen net zo
+  -- goed werken als met twee.
   PERFORM set_config('role', 'postgres', true);
-  DELETE FROM public.ownership WHERE unit_id = u1 AND is_primary_debtor = false;
 
   -- ═════════════════════════════════════════════════════ C — CASCADES ═════
 

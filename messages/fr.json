@@ -472,7 +472,8 @@
       "compleet": "Complet",
       "zonderEigenaar": "Sans propriétaire",
       "medeEigendom": "Indivision",
-      "zonderTantieme": "Sans tantième"
+      "zonderTantieme": "Sans tantième",
+      "ambigu": "Sans débiteur"
     },
     "unitType": {
       "appartement": "Appartement",
@@ -489,7 +490,9 @@
       "declared": "Déclarés",
       "difference": "Écart",
       "lots": "Nombre de lots",
-      "warning": "Ces données ne sont pas encore complètes. Tant que chaque lot n'a pas exactement un propriétaire et que les tantièmes attribués n'égalent pas le total déclaré, un appel de fonds peut échouer."
+      "warningOwnership": "Actuellement, tous les lots n'ont pas de débiteur unique. Tant qu'un lot n'a aucun propriétaire, ou plusieurs propriétaires sans débiteur désigné, aucun appel de fonds ne peut être enregistré pour cet immeuble.",
+      "warningTantiemes": "Les tantièmes attribués s'écartent du total figurant au règlement de copropriété. Vérifiez la répartition avant d'enregistrer un appel de fonds.",
+      "coOwnershipNote": "{count, plural, one {# lot est détenu en indivision} other {# lots sont détenus en indivision}} avec un débiteur désigné. C'est admis : la charge entière revient à ce débiteur."
     },
     "search": {
       "label": "Rechercher",
@@ -523,8 +526,9 @@
     "ownership": {
       "title": "Propriété",
       "since": "Depuis le {date}",
-      "coOwned": "Ce lot a plusieurs propriétaires simultanés. La gestion de l'indivision sort du cadre de cette version.",
-      "historyOnly": "Ce lot a un historique de propriété mais aucun propriétaire actuel. Contactez le support ; la réactivation sort du cadre de cette version."
+      "coOwned": "Ce lot est détenu en indivision, avec {debiteur} comme débiteur désigné. Les charges lui sont normalement imputées. La mutation n'est pas possible ici : ce parcours simplifié ne gère qu'un seul propriétaire.",
+      "historyOnly": "Ce lot a un historique de propriété mais aucun propriétaire actuel. Contactez le support ; la réactivation sort du cadre de cette version.",
+      "ambiguous": "Ce lot a plusieurs propriétaires sans débiteur désigné. Tant que c'est le cas, aucun appel de fonds ne peut être enregistré pour cet immeuble. Contactez le support pour désigner un débiteur."
     },
     "link": {
       "owner": "Propriétaire",
@@ -544,6 +548,7 @@
       "submit": "Transférer la propriété",
       "pending": "Transfert en cours…",
       "noCandidates": "Aucun autre copropriétaire disponible. Créez d'abord un copropriétaire."
-    }
+    },
+    "primaryDebtor": "Débiteur"
   }
 }

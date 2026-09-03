@@ -10,6 +10,7 @@ import { buttonClasses } from "@/components/ui/Button";
 import { formatDate } from "@/lib/money";
 import {
   assembleOwnership,
+  classifyOwnership,
   currentOwnerships,
   groupByUnit,
   lotStatus,
@@ -40,14 +41,29 @@ import { createLot, updateLot } from "./actions";
  * Er worden ALLE eigendomsrijen van deze lots opgehaald, niet alleen de
  * lopende. Dat onderscheid bepaalt welke actie een lot krijgt:
  *
- *   geen enkele rij      -> eerste koppeling mogelijk
+ *   geen enkele rij       -> eerste koppeling mogelijk
  *   alleen gesloten rijen -> geen actie; heractiveren valt buiten deze sprint
- *   precies één lopende  -> overdracht mogelijk
- *   meerdere lopende     -> mede-eigendom; overdracht is niet gedefinieerd
+ *   precies één lopende   -> overdracht mogelijk
+ *   meerdere lopende      -> overdracht valt buiten DEZE flow
  *
  * Zonder die extra rijen zou het scherm een koppelknop tonen op een lot met
  * gesloten historie, waarna `link_first_owner` terecht met
  * OWNERSHIP_HISTORY_EXISTS faalt — een knop waarvan we wéten dat hij faalt.
+ *
+ * ── OVERDRACHT VERSUS TOEREKENING ──────────────────────────────────────────
+ *
+ * Twee onafhankelijke vragen die niet door elkaar mogen lopen:
+ *
+ *   "kan ik hier overdragen?"   -> nee bij meerdere lopende eigenaars; dat is
+ *                                  een grens van deze eenvoudige flow;
+ *   "kan de last worden
+ *    toegerekend?"              -> ja, zolang er precies één aangewezen
+ *                                  debiteur is. Zie `classifyOwnership`.
+ *
+ * Een lot waar niet kan worden overgedragen is dus NIET automatisch financieel
+ * onveilig. De vorige versie behandelde die twee als één, waardoor elke geldige
+ * mede-eigendom een waarschuwing opleverde over lastenoproepen die in
+ * werkelijkheid gewoon slagen.
  */
 export default async function LotsPage({
   params,
@@ -149,14 +165,32 @@ export default async function LotsPage({
           </dl>
 
           {/*
-            De aantallen staan al in de definitielijst hierboven; deze regel legt
-            uit wat ze BETEKENEN. Bewust zonder interpolatie: een zin die drie
-            getallen tegelijk vervoegt leest in geen van de drie talen goed, en
-            de cijfers staan er letterlijk naast.
+            Twee VERSCHILLENDE mededelingen, bewust gescheiden.
+
+            De waarschuwing gaat uitsluitend over toestanden waarop de engine
+            werkelijk afketst: een lot zonder eigenaar, een lot met meerdere
+            eigenaars zonder aangewezen debiteur, of een tantièmetotaal dat het
+            règlement niet haalt. Ze is geformuleerd als HUIDIGE stand — een
+            oproep rekent op zijn eigen oproepdatum en kan voor het verleden
+            anders uitpakken.
+
+            Geldige mede-eigendom is géén van die toestanden en krijgt daarom
+            een neutrale toelichting in plaats van een waarschuwing. Dat was de
+            fout in de vorige versie: elk gedeeld lot maakte het gebouw
+            "onveilig", terwijl de database zo'n lot gewoon toerekent aan de
+            aangewezen debiteur.
           */}
           {!overzicht.oproepVeilig ? (
             <p className="mt-3 mb-0 text-[0.8rem] text-warn" role="status">
-              {t("tantiemes.warning")}
+              {overzicht.eigendomVeilig
+                ? t("tantiemes.warningTantiemes")
+                : t("tantiemes.warningOwnership")}
+            </p>
+          ) : null}
+
+          {overzicht.medeEigendom > 0 ? (
+            <p className="mt-2 mb-0 text-[0.8rem] text-ink-soft">
+              {t("tantiemes.coOwnershipNote", { count: overzicht.medeEigendom })}
             </p>
           ) : null}
         </Card>
@@ -213,6 +247,7 @@ export default async function LotsPage({
             {zichtbaar.map((unit) => {
               const rijen = perUnit.get(unit.id) ?? [];
               const lopend = currentOwnerships(rijen);
+              const klassering = classifyOwnership(rijen);
               const status = lotStatus(unit, rijen);
               return (
                 <tr key={unit.id}>
@@ -224,18 +259,29 @@ export default async function LotsPage({
                   <Td align="end">{unit.area_m2 == null ? "—" : String(unit.area_m2)}</Td>
                   <Td align="end">{unit.tantiemes}</Td>
                   <Td>
-                    {lopend.length === 0 ? (
+                    {klassering.nActive === 0 ? (
                       <span className="text-[0.8rem] text-ink-soft">{t("noOwner")}</span>
                     ) : (
                       <span className="flex flex-col gap-0.5">
                         {lopend.map((rij) => (
-                          <Link
-                            key={rij.id}
-                            href={`/owners/${rij.owner_id}`}
-                            className="text-[0.85rem] text-primary"
-                          >
-                            {ownerNaam.get(rij.owner_id) ?? t("unknownOwner")}
-                          </Link>
+                          <span key={rij.id} className="flex flex-wrap items-center gap-1">
+                            <Link
+                              href={`/owners/${rij.owner_id}`}
+                              className="text-[0.85rem] text-primary"
+                            >
+                              {ownerNaam.get(rij.owner_id) ?? t("unknownOwner")}
+                            </Link>
+                            {/*
+                              Bij gedeelde eigendom moet zichtbaar zijn WIE de
+                              vordering krijgt. De statuskolom toont dan niet
+                              altijd "mede-eigendom" — een tantième van nul weegt
+                              zwaarder — dus deze markering staat hier, waar hij
+                              onafhankelijk van die precedentie blijft staan.
+                            */}
+                            {klassering.nActive > 1 && rij.is_primary_debtor ? (
+                              <Badge tone="info">{t("primaryDebtor")}</Badge>
+                            ) : null}
+                          </span>
                         ))}
                       </span>
                     )}
@@ -259,8 +305,12 @@ export default async function LotsPage({
             {zichtbaar.map((unit) => {
               const rijen = perUnit.get(unit.id) ?? [];
               const lopend = currentOwnerships(rijen);
+              const klassering = classifyOwnership(rijen);
               const heeftHistorie = rijen.length > 0;
-              const huidige = lopend.length === 1 ? lopend[0] : null;
+              // Overdracht blijft beperkt tot één actieve eigenaar. Dat is een
+              // grens van DEZE flow, niet van de allocatie: mede-eigendom met
+              // een aangewezen debiteur is financieel gewoon toerekenbaar.
+              const huidige = klassering.nActive === 1 ? lopend[0] : null;
 
               return (
                 <Card key={unit.id}>
@@ -307,9 +357,22 @@ export default async function LotsPage({
                               date: formatDate(huidige.start_date, locale),
                             })}
                           />
-                        ) : lopend.length > 1 ? (
+                        ) : klassering.klasse === "medeEigendom" ? (
+                          // GELDIGE mede-eigendom: de oproep kan gewoon worden
+                          // toegerekend. Alleen deze overdrachtsflow ondersteunt
+                          // hem niet. Bewust neutraal getoond, niet als fout.
                           <p className="m-0 text-[0.8rem] text-ink-soft" role="status">
-                            {t("ownership.coOwned")}
+                            {t("ownership.coOwned", {
+                              debiteur: klassering.debiteur
+                                ? (ownerNaam.get(klassering.debiteur.owner_id) ??
+                                  t("unknownOwner"))
+                                : t("unknownOwner"),
+                            })}
+                          </p>
+                        ) : klassering.klasse === "ambigu" ? (
+                          // Dit is wél een blokkade: create_charge_call weigert.
+                          <p className="m-0 text-[0.8rem] text-crit" role="alert">
+                            {t("ownership.ambiguous")}
                           </p>
                         ) : (
                           <p className="m-0 text-[0.8rem] text-ink-soft" role="status">
@@ -368,7 +431,10 @@ function Cijfer({
 const STATUS_TONE: Record<LotStatus, "good" | "warn" | "crit" | "info"> = {
   compleet: "good",
   zonderEigenaar: "crit",
-  medeEigendom: "warn",
+  // Blokkeert de oproep net zo hard als een lot zonder eigenaar.
+  ambigu: "crit",
+  // GEEN waarschuwing: een aangewezen debiteur maakt dit een geldige toestand.
+  medeEigendom: "info",
   zonderTantieme: "warn",
 };
 

@@ -9,8 +9,19 @@ import { linkFirstOwner, transferOwnership } from "./actions";
  * Formulieren voor de twee toegestane eigendomsmutaties.
  *
  * Er is bewust geen derde formulier. Mede-eigendom beheren, een gesloten
- * historie heractiveren en een toekomstige overdracht plannen vallen buiten
- * deze sprint; de database weigert ze en de UI biedt ze daarom niet aan.
+ * historie heractiveren en een toekomstige overdracht plannen vallen alle drie
+ * buiten deze sprint, maar om VERSCHILLENDE redenen — en die mogen niet op één
+ * hoop:
+ *
+ *   heractiveren, geplande overdracht  de database weigert ze werkelijk
+ *                                      (OWNERSHIP_HISTORY_EXISTS, OWNERSHIP_DATE_FUTURE);
+ *   mede-eigendom beheren              alleen `transfer_ownership` weigert
+ *                                      (OWNERSHIP_COOWNED). Een lastenoproep op
+ *                                      zo'n lot slaagt gewoon, zolang er precies
+ *                                      één aangewezen debiteur is.
+ *
+ * Deze formulieren worden daarom niet getoond bij gedeelde eigendom, maar het
+ * scherm noemt dat een grens van DEZE flow — geen financieel probleem.
  */
 
 /** Eerste koppeling: alleen zichtbaar op een lot zonder enige historie. */
