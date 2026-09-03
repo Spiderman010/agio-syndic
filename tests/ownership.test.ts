@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createTranslator } from "next-intl";
 import {
+  addDays,
   assembleOwnership,
   classifyOwnership,
   currentOwnership,
@@ -20,6 +21,7 @@ import {
   requiresRefresh,
   sortHistory,
   tantiemeOverzicht,
+  transferability,
   type OwnerRow,
   type OwnershipClass,
   type OwnershipRow,
@@ -944,9 +946,10 @@ describe("M — mede-eigendom: de app spiegelt de engine exact", () => {
     expect(uit.zonderTantieme).toBe(1);
     expect(uit.eigendomVeilig).toBe(true);
     expect(uit.tantiemesKloppen).toBe(true);
-    // De conclusie waar het om gaat: gedeelde eigendom met een aangewezen
-    // debiteur blokkeert een oproep NIET, ook niet met een tantième van nul.
-    expect(uit.oproepVeilig).toBe(true);
+    // De EIGENDOM blokkeert niet — dat is de kern van deze test. Het lot is wél
+    // onvolledig: een tantième van nul geeft ALLOC_WEIGHT_MISSING zodra het lot
+    // meedoet, dus de gebouwbrede gereedheid is onwaar. Twee losse oordelen.
+    expect(uit.oproepVeilig).toBe(false);
     // De statusbadge toont het tantièmeprobleem; de eigenaarskolom toont de
     // gedeelde eigendom. Zie de precedentie in lotStatus.
     expect(lotStatus(unit({ tantiemes: 0 }), actief(2, 1))).toBe("zonderTantieme");
@@ -1062,11 +1065,364 @@ describe("M — mede-eigendom: de app spiegelt de engine exact", () => {
       join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
       "utf8",
     );
-    // De waarschuwing hangt aan oproepVeilig, de toelichting aan medeEigendom.
-    expect(bron).toContain("!overzicht.oproepVeilig");
+    // Drie ONAFHANKELIJKE condities, elk met een eigen blok; geen ternary die er
+    // maar één van kan tonen. De toelichting hangt aan medeEigendom.
+    expect(bron).toContain("!overzicht.eigendomVeilig");
+    expect(bron).toContain("overzicht.zonderTantieme > 0");
+    expect(bron).toContain("!overzicht.tantiemesKloppen");
     expect(bron).toContain("overzicht.medeEigendom > 0");
     expect(bron).toContain("tantiemes.coOwnershipNote");
     // En de oude ongedifferentieerde waarschuwing bestaat niet meer.
     expect(bron).not.toContain('t("tantiemes.warning")');
+  });
+});
+
+// ── OVERDRAAGBAARHEID EN DATUMGRENZEN ───────────────────────────────────────
+
+/**
+ * `transferability()` spiegelt de vooraf kenbare precondities van
+ * `transfer_ownership`. Elke tak hier komt overeen met één weigering van de RPC:
+ *
+ *     OWNERSHIP_NO_CURRENT · OWNERSHIP_COOWNED · OWNERSHIP_NOT_PRIMARY
+ *     OWNERSHIP_NOT_FULL   · OWNERSHIP_DATE_NOT_AFTER_START
+ *     OWNERSHIP_DATE_FUTURE
+ *
+ * Het doel is niet beveiliging — de RPC blijft de grens — maar voorkomen dat het
+ * scherm een formulier aanbiedt waarvan vooraf vaststaat dat het wordt geweigerd.
+ */
+describe("TR — overdraagbaarheid", () => {
+  const VANDAAG = "2026-09-03";
+
+  it("TR1 — één volledige primaire eigenaar, begonnen vóór vandaag: toegestaan", () => {
+    const rijen = [own({ start_date: "2026-01-01", is_primary_debtor: true, share: 1 })];
+    const uit = transferability(rijen, VANDAAG);
+    expect(uit.allowed).toBe(true);
+    if (uit.allowed) {
+      expect(uit.current.id).toBe(rijen[0].id);
+      expect(uit.minDate).toBe("2026-01-02");
+      expect(uit.maxDate).toBe(VANDAAG);
+    }
+  });
+
+  it("TR2 — één NIET-primaire eigenaar: geen formulier, eigen reden", () => {
+    const rijen = [own({ start_date: "2026-01-01", is_primary_debtor: false })];
+    const uit = transferability(rijen, VANDAAG);
+    expect(uit.allowed).toBe(false);
+    if (!uit.allowed) {
+      expect(uit.reason).toBe("nietPrimair");
+      expect(uit.current?.id).toBe(rijen[0].id);
+    }
+    // De toestand is toerekenbaar; alleen deze flow ondersteunt hem niet.
+    expect(classifyOwnership(rijen).toewijsbaar).toBe(true);
+  });
+
+  it("TR3 — één GEDEELTELIJK aandeel: geen formulier, eigen reden", () => {
+    const rijen = [own({ start_date: "2026-01-01", is_primary_debtor: true, share: 0.5 })];
+    const uit = transferability(rijen, VANDAAG);
+    expect(uit.allowed).toBe(false);
+    if (!uit.allowed) expect(uit.reason).toBe("gedeeltelijkAandeel");
+    expect(classifyOwnership(rijen).toewijsbaar).toBe(true);
+  });
+
+  it("TR3b — een aandeel als tekst telt net zo goed als een getal", () => {
+    // PostgREST levert `numeric` als string; "0.5" mag niet stil als 1 gelden.
+    const rijen = [own({ start_date: "2026-01-01", share: "0.5" })];
+    const uit = transferability(rijen, VANDAAG);
+    expect(uit.allowed).toBe(false);
+    if (!uit.allowed) expect(uit.reason).toBe("gedeeltelijkAandeel");
+
+    const heel = transferability([own({ start_date: "2026-01-01", share: "1" })], VANDAAG);
+    expect(heel.allowed).toBe(true);
+  });
+
+  it("TR4 — eigendom die VANDAAG begon heeft geen geldige overdrachtsdatum", () => {
+    // De datum moet ná start_date liggen én mag niet in de toekomst; op de dag
+    // van ingang is dat venster leeg. Een formulier tonen zou gegarandeerd
+    // OWNERSHIP_DATE_NOT_AFTER_START opleveren.
+    const rijen = [own({ start_date: VANDAAG })];
+    const uit = transferability(rijen, VANDAAG);
+    expect(uit.allowed).toBe(false);
+    if (!uit.allowed) expect(uit.reason).toBe("vandaagBegonnen");
+    // Het venster is aantoonbaar leeg: min ligt ná max.
+    expect(addDays(VANDAAG, 1) > VANDAAG).toBe(true);
+  });
+
+  it("TR5 — minimum is exact start_date + 1, maximum is vandaag, default ertussen", () => {
+    const rijen = [own({ start_date: "2026-08-31" })];
+    const uit = transferability(rijen, VANDAAG);
+    expect(uit.allowed).toBe(true);
+    if (uit.allowed) {
+      expect(uit.minDate).toBe("2026-09-01");
+      expect(uit.maxDate).toBe("2026-09-03");
+      expect(uit.defaultDate >= uit.minDate).toBe(true);
+      expect(uit.defaultDate <= uit.maxDate).toBe(true);
+    }
+  });
+
+  it("TR5b — één dag verschil is genoeg: gisteren begonnen mag vandaag over", () => {
+    const gisteren = addDays(VANDAAG, -1);
+    const uit = transferability([own({ start_date: gisteren })], VANDAAG);
+    expect(uit.allowed).toBe(true);
+    if (uit.allowed) {
+      expect(uit.minDate).toBe(VANDAAG);
+      expect(uit.maxDate).toBe(VANDAAG);
+      expect(uit.defaultDate).toBe(VANDAAG);
+    }
+  });
+
+  it("TR6 — geen actuele eigenaar of ambigue eigendom: geen formulier", () => {
+    const geen = transferability([own({ end_date: "2026-05-31" })], VANDAAG);
+    expect(geen.allowed).toBe(false);
+    if (!geen.allowed) expect(geen.reason).toBe("geenEigenaar");
+
+    const ambigu = transferability(
+      [
+        own({ owner_id: O1, is_primary_debtor: false }),
+        own({ owner_id: O2, is_primary_debtor: false }),
+      ],
+      VANDAAG,
+    );
+    expect(ambigu.allowed).toBe(false);
+    if (!ambigu.allowed) expect(ambigu.reason).toBe("ambigu");
+  });
+
+  it("TR7 — geldige mede-eigendom blijft read-only maar is WEL toerekenbaar", () => {
+    const rijen = [
+      own({ owner_id: O1, is_primary_debtor: false }),
+      own({ owner_id: O2, is_primary_debtor: true }),
+    ];
+    const uit = transferability(rijen, VANDAAG);
+    expect(uit.allowed).toBe(false);
+    if (!uit.allowed) {
+      expect(uit.reason).toBe("medeEigendom");
+      // De aangewezen debiteur wordt meegegeven, zodat het scherm hem kan noemen.
+      expect(uit.current?.owner_id).toBe(O2);
+    }
+    // En dit is expliciet GEEN allocatieprobleem.
+    expect(classifyOwnership(rijen).toewijsbaar).toBe(true);
+    const overzicht = tantiemeOverzicht(
+      [unit({ id: U1, tantiemes: 1000 })],
+      new Map([[U1, rijen]]),
+      1000,
+    );
+    expect(overzicht.eigendomVeilig).toBe(true);
+    expect(overzicht.oproepVeilig).toBe(true);
+  });
+});
+
+describe("DT — datumrekenkunde", () => {
+  it("DT1 — maandeinde", () => {
+    expect(addDays("2026-01-31", 1)).toBe("2026-02-01");
+    expect(addDays("2026-04-30", 1)).toBe("2026-05-01");
+    expect(addDays("2026-02-28", 1)).toBe("2026-03-01"); // 2026 is geen schrikkeljaar
+  });
+
+  it("DT2 — jaargrens", () => {
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
+    expect(addDays("2027-01-01", -1)).toBe("2026-12-31");
+  });
+
+  it("DT3 — schrikkeljaar", () => {
+    // 2028 is een schrikkeljaar, 2100 niet (deelbaar door 100, niet door 400).
+    expect(addDays("2028-02-28", 1)).toBe("2028-02-29");
+    expect(addDays("2028-02-29", 1)).toBe("2028-03-01");
+    expect(addDays("2100-02-28", 1)).toBe("2100-03-01");
+    expect(addDays("2000-02-28", 1)).toBe("2000-02-29"); // deelbaar door 400
+  });
+
+  it("DT4 — nul dagen laat de datum ongemoeid en de vorm intact", () => {
+    expect(addDays("2026-09-03", 0)).toBe("2026-09-03");
+    expect(addDays("2026-01-05", 0)).toBe("2026-01-05"); // voorloopnullen blijven
+  });
+
+  it("DT5 — geen tijdzoneverschuiving: het resultaat is stabiel", () => {
+    // Een implementatie met `new Date(iso).getDate()` schuift in een tijdzone
+    // achter UTC een dag terug. Deze reeks zou dan uiteenlopen.
+    let d = "2026-01-01";
+    for (let i = 0; i < 365; i += 1) d = addDays(d, 1);
+    expect(d).toBe("2027-01-01");
+  });
+});
+
+describe("GR — gebouwbrede gereedheid", () => {
+  it("GR1 — een lot met tantième nul maakt het gebouw NIET gereed", () => {
+    // Ook wanneer het totaal toevallig klopt: ALLOC_WEIGHT_MISSING vuurt op het
+    // lot zelf, niet op de som.
+    const units = [unit({ id: U1, tantiemes: 1000 }), unit({ id: U2, tantiemes: 0 })];
+    const perUnit = new Map([
+      [U1, [own({ unit_id: U1 })]],
+      [U2, [own({ unit_id: U2, owner_id: O2 })]],
+    ]);
+    const uit = tantiemeOverzicht(units, perUnit, 1000);
+    expect(uit.tantiemesKloppen).toBe(true); // 1000 + 0 === 1000
+    expect(uit.eigendomVeilig).toBe(true);
+    expect(uit.zonderTantieme).toBe(1);
+    expect(uit.oproepVeilig).toBe(false); // <- was ten onrechte true
+  });
+
+  it("GR2 — zonder tantièmeprobleem en zonder eigendomsprobleem is het gebouw gereed", () => {
+    const units = [unit({ id: U1, tantiemes: 600 }), unit({ id: U2, tantiemes: 400 })];
+    const perUnit = new Map([
+      [U1, [own({ unit_id: U1 })]],
+      [U2, [own({ unit_id: U2, owner_id: O2 })]],
+    ]);
+    const uit = tantiemeOverzicht(units, perUnit, 1000);
+    expect(uit.zonderTantieme).toBe(0);
+    expect(uit.oproepVeilig).toBe(true);
+  });
+
+  it("GR3 — eigendomsprobleem ÉN tantièmeprobleem zijn tegelijk zichtbaar", () => {
+    // Het gebouw heeft een ambigu lot, een lot met tantième nul, en een som die
+    // het règlement niet haalt. Alle drie moeten los afleesbaar zijn.
+    const units = [
+      unit({ id: U1, tantiemes: 400 }),
+      unit({ id: U2, tantiemes: 0 }),
+      unit({ id: U3, tantiemes: 100 }),
+    ];
+    const perUnit = new Map([
+      [
+        U1,
+        [
+          own({ unit_id: U1, owner_id: O1, is_primary_debtor: false }),
+          own({ unit_id: U1, owner_id: O2, is_primary_debtor: false }),
+        ],
+      ],
+      [U2, [own({ unit_id: U2, owner_id: O1 })]],
+      [U3, [own({ unit_id: U3, owner_id: O2 })]],
+    ]);
+    const uit = tantiemeOverzicht(units, perUnit, 1000);
+
+    expect(uit.ambigu).toBe(1);
+    expect(uit.eigendomVeilig).toBe(false);
+    expect(uit.zonderTantieme).toBe(1);
+    expect(uit.tantiemesKloppen).toBe(false);
+    expect(uit.verschil).toBe(-500);
+    expect(uit.oproepVeilig).toBe(false);
+
+    // De pagina rendert deze drie als ONAFHANKELIJKE blokken; een ternary zou er
+    // maar één kunnen tonen en de andere twee verzwijgen.
+    const bron = readFileSync(
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
+      "utf8",
+    );
+    expect(bron).not.toMatch(/overzicht\.eigendomVeilig\s*\n?\s*\?\s*t\("tantiemes/);
+    for (const conditie of [
+      "!overzicht.eigendomVeilig",
+      "overzicht.zonderTantieme > 0",
+      "!overzicht.tantiemesKloppen",
+    ]) {
+      expect(bron, conditie).toContain(conditie);
+    }
+  });
+
+  it("GR4 — role=alert alleen voor de onvoorwaardelijk blokkerende meldingen", () => {
+    const bron = readFileSync(
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
+      "utf8",
+    );
+    // Het controletotaal kent in de engine een gedocumenteerde afwijking
+    // (partial_denominator_until_year) en is dus geen absolute blokkade.
+    const tantiemeBlok = bron.slice(
+      bron.indexOf("!overzicht.tantiemesKloppen"),
+      bron.indexOf("overzicht.medeEigendom > 0"),
+    );
+    expect(tantiemeBlok).toContain('role="status"');
+    expect(tantiemeBlok).not.toContain('role="alert"');
+  });
+});
+
+describe("BL — blokkadeteksten", () => {
+  const talen: Record<string, unknown> = { fr, nl, ar };
+  const sleutels = [
+    "ownership.notPrimary",
+    "ownership.partialShare",
+    "ownership.tooRecent",
+    "transfer.dateRange",
+    "tantiemes.warningZeroTantieme",
+  ];
+
+  it("BL1 — alle nieuwe sleutels bestaan paritair in fr, nl en ar", () => {
+    for (const [naam, berichten] of Object.entries(talen)) {
+      const lots = (berichten as Record<string, unknown>).lots;
+      for (const sleutel of sleutels) {
+        const waarde = sleutel
+          .split(".")
+          .reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], lots) as string;
+        expect(typeof waarde, `${naam} lots.${sleutel}`).toBe("string");
+        expect(waarde.trim().length, `${naam} lots.${sleutel}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("BL2 — geen RPC-, tabel- of foutcodenamen in de blokkadeteksten", () => {
+    for (const [naam, berichten] of Object.entries(talen)) {
+      const lots = (berichten as Record<string, Record<string, unknown>>).lots;
+      const ownership = lots.ownership as Record<string, string>;
+      for (const sleutel of ["notPrimary", "partialShare", "tooRecent", "ambiguous", "coOwned"]) {
+        expect(ownership[sleutel], `${naam} ${sleutel}`).not.toMatch(
+          /OWNERSHIP_|ALLOC_|transfer_ownership|link_first_owner|is_primary_debtor|n_active|n_primary|charge_call|SQL/i,
+        );
+      }
+    }
+  });
+
+  it("BL3 — de nieuwe teksten renderen met de echte ICU-pipeline", () => {
+    const maak = createTranslator as unknown as (opties: {
+      locale: string;
+      messages: unknown;
+      namespace: string;
+    }) => (sleutel: string, waarden?: Record<string, string | number>) => string;
+
+    for (const [naam, berichten] of Object.entries(talen)) {
+      const t = maak({ locale: naam, messages: berichten, namespace: "lots" });
+      const venster = t("transfer.dateRange", { min: "2026-01-02", max: "2026-09-03" });
+      expect(venster, naam).toContain("2026-01-02");
+      expect(venster, naam).toContain("2026-09-03");
+      expect(venster, naam).not.toContain("{");
+
+      for (const count of [0, 1, 2, 3, 11]) {
+        const zin = t("tantiemes.warningZeroTantieme", { count });
+        expect(zin.length, `${naam} count=${count}`).toBeGreaterThan(0);
+        expect(zin, `${naam} count=${count}`).not.toContain("{");
+      }
+    }
+  });
+
+  it("BL4 — elke blokkadereden heeft een tekst en het formulier krijgt grenzen", () => {
+    const bron = readFileSync(
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
+      "utf8",
+    );
+    for (const reden of [
+      "geenEigenaar",
+      "medeEigendom",
+      "ambigu",
+      "nietPrimair",
+      "gedeeltelijkAandeel",
+      "vandaagBegonnen",
+    ]) {
+      expect(bron, reden).toContain(`${reden}:`);
+    }
+    // Het formulier verschijnt uitsluitend achter de poort.
+    expect(bron).toContain("overdracht.allowed ?");
+    expect(bron).not.toContain("klassering.nActive === 1 ? lopend[0]");
+
+    const formulier = readFileSync(
+      join(
+        REPO,
+        "src",
+        "app",
+        "[locale]",
+        "(app)",
+        "buildings",
+        "[id]",
+        "lots",
+        "OwnershipForms.tsx",
+      ),
+      "utf8",
+    );
+    expect(formulier).toContain("min={minDate}");
+    expect(formulier).toContain("max={maxDate}");
+    expect(formulier).toContain("defaultValue={defaultDate}");
   });
 });

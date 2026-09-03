@@ -492,7 +492,8 @@
       "lots": "Nombre de lots",
       "warningOwnership": "Actuellement, tous les lots n'ont pas de débiteur unique. Tant qu'un lot n'a aucun propriétaire, ou plusieurs propriétaires sans débiteur désigné, aucun appel de fonds ne peut être enregistré pour cet immeuble.",
       "warningTantiemes": "Les tantièmes attribués s'écartent du total figurant au règlement de copropriété. Vérifiez la répartition avant d'enregistrer un appel de fonds.",
-      "coOwnershipNote": "{count, plural, one {# lot est détenu en indivision} other {# lots sont détenus en indivision}} avec un débiteur désigné. C'est admis : la charge entière revient à ce débiteur."
+      "coOwnershipNote": "{count, plural, one {# lot est détenu en indivision} other {# lots sont détenus en indivision}} avec un débiteur désigné. C'est admis : la charge entière revient à ce débiteur.",
+      "warningZeroTantieme": "{count, plural, one {# lot n'a pas de tantième} other {# lots n'ont pas de tantième}}. Dès qu'un tel lot participe à une répartition par tantièmes, l'appel de fonds ne peut pas être enregistré."
     },
     "search": {
       "label": "Rechercher",
@@ -528,7 +529,10 @@
       "since": "Depuis le {date}",
       "coOwned": "Ce lot est détenu en indivision, avec {debiteur} comme débiteur désigné. Les charges lui sont normalement imputées. La mutation n'est pas possible ici : ce parcours simplifié ne gère qu'un seul propriétaire.",
       "historyOnly": "Ce lot a un historique de propriété mais aucun propriétaire actuel. Contactez le support ; la réactivation sort du cadre de cette version.",
-      "ambiguous": "Ce lot a plusieurs propriétaires sans débiteur désigné. Tant que c'est le cas, aucun appel de fonds ne peut être enregistré pour cet immeuble. Contactez le support pour désigner un débiteur."
+      "ambiguous": "Ce lot a plusieurs propriétaires sans débiteur désigné. Tant que c'est le cas, aucun appel de fonds ne peut être enregistré pour cet immeuble. Contactez le support pour désigner un débiteur.",
+      "notPrimary": "Ce propriétaire n'est pas le débiteur désigné du lot. La mutation n'est donc pas possible depuis cet écran ; contactez le support.",
+      "partialShare": "Ce propriétaire ne détient qu'une partie du lot. La mutation n'est donc pas possible depuis cet écran ; contactez le support.",
+      "tooRecent": "Cette propriété a pris effet aujourd'hui. La mutation ne sera possible qu'à partir de demain, car l'ancien propriétaire le reste jusqu'à la veille de la mutation incluse."
     },
     "link": {
       "owner": "Propriétaire",
@@ -542,12 +546,12 @@
       "currentPeriod": "Période de propriété",
       "newOwner": "Nouveau propriétaire",
       "date": "Date de mutation",
-      "dateHint": "L'ancien propriétaire le reste jusqu'à la veille incluse.",
       "notice": "Les appels de fonds, paiements et écritures existants restent au nom du propriétaire actuel. Seules les charges futures reviennent au nouveau propriétaire.",
       "confirm": "Je comprends que les créances et paiements existants ne sont pas transférés.",
       "submit": "Transférer la propriété",
       "pending": "Transfert en cours…",
-      "noCandidates": "Aucun autre copropriétaire disponible. Créez d'abord un copropriétaire."
+      "noCandidates": "Aucun autre copropriétaire disponible. Créez d'abord un copropriétaire.",
+      "dateRange": "Choisissez une date entre le {min} et le {max}."
     },
     "primaryDebtor": "Débiteur"
   }

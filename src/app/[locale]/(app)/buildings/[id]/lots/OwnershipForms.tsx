@@ -87,7 +87,9 @@ export async function TransferOwnershipForm({
   current,
   currentOwnerName,
   owners,
-  today,
+  minDate,
+  maxDate,
+  defaultDate,
   periodLabel,
 }: {
   buildingId: string;
@@ -95,7 +97,15 @@ export async function TransferOwnershipForm({
   current: OwnershipRow;
   currentOwnerName: string;
   owners: readonly OwnerRow[];
-  today: string;
+  /**
+   * Het venster komt uit `transferability()` en spiegelt de RPC:
+   * `start_date + 1` tot en met vandaag. Zonder ondergrens bood het formulier
+   * datums aan waarvoor `transfer_ownership` gegarandeerd
+   * OWNERSHIP_DATE_NOT_AFTER_START geeft.
+   */
+  minDate: string;
+  maxDate: string;
+  defaultDate: string;
   periodLabel: string;
 }) {
   const t = await getTranslations("lots.transfer");
@@ -137,14 +147,20 @@ export async function TransferOwnershipForm({
         </select>
       </Field>
 
-      <Field id={`${id}-date`} label={t("date")} hint={t("dateHint")} required>
+      <Field
+        id={`${id}-date`}
+        label={t("date")}
+        hint={t("dateRange", { min: minDate, max: maxDate })}
+        required
+      >
         <input
           id={`${id}-date`}
           name="transfer_date"
           type="date"
           required
-          max={today}
-          defaultValue={today}
+          min={minDate}
+          max={maxDate}
+          defaultValue={defaultDate}
           className="input w-full"
         />
       </Field>

@@ -16,9 +16,11 @@ import {
   lotStatus,
   matchesUnitSearch,
   tantiemeOverzicht,
+  transferability,
   type LotStatus,
   type OwnerRow,
   type OwnershipRow,
+  type TransferBlockReason,
   type UnitRow,
 } from "@/lib/ownership";
 import LotForm from "./LotForm";
@@ -165,26 +167,41 @@ export default async function LotsPage({
           </dl>
 
           {/*
-            Twee VERSCHILLENDE mededelingen, bewust gescheiden.
+            Elke conditie krijgt een EIGEN regel. Een ternary toonde er hooguit
+            één, waardoor een gebouw met zowel een eigendomsprobleem als een
+            tantièmeprobleem de tweede oorzaak verzweeg — de gebruiker loste er
+            dan één op en liep tegen dezelfde weigering aan.
 
-            De waarschuwing gaat uitsluitend over toestanden waarop de engine
-            werkelijk afketst: een lot zonder eigenaar, een lot met meerdere
-            eigenaars zonder aangewezen debiteur, of een tantièmetotaal dat het
-            règlement niet haalt. Ze is geformuleerd als HUIDIGE stand — een
-            oproep rekent op zijn eigen oproepdatum en kan voor het verleden
-            anders uitpakken.
+            Alle drie zijn geformuleerd als HUIDIGE stand van de basisgegevens.
+            De engine oordeelt over de lots binnen de scope van de gekozen
+            verdeelregel en op de opgegeven oproepdatum; dat weet dit scherm
+            niet, dus het belooft geen geslaagde oproep.
 
-            Geldige mede-eigendom is géén van die toestanden en krijgt daarom
-            een neutrale toelichting in plaats van een waarschuwing. Dat was de
-            fout in de vorige versie: elk gedeeld lot maakte het gebouw
-            "onveilig", terwijl de database zo'n lot gewoon toerekent aan de
-            aangewezen debiteur.
+            `role="alert"` alleen waar de weigering onvoorwaardelijk is zodra het
+            lot meedoet: een ontbrekende of ambigue eigenaar (ALLOC_NO_OWNER,
+            ALLOC_AMBIGUOUS_OWNER) en een tantième van nul
+            (ALLOC_WEIGHT_MISSING). Het controletotaal krijgt `role="status"`:
+            de engine kent daar een gedocumenteerde afwijking
+            (`partial_denominator_until_year`), dus die is niet absoluut.
+
+            Geldige mede-eigendom staat hier bewust NIET tussen; die krijgt
+            onderaan een neutrale toelichting.
           */}
-          {!overzicht.oproepVeilig ? (
-            <p className="mt-3 mb-0 text-[0.8rem] text-warn" role="status">
-              {overzicht.eigendomVeilig
-                ? t("tantiemes.warningTantiemes")
-                : t("tantiemes.warningOwnership")}
+          {!overzicht.eigendomVeilig ? (
+            <p className="mt-3 mb-0 text-[0.8rem] text-crit" role="alert">
+              {t("tantiemes.warningOwnership")}
+            </p>
+          ) : null}
+
+          {overzicht.zonderTantieme > 0 ? (
+            <p className="mt-2 mb-0 text-[0.8rem] text-warn" role="alert">
+              {t("tantiemes.warningZeroTantieme", { count: overzicht.zonderTantieme })}
+            </p>
+          ) : null}
+
+          {!overzicht.tantiemesKloppen ? (
+            <p className="mt-2 mb-0 text-[0.8rem] text-warn" role="status">
+              {t("tantiemes.warningTantiemes")}
             </p>
           ) : null}
 
@@ -304,13 +321,14 @@ export default async function LotsPage({
           <div className="flex flex-col gap-3">
             {zichtbaar.map((unit) => {
               const rijen = perUnit.get(unit.id) ?? [];
-              const lopend = currentOwnerships(rijen);
               const klassering = classifyOwnership(rijen);
               const heeftHistorie = rijen.length > 0;
-              // Overdracht blijft beperkt tot één actieve eigenaar. Dat is een
-              // grens van DEZE flow, niet van de allocatie: mede-eigendom met
-              // een aangewezen debiteur is financieel gewoon toerekenbaar.
-              const huidige = klassering.nActive === 1 ? lopend[0] : null;
+              // Alle vooraf kenbare precondities van transfer_ownership in één
+              // geteste beslissing, inclusief het datumvenster. Eerder stond
+              // hier alleen `nActive === 1`, waardoor een formulier verscheen
+              // dat gegarandeerd faalde bij een niet-primaire eigenaar, een
+              // gedeeltelijk aandeel, of een eigendom die vandaag begon.
+              const overdracht = transferability(rijen, vandaag);
 
               return (
                 <Card key={unit.id}>
@@ -343,41 +361,33 @@ export default async function LotsPage({
                             owners={bronnen.owners}
                             today={vandaag}
                           />
-                        ) : huidige ? (
+                        ) : overdracht.allowed ? (
                           <TransferOwnershipForm
                             buildingId={buildingId}
                             unitId={unit.id}
-                            current={huidige}
+                            current={overdracht.current}
                             currentOwnerName={
-                              ownerNaam.get(huidige.owner_id) ?? t("unknownOwner")
+                              ownerNaam.get(overdracht.current.owner_id) ?? t("unknownOwner")
                             }
                             owners={bronnen.owners}
-                            today={vandaag}
+                            minDate={overdracht.minDate}
+                            maxDate={overdracht.maxDate}
+                            defaultDate={overdracht.defaultDate}
                             periodLabel={t("ownership.since", {
-                              date: formatDate(huidige.start_date, locale),
+                              date: formatDate(overdracht.current.start_date, locale),
                             })}
                           />
-                        ) : klassering.klasse === "medeEigendom" ? (
-                          // GELDIGE mede-eigendom: de oproep kan gewoon worden
-                          // toegerekend. Alleen deze overdrachtsflow ondersteunt
-                          // hem niet. Bewust neutraal getoond, niet als fout.
-                          <p className="m-0 text-[0.8rem] text-ink-soft" role="status">
-                            {t("ownership.coOwned", {
-                              debiteur: klassering.debiteur
+                        ) : (
+                          <Blokkade
+                            reason={overdracht.reason}
+                            t={t}
+                            debiteur={
+                              klassering.debiteur
                                 ? (ownerNaam.get(klassering.debiteur.owner_id) ??
                                   t("unknownOwner"))
-                                : t("unknownOwner"),
-                            })}
-                          </p>
-                        ) : klassering.klasse === "ambigu" ? (
-                          // Dit is wél een blokkade: create_charge_call weigert.
-                          <p className="m-0 text-[0.8rem] text-crit" role="alert">
-                            {t("ownership.ambiguous")}
-                          </p>
-                        ) : (
-                          <p className="m-0 text-[0.8rem] text-ink-soft" role="status">
-                            {t("ownership.historyOnly")}
-                          </p>
+                                : t("unknownOwner")
+                            }
+                          />
                         )}
                       </div>
                     </div>
@@ -425,6 +435,48 @@ function Cijfer({
         {waarde}
       </dd>
     </div>
+  );
+}
+
+/**
+ * Waarom de eenvoudige overdrachtsflow hier niet beschikbaar is.
+ *
+ * Alleen `ambigu` is een echte blokkade voor lastenoproepen en krijgt daarom
+ * `role="alert"`. De overige redenen zijn grenzen van DEZE flow: het lot is
+ * financieel gewoon in orde, er kan hier alleen niet worden overgedragen. Die
+ * krijgen een neutrale statusmelding, zodat een beheerder niet gaat zoeken naar
+ * een probleem dat er niet is.
+ *
+ * Geen RPC-, tabel- of foutcodenamen in de teksten; de sleutels verwijzen naar
+ * de vertaling.
+ */
+const BLOKKADE_TEKST: Record<TransferBlockReason, string> = {
+  geenEigenaar: "ownership.historyOnly",
+  medeEigendom: "ownership.coOwned",
+  ambigu: "ownership.ambiguous",
+  nietPrimair: "ownership.notPrimary",
+  gedeeltelijkAandeel: "ownership.partialShare",
+  vandaagBegonnen: "ownership.tooRecent",
+};
+
+function Blokkade({
+  reason,
+  t,
+  debiteur,
+}: {
+  reason: TransferBlockReason;
+  t: Awaited<ReturnType<typeof getTranslations>>;
+  debiteur: string;
+}) {
+  const blokkerend = reason === "ambigu";
+  const sleutel = BLOKKADE_TEKST[reason];
+  return (
+    <p
+      className={`m-0 text-[0.8rem] ${blokkerend ? "text-crit" : "text-ink-soft"}`}
+      role={blokkerend ? "alert" : "status"}
+    >
+      {reason === "medeEigendom" ? t(sleutel as never, { debiteur }) : t(sleutel as never)}
+    </p>
   );
 }
 

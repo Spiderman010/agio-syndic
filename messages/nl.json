@@ -492,7 +492,8 @@
       "lots": "Aantal lots",
       "warningOwnership": "Op dit moment heeft niet elk lot een eenduidige debiteur. Zolang een lot geen eigenaar heeft, of meerdere eigenaars zonder aangewezen debiteur, kan een lastenoproep voor dit gebouw niet worden vastgelegd.",
       "warningTantiemes": "De toegekende tantièmes wijken af van het totaal uit het règlement de copropriété. Controleer de verdeling voordat u een lastenoproep vastlegt.",
-      "coOwnershipNote": "{count, plural, one {# lot heeft meerdere eigenaars} other {# lots hebben meerdere eigenaars}} met een aangewezen debiteur. Dat is toegestaan: de volledige last gaat naar die debiteur."
+      "coOwnershipNote": "{count, plural, one {# lot heeft meerdere eigenaars} other {# lots hebben meerdere eigenaars}} met een aangewezen debiteur. Dat is toegestaan: de volledige last gaat naar die debiteur.",
+      "warningZeroTantieme": "{count, plural, one {# lot heeft geen tantième} other {# lots hebben geen tantième}}. Zodra zo'n lot meedoet in een verdeling op tantièmes, kan de lastenoproep niet worden vastgelegd."
     },
     "search": {
       "label": "Zoeken",
@@ -528,7 +529,10 @@
       "since": "Sinds {date}",
       "coOwned": "Dit lot heeft meerdere eigenaars met {debiteur} als aangewezen debiteur. Lasten worden gewoon aan die debiteur toegerekend. Overdragen kan hier niet: deze eenvoudige flow werkt alleen bij één eigenaar.",
       "historyOnly": "Dit lot heeft eigendomshistorie maar geen actuele eigenaar. Neem contact op met support; heractiveren valt buiten deze versie.",
-      "ambiguous": "Dit lot heeft meerdere eigenaars zonder aangewezen debiteur. Zolang dat zo is, kan er geen lastenoproep voor dit gebouw worden vastgelegd. Neem contact op met support om een debiteur aan te wijzen."
+      "ambiguous": "Dit lot heeft meerdere eigenaars zonder aangewezen debiteur. Zolang dat zo is, kan er geen lastenoproep voor dit gebouw worden vastgelegd. Neem contact op met support om een debiteur aan te wijzen.",
+      "notPrimary": "Deze eigenaar is niet de aangewezen debiteur van het lot. Overdragen kan daarom niet via dit scherm; neem contact op met support.",
+      "partialShare": "Deze eigenaar heeft een gedeeltelijk aandeel in het lot. Overdragen kan daarom niet via dit scherm; neem contact op met support.",
+      "tooRecent": "Deze eigendom is vandaag ingegaan. Overdragen kan pas vanaf morgen, omdat de vorige eigenaar tot en met de dag vóór de overdracht eigenaar blijft."
     },
     "link": {
       "owner": "Eigenaar",
@@ -542,12 +546,12 @@
       "currentPeriod": "Eigendomsperiode",
       "newOwner": "Nieuwe eigenaar",
       "date": "Overdrachtsdatum",
-      "dateHint": "De oude eigenaar blijft eigenaar tot en met de dag ervóór.",
       "notice": "Bestaande lastenoproepen, betalingen en journaalposten blijven op naam van de huidige eigenaar staan. Alleen toekomstige lasten gaan naar de nieuwe eigenaar.",
       "confirm": "Ik begrijp dat de bestaande vorderingen en betalingen niet meeverhuizen.",
       "submit": "Eigendom overdragen",
       "pending": "Bezig met overdragen…",
-      "noCandidates": "Er is geen andere eigenaar om aan over te dragen. Maak eerst een eigenaar aan."
+      "noCandidates": "Er is geen andere eigenaar om aan over te dragen. Maak eerst een eigenaar aan.",
+      "dateRange": "Kies een datum tussen {min} en {max}."
     },
     "primaryDebtor": "Debiteur"
   }

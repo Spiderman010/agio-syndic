@@ -326,6 +326,112 @@ export function classifyOwnership(
   };
 }
 
+// ── Overdraagbaarheid ───────────────────────────────────────────────────────
+
+/**
+ * Telt hele dagen op bij een ISO-datum (`YYYY-MM-DD`).
+ *
+ * Via `Date.UTC` en de UTC-getters, nooit via de lokale tijdzone: `new Date(iso)`
+ * gevolgd door `getDate()` verschuift rond middernacht een dag, en een
+ * overdrachtsdatum die een dag opschuift is precies de fout die de D-1/D-grens
+ * onbruikbaar maakt. Maand-, jaar- en schrikkeljaargrenzen worden door de
+ * kalenderrekenkunde van `Date.UTC` correct afgehandeld.
+ */
+export function addDays(iso: string, days: number): string {
+  const [jaar, maand, dag] = iso.split("-").map(Number);
+  const punt = new Date(Date.UTC(jaar, maand - 1, dag + days));
+  return [
+    String(punt.getUTCFullYear()).padStart(4, "0"),
+    String(punt.getUTCMonth() + 1).padStart(2, "0"),
+    String(punt.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+/** Waarom de eenvoudige overdrachtsflow niet beschikbaar is. */
+export type TransferBlockReason =
+  /** Nul actuele eigenaars; er is niets over te dragen. */
+  | "geenEigenaar"
+  /** Meerdere eigenaars met een aangewezen debiteur; geldig, maar read-only. */
+  | "medeEigendom"
+  /** Meerdere eigenaars zonder aangewezen debiteur. */
+  | "ambigu"
+  /** Eén eigenaar, maar niet de aangewezen debiteur. */
+  | "nietPrimair"
+  /** Eén eigenaar met een gedeeltelijk aandeel. */
+  | "gedeeltelijkAandeel"
+  /** De eigendom begon vandaag: er bestaat geen geldige overdrachtsdatum. */
+  | "vandaagBegonnen";
+
+export type Transferability =
+  | {
+      allowed: true;
+      current: OwnershipRow;
+      /** Vroegst toegestane datum: `start_date + 1`. */
+      minDate: string;
+      /** Laatst toegestane datum: vandaag. */
+      maxDate: string;
+      /** Een gegarandeerd geldige standaardwaarde binnen [minDate, maxDate]. */
+      defaultDate: string;
+    }
+  | { allowed: false; reason: TransferBlockReason; current: OwnershipRow | null };
+
+/**
+ * Mag deze eigendom via de eenvoudige overdrachtsflow worden overgedragen?
+ *
+ * Spiegelt de VOORAF KENBARE precondities van `transfer_ownership`, in dezelfde
+ * volgorde waarin de RPC ze afdwingt:
+ *
+ *     v_n = 0                          -> OWNERSHIP_NO_CURRENT
+ *     v_n > 1                          -> OWNERSHIP_COOWNED
+ *     NOT v_cur.is_primary_debtor      -> OWNERSHIP_NOT_PRIMARY
+ *     v_cur.share <> 1                 -> OWNERSHIP_NOT_FULL
+ *     p_transfer_date <= start_date    -> OWNERSHIP_DATE_NOT_AFTER_START
+ *     p_transfer_date >  CURRENT_DATE  -> OWNERSHIP_DATE_FUTURE
+ *
+ * De laatste twee samen bepalen het datumvenster: [start_date + 1, vandaag].
+ * Is dat venster LEEG — de eigendom begon vandaag — dan bestaat er vandaag geen
+ * enkele geldige overdrachtsdatum en heeft een formulier tonen geen zin.
+ *
+ * Dit is een UI-poort, geen beveiliging: de RPC controleert alles nogmaals op
+ * basis van `auth.uid()` en blijft de autoritatieve grens. Wat deze functie
+ * voorkomt is een formulier waarvan we vooraf WETEN dat het wordt geweigerd.
+ *
+ * Wat hier NIET wordt beoordeeld: of een lastenoproep zou slagen. Een
+ * niet-overdraagbaar lot is niet automatisch financieel onveilig — geldige
+ * mede-eigendom is daar het duidelijkste voorbeeld van. Zie `classifyOwnership`.
+ */
+export function transferability(
+  ownership: readonly OwnershipRow[],
+  today: string,
+): Transferability {
+  const { klasse, debiteur } = classifyOwnership(ownership);
+
+  if (klasse === "geenEigenaar") return { allowed: false, reason: "geenEigenaar", current: null };
+  if (klasse === "ambigu") return { allowed: false, reason: "ambigu", current: debiteur };
+  if (klasse === "medeEigendom") {
+    return { allowed: false, reason: "medeEigendom", current: debiteur };
+  }
+
+  // Vanaf hier: precies één actuele rij.
+  const current = debiteur as OwnershipRow;
+  if (!current.is_primary_debtor) {
+    return { allowed: false, reason: "nietPrimair", current };
+  }
+  if (num(current.share) !== 1) {
+    return { allowed: false, reason: "gedeeltelijkAandeel", current };
+  }
+
+  const minDate = addDays(current.start_date, 1);
+  const maxDate = today;
+  if (minDate > maxDate) {
+    return { allowed: false, reason: "vandaagBegonnen", current };
+  }
+
+  // `maxDate` ligt per definitie in het venster en is de gebruikelijke keuze:
+  // een overdracht wordt meestal op de dag zelf vastgelegd.
+  return { allowed: true, current, minDate, maxDate, defaultDate: maxDate };
+}
+
 // ── Volledigheid ────────────────────────────────────────────────────────────
 
 export type LotStatus =
@@ -390,20 +496,28 @@ export type TantiemeOverzicht = {
   /** De toegekende tantièmes halen het verklaarde totaal precies. */
   tantiemesKloppen: boolean;
   /**
-   * Kan er op dit moment veilig een lastenoproep worden gedaan?
+   * Zijn de basisgegevens van dit gebouw COMPLEET genoeg om een lastenoproep op
+   * te baseren?
    *
-   * Uitsluitend de toestanden waarop `create_charge_call` werkelijk afketst:
-   * een lot zonder eigenaar en een lot met meerdere eigenaars zonder
-   * eenduidige debiteur. GELDIGE MEDE-EIGENDOM TELT HIER NIET MEE — die is
-   * ondersteund en de aangewezen debiteur krijgt de volledige allocatie.
+   * Bewust "gereedheid" en niet "deze oproep zal slagen". De engine oordeelt
+   * over de lots die in de SCOPE van de gekozen verdeelregel vallen, op de
+   * opgegeven `call_date`, en dat weet dit scherm allebei niet. Wat het wel kan
+   * beoordelen is of er iets ontbreekt dat een oproep zou blokkeren zodra het
+   * betrokken lot meedoet.
    *
-   * Het tantièmeverschil blijft een aparte voorwaarde: het is een declaratieve
-   * controlewaarde uit het règlement de copropriété, en een afwijking hoort de
-   * gebruiker te zien voordat hij oproept.
+   * Drie voorwaarden, elk een directe tegenhanger van een harde fout uit
+   * `create_charge_call` (m20):
    *
-   * Dit is een WAARSCHUWING op de HUIDIGE toestand, geen blokkade en geen
-   * uitspraak over elke denkbare oproepdatum: de database beslist, en zij
-   * rekent op de opgegeven `call_date`.
+   *   eigendomVeilig     geen lot zonder eigenaar (ALLOC_NO_OWNER) en geen lot
+   *                      met meerdere eigenaars zonder eenduidige debiteur
+   *                      (ALLOC_AMBIGUOUS_OWNER, alleen bij n_primary <> 1);
+   *   zonderTantieme = 0 geen deelnemend lot met tantième nul
+   *                      (ALLOC_WEIGHT_MISSING, m20 regel 164-170);
+   *   tantiemesKloppen   de som haalt de controlewaarde uit het règlement
+   *                      (ALLOC_CONTROL_TOTAL, m20 regel 243-257).
+   *
+   * GELDIGE MEDE-EIGENDOM TELT HIER NIET MEE: die is ondersteund, en de
+   * aangewezen debiteur krijgt de volledige allocatie.
    */
   oproepVeilig: boolean;
 };
@@ -444,7 +558,11 @@ export function tantiemeOverzicht(
     zonderTantieme,
     eigendomVeilig,
     tantiemesKloppen,
-    oproepVeilig: units.length > 0 && eigendomVeilig && tantiemesKloppen,
+    // `zonderTantieme` werd geteld maar niet meegewogen; een gebouw waarvan de
+    // tantièmes toevallig optelden kon daardoor als gereed gelden terwijl een
+    // deelnemend lot gewicht nul had en de engine ALLOC_WEIGHT_MISSING geeft.
+    oproepVeilig:
+      units.length > 0 && eigendomVeilig && tantiemesKloppen && zonderTantieme === 0,
   };
 }
 
