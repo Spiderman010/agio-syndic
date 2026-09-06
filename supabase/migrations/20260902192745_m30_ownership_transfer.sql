@@ -13,14 +13,15 @@
 -- Deze migratie maakt de database de enige plek waar de regels leven.
 --
 --   1. preflight          — fail-closed op bestaande conflicten, alleen aantallen
---   2. btree_gist         — in het bestaande `extensions`-schema
---   3. exclusion          — primaire perioden per lot mogen nooit overlappen
---   4. exclusion          — dezelfde eigenaar nooit twee keer tegelijk op een lot
---   5. historieguard      — DELETE verboden, UPDATE alleen "periode afsluiten"
---   6. link_first_owner   — eerste koppeling van een nog ongekoppeld lot
---   7. transfer_ownership — atomaire overdracht met stale-writebescherming
---   8. rechten            — directe DML dicht, alles via de twee RPC's
---   9. postcheck          — de migratie bewijst haar eigen eindtoestand
+--   2. tenantsleutel      — `ownership.organization_id`, onveranderlijk en FK-vast
+--   3. btree_gist         — in het bestaande `extensions`-schema
+--   4. exclusion          — primaire perioden per lot mogen nooit overlappen
+--   5. exclusion          — dezelfde eigenaar nooit twee keer tegelijk op een lot
+--   6. historieguard      — DELETE verboden, UPDATE alleen "periode afsluiten"
+--   7. link_first_owner   — eerste koppeling van een nog ongekoppeld lot
+--   8. transfer_ownership — atomaire overdracht met stale-writebescherming
+--   9. rechten            — directe DML dicht, alles via de twee RPC's
+--  10. postcheck          — de migratie bewijst haar eigen eindtoestand
 --
 -- ── DATUMSEMANTIEK ─────────────────────────────────────────────────────────
 --
@@ -98,13 +99,106 @@ BEGIN
 END $preflight$;
 
 
--- ──────────────────────────────────────────────────────────── 2. extensie ───
+-- ─────────────────────────────────────────────────────── 2. tenantsleutel ───
+--
+-- WAAROM `ownership` EEN EIGEN `organization_id` KRIJGT
+--
+-- De historieguard hieronder moet bij een DELETE weten tot welke organisatie de
+-- rij hoort. Die vraag werd eerder beantwoord door de OUDERS te bevragen
+-- (owners, of units -> buildings). Dat is aantoonbaar onjuist: tijdens een
+-- volledige organisatiecascade verwijdert PostgreSQL owners, units en buildings
+-- VOORDAT de bijbehorende eigendomsrijen aan de beurt zijn. Beide ouderketens
+-- zijn dan al onzichtbaar, de organisatie kan niet meer worden herleid, en de
+-- fail-closed-tak blokkeert precies de cascade die had moeten slagen.
+--
+-- De sleutel staat daarom vanaf nu OP DE RIJ ZELF. `OLD.organization_id` is bij
+-- een DELETE altijd beschikbaar, ongeacht wat de cascade al heeft opgeruimd.
+--
+-- WAAROM DIE KOLOM NIET TE VERVALSEN IS
+--
+--   1. de samengestelde FK naar `owners (id, organization_id)` maakt het
+--      structureel onmogelijk dat de kolom een ANDERE organisatie noemt dan de
+--      eigenaar. Dit is het bewezen patroon uit m8 sectie 7 en werkt ongeacht
+--      applicatiecode, RLS of rol;
+--   2. `trig_00_ownership_tenant_guard` (m8) dwingt al af dat de eigenaar en het
+--      lot in dezelfde organisatie zitten. Samen pinnen 1 en 2 de kolom vast op
+--      exact een tenant;
+--   3. de kolom staat in de immutabiliteitslijst van de UPDATE-tak hieronder en
+--      kan dus niet naar een andere organisatie worden omgezet;
+--   4. de FK naar `organizations` maakt de tenantcascade expliciet in plaats van
+--      impliciet via de ouderketen.
+--
+-- De oplossing leunt bewust NIET op triggervolgorde, `pg_trigger_depth()`, een
+-- instelbare GUC, foutmeldingstekst of een rolnaam. Ze rust uitsluitend op
+-- declaratieve constraints plus een waarde die op de rij zelf staat.
+ALTER TABLE public.ownership ADD COLUMN IF NOT EXISTS organization_id uuid;
+
+-- Backfill vanuit de eigenaar. m8 garandeert dat de eigenaar en het lot in
+-- dezelfde organisatie zitten, dus deze bron is eenduidig.
+UPDATE public.ownership o
+   SET organization_id = w.organization_id
+  FROM public.owners w
+ WHERE w.id = o.owner_id
+   AND o.organization_id IS DISTINCT FROM w.organization_id;
+
+-- Fail-closed validatie van de backfill. Rapporteert uitsluitend aantallen:
+-- geen id's en geen persoonsgegevens in het migratielog.
+DO $tenantcheck$
+DECLARE n_leeg int; n_mismatch int;
+BEGIN
+  SELECT count(*) INTO n_leeg
+    FROM public.ownership WHERE organization_id IS NULL;
+  IF n_leeg > 0 THEN
+    RAISE EXCEPTION
+      'M30_TENANT_BACKFILL_FAILED: % eigendomsrij(en) zonder herleidbare organisatie.', n_leeg
+      USING ERRCODE = '23514';
+  END IF;
+
+  SELECT count(*) INTO n_mismatch
+    FROM public.ownership o
+    JOIN public.units u     ON u.id = o.unit_id
+    JOIN public.buildings b ON b.id = u.building_id
+   WHERE b.organization_id <> o.organization_id;
+  IF n_mismatch > 0 THEN
+    RAISE EXCEPTION
+      'M30_TENANT_MISMATCH: % eigendomsrij(en) waarvan lot en eigenaar in verschillende organisaties zitten.', n_mismatch
+      USING ERRCODE = '23514';
+  END IF;
+END $tenantcheck$;
+
+ALTER TABLE public.ownership ALTER COLUMN organization_id SET NOT NULL;
+
+-- Samengestelde FK: bewakend, NO ACTION. Het ON DELETE-gedrag blijft bij de
+-- bestaande enkelvoudige FK op `owner_id`, precies zoals m8 sectie 7 het doet.
+ALTER TABLE public.ownership
+  DROP CONSTRAINT IF EXISTS ownership_owner_org_fk;
+ALTER TABLE public.ownership
+  ADD CONSTRAINT ownership_owner_org_fk
+  FOREIGN KEY (owner_id, organization_id)
+  REFERENCES public.owners (id, organization_id);
+
+-- Expliciete tenantcascade. Hiermee bereikt een organisatieverwijdering de
+-- eigendomsrijen ook rechtstreeks, niet alleen via de ouderketen.
+ALTER TABLE public.ownership
+  DROP CONSTRAINT IF EXISTS ownership_org_fk;
+ALTER TABLE public.ownership
+  ADD CONSTRAINT ownership_org_fk
+  FOREIGN KEY (organization_id)
+  REFERENCES public.organizations (id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS ownership_org_idx ON public.ownership (organization_id);
+
+COMMENT ON COLUMN public.ownership.organization_id IS
+  'Tenantsleutel op de rij zelf. Onveranderlijk; door samengestelde FK vastgepind op de organisatie van de eigenaar. Maakt de cascadebeslissing in fn_guard_ownership_history onafhankelijk van ouderrijen die een cascade al heeft verwijderd.';
+
+
+-- ──────────────────────────────────────────────────────────── 3. extensie ───
 -- Projectconventie: extensies staan in `extensions`, niet in `public`
 -- (pgcrypto, uuid-ossp en pg_stat_statements staan daar al).
 CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA extensions;
 
 
--- ────────────────────────────────────────────── 3/4. exclusion constraints ───
+-- ────────────────────────────────────────────── 4/5. exclusion constraints ───
 --
 -- WAAROM DE EERSTE ALLEEN OVER PRIMAIRE PERIODEN GAAT
 --
@@ -138,7 +232,7 @@ ALTER TABLE public.ownership
   );
 
 
--- ─────────────────────────────────────────────────────── 5. historieguard ───
+-- ─────────────────────────────────────────────────────── 6. historieguard ───
 --
 -- Databasebreed, dus ook voor `postgres`, de SQL-editor en toekomstige RPC's.
 -- De Data API wordt in stap 8 al op grantniveau gesloten; deze trigger
@@ -166,18 +260,30 @@ ALTER TABLE public.ownership
 -- over waarop `link_first_owner()` misleidend kan worden gebruikt. De vraag is
 -- dus niet "bestaat mijn directe ouder nog" maar "bestaat de ORGANISATIE nog".
 --
--- De organisatie wordt herleid via de ouderketen die op dat moment NOG bestaat.
--- Dat werkt omdat beide ketens door verschillende cascades worden geraakt en er
--- per DELETE altijd precies een overleeft:
+-- EERDERE, ONJUISTE AANPAK — bewaard omdat de reden ertoe doet.
 --
---   losse owner-delete    -> owner weg, unit bestaat -> via unit  -> org bestaat -> WEIGEREN
---   losse unit-delete     -> unit weg, owner bestaat -> via owner -> org bestaat -> WEIGEREN
---   losse building-delete -> unit weg, owner bestaat -> via owner -> org bestaat -> WEIGEREN
---   organisatiecascade    -> een van beide bestaat nog, org is al weg -> TOESTAAN
+-- De organisatie werd herleid via de ouderketen, in de veronderstelling dat er
+-- per DELETE altijd precies een ouder overleeft. Een lokale integratietest op
+-- PostgreSQL 17 weerlegde dat: bij `DELETE FROM organizations` zijn owners,
+-- units EN buildings al verwijderd voordat de eigendomsrijen aan de beurt zijn.
+-- Beide ketens leveren dan NULL op, de fail-closed-tak sluit, en de volledige
+-- organisatiecascade wordt geblokkeerd — terwijl juist die had moeten slagen.
 --
--- Kan geen van beide ouders meer worden herleid, dan weigeren we (fail-closed).
--- Die toestand hoort onbereikbaar te zijn: alle FK's op `ownership` zijn
--- NOT DEFERRABLE, dus cascades lopen direct en nooit twee tegelijk.
+-- HUIDIGE AANPAK — de tenantsleutel staat op de rij zelf (sectie 2).
+--
+--   losse owner-delete    -> OLD.organization_id -> organisatie bestaat -> WEIGEREN
+--   losse unit-delete     -> OLD.organization_id -> organisatie bestaat -> WEIGEREN
+--   losse building-delete -> OLD.organization_id -> organisatie bestaat -> WEIGEREN
+--   organisatiecascade    -> OLD.organization_id -> organisatie is weg   -> TOESTAAN
+--
+-- `OLD.organization_id` is NOT NULL en staat op de rij, dus de beslissing hangt
+-- niet meer af van wat de cascade al heeft opgeruimd. Er is geen ambigue
+-- toestand meer waarin de organisatie onherleidbaar is.
+--
+-- De enige manier waarop de escape opengaat, is dat de organisatierij werkelijk
+-- niet meer bestaat. Dat betekent per definitie dat de tenant wordt verwijderd,
+-- en die verwijdering neemt via `ownership_org_fk` diezelfde eigendomsrijen mee.
+-- Er is dus geen tussentoestand waarin iemand selectief rijen kan wissen.
 --
 -- De functie moet hiervoor tabellen lezen zonder afhankelijk te zijn van
 -- RLS-zichtbaarheid; daarom SECURITY DEFINER met een lege search_path en
@@ -189,36 +295,19 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $fn$
-DECLARE
-  v_org uuid;
 BEGIN
   -- ── DELETE ───────────────────────────────────────────────────────────────
   IF TG_OP = 'DELETE' THEN
-    SELECT o.organization_id INTO v_org
-      FROM public.owners o
-     WHERE o.id = OLD.owner_id;
-
-    IF v_org IS NULL THEN
-      SELECT b.organization_id INTO v_org
-        FROM public.units u
-        JOIN public.buildings b ON b.id = u.building_id
-       WHERE u.id = OLD.unit_id;
-    END IF;
-
-    -- Geen ouder meer herleidbaar: we kunnen niet BEWIJZEN dat dit een
-    -- volledige tenantverwijdering is. Fail-closed.
-    IF v_org IS NULL THEN
+    -- De tenantsleutel staat op de rij zelf; er wordt GEEN ouder bevraagd, want
+    -- die kan door de lopende cascade al verwijderd zijn. Zie sectie 2.
+    --
+    -- Bestaat de organisatie nog, dan is dit een losse owner-, unit- of
+    -- building-delete en mag de eigendomsketen niet worden gewist.
+    IF EXISTS (SELECT 1 FROM public.organizations WHERE id = OLD.organization_id) THEN
       RAISE EXCEPTION 'OWNERSHIP_DELETE_FORBIDDEN' USING ERRCODE = '23514';
     END IF;
 
-    -- De organisatie bestaat nog: dit is een losse owner-, unit- of
-    -- building-delete en mag de eigendomsketen niet wissen.
-    IF EXISTS (SELECT 1 FROM public.organizations WHERE id = v_org) THEN
-      RAISE EXCEPTION 'OWNERSHIP_DELETE_FORBIDDEN' USING ERRCODE = '23514';
-    END IF;
-
-    -- De organisatie is in deze cascade al verdwenen: volledige
-    -- tenantverwijdering, de bestaande invariant blijft gelden.
+    -- De organisatie is al verdwenen: dit is een volledige tenantverwijdering.
     RETURN OLD;
   END IF;
 
@@ -228,6 +317,15 @@ BEGIN
     OR (NEW.end_date IS NOT NULL AND NEW.end_date > CURRENT_DATE) THEN
       RAISE EXCEPTION 'OWNERSHIP_DATE_FUTURE' USING ERRCODE = '23514';
     END IF;
+
+    -- Comfortinvulling voor schrijvers die de tenantsleutel niet meegeven. Een
+    -- WEL meegegeven waarde blijft staan en wordt door `ownership_owner_org_fk`
+    -- gecontroleerd; deze tak kan een verkeerde waarde dus niet maskeren.
+    IF NEW.organization_id IS NULL THEN
+      SELECT w.organization_id INTO NEW.organization_id
+        FROM public.owners w WHERE w.id = NEW.owner_id;
+    END IF;
+
     RETURN NEW;
   END IF;
 
@@ -238,6 +336,7 @@ BEGIN
   IF NEW.id                IS DISTINCT FROM OLD.id
   OR NEW.unit_id           IS DISTINCT FROM OLD.unit_id
   OR NEW.owner_id          IS DISTINCT FROM OLD.owner_id
+  OR NEW.organization_id   IS DISTINCT FROM OLD.organization_id
   OR NEW.start_date        IS DISTINCT FROM OLD.start_date
   OR NEW.share             IS DISTINCT FROM OLD.share
   OR NEW.is_primary_debtor IS DISTINCT FROM OLD.is_primary_debtor
@@ -267,7 +366,7 @@ CREATE TRIGGER trig_01_ownership_history
   FOR EACH ROW EXECUTE FUNCTION public.fn_guard_ownership_history();
 
 
--- ────────────────────────────────────────────────────── 6. eerste koppeling ──
+-- ────────────────────────────────────────────────────── 7. eerste koppeling ──
 --
 -- "Eerste koppeling" betekent hier: er bestaat NOG GEEN ENKELE eigendomsrij voor
 -- dit lot. Historie zonder actuele eigenaar is een andere toestand en krijgt
@@ -323,17 +422,19 @@ BEGIN
     RAISE EXCEPTION 'OWNERSHIP_HISTORY_EXISTS' USING ERRCODE = '23514';
   END IF;
 
+  -- `organization_id` wordt expliciet gezet, niet aan de comfortinvulling in de
+  -- historieguard overgelaten: hier is de tenant al bewezen via can_write().
   INSERT INTO public.ownership
-    (owner_id, unit_id, share, start_date, end_date, is_primary_debtor)
+    (owner_id, unit_id, organization_id, share, start_date, end_date, is_primary_debtor)
   VALUES
-    (p_owner_id, p_unit_id, 1, p_start_date, NULL, true)
+    (p_owner_id, p_unit_id, v_org, 1, p_start_date, NULL, true)
   RETURNING id INTO v_id;
 
   RETURN v_id;
 END $fn$;
 
 
--- ────────────────────────────────────────────────────────── 7. overdracht ────
+-- ────────────────────────────────────────────────────────── 8. overdracht ────
 --
 -- ── WAAROM EEN VERWACHTE HUIDIGE RIJ ───────────────────────────────────────
 --
@@ -445,9 +546,9 @@ BEGIN
    WHERE id = v_cur.id;
 
   INSERT INTO public.ownership
-    (owner_id, unit_id, share, start_date, end_date, is_primary_debtor)
+    (owner_id, unit_id, organization_id, share, start_date, end_date, is_primary_debtor)
   VALUES
-    (p_new_owner_id, p_unit_id, 1, p_transfer_date, NULL, true)
+    (p_new_owner_id, p_unit_id, v_org, 1, p_transfer_date, NULL, true)
   RETURNING id INTO v_new;
 
   RETURN v_new;
@@ -460,7 +561,7 @@ EXCEPTION
 END $fn$;
 
 
--- ───────────────────────────────────────────────────────────── 8. rechten ────
+-- ───────────────────────────────────────────────────────────── 9. rechten ────
 --
 -- Een begrijpelijk model: de API LEEST via RLS en SCHRIJFT via de twee RPC's.
 -- Privileged paden vallen onder de trigger uit stap 5.
@@ -503,7 +604,7 @@ COMMENT ON CONSTRAINT ownership_primary_period_excl ON public.ownership IS
   'Aangewezen debiteuren mogen per lot nooit overlappende perioden hebben, ook niet tussen gesloten perioden. Mede-eigendom blijft mogelijk: niet-primaire rijen vallen buiten deze constraint.';
 
 
--- ─────────────────────────────────────────────────────────── 9. postcheck ────
+-- ─────────────────────────────────────────────────────────── 10. postcheck ────
 -- De migratie bewijst haar eigen eindtoestand SEMANTISCH, niet door te tellen.
 DO $postcheck$
 DECLARE p record; n int;
@@ -578,5 +679,34 @@ BEGIN
      AND conname IN ('ownership_primary_period_excl', 'ownership_owner_period_excl');
   IF n <> 2 THEN
     RAISE EXCEPTION 'M30_POSTCHECK: exclusion constraint ontbreekt (% van 2)', n USING ERRCODE = '23514';
+  END IF;
+
+  -- Tenantsleutel: kolom NOT NULL, beide FK's aanwezig. Zonder deze drie valt de
+  -- cascadebeslissing terug op een toestand die aantoonbaar niet werkt.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+     WHERE attrelid = 'public.ownership'::regclass
+       AND attname  = 'organization_id'
+       AND attnotnull
+       AND NOT attisdropped) THEN
+    RAISE EXCEPTION 'M30_POSTCHECK: ownership.organization_id ontbreekt of is nullable' USING ERRCODE = '23514';
+  END IF;
+
+  SELECT count(*) INTO n FROM pg_constraint
+   WHERE conrelid = 'public.ownership'::regclass
+     AND contype  = 'f'
+     AND conname IN ('ownership_owner_org_fk', 'ownership_org_fk');
+  IF n <> 2 THEN
+    RAISE EXCEPTION 'M30_POSTCHECK: tenant-FK ontbreekt (% van 2)', n USING ERRCODE = '23514';
+  END IF;
+
+  -- De tenantcascade moet echt CASCADE zijn; NO ACTION zou een organisatie
+  -- onverwijderbaar maken zodra er eigendom bestaat.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'public.ownership'::regclass
+       AND conname  = 'ownership_org_fk'
+       AND confdeltype = 'c') THEN
+    RAISE EXCEPTION 'M30_POSTCHECK: ownership_org_fk cascadeert niet bij organisatieverwijdering' USING ERRCODE = '23514';
   END IF;
 END $postcheck$;

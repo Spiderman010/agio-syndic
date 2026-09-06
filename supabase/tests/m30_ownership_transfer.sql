@@ -6,10 +6,14 @@
 -- het eind een exceptie werpt met het testrapport als boodschap, zodat ALLE
 -- testdata gegarandeerd wordt teruggerold.
 --
--- Uitvoeren:
---   psql "$DATABASE_URL" -f supabase/tests/m30_ownership_transfer.sql
+-- Uitvoeren (bouwt zelf een verse PostgreSQL 17 in Docker en draait ook de
+-- preflightscenario's):
+--   pnpm test:db:m30
 --
--- NOOIT tegen productie. Alleen tegen een lokale Supabase of een expliciet
+-- Handmatig tegen een reeds opgebouwde lokale database:
+--   psql "$LOKALE_DATABASE_URL" -f supabase/tests/m30_ownership_transfer.sql
+--
+-- NOOIT tegen productie. Alleen tegen een lokale database of een expliciet
 -- toegestane niet-productieomgeving.
 --
 -- Verwachte uitkomst: "55 geslaagd, 0 gefaald".
@@ -17,14 +21,29 @@
 -- Wat hier wordt vastgelegd (55 asserties):
 --   L1-L6      eerste koppeling, inclusief tenantisolatie en bestaansorakel;
 --   T1-T16     overdracht: datumgrenzen, share/primary, stale writes, rollback;
---   F1-F3      allocaties, betalingen en journaal blijven byte-identiek;
+--   F1-F3      allocaties, betalingen en journaal blijven byte-identiek. Er
+--              worden EERST echte rijen aangemaakt; elke assertie eist een
+--              niet-lege nulmeting, een gelijke rijtelling en een gelijke hash,
+--              zodat md5('') = md5('') nooit als bewijs kan passeren;
 --   D1-D6      directe DML via de Data API is dicht, ook voor service_role;
 --   I1-I6      historie-immutability onder privileged writes;
---   X1-X3, X2b exclusion constraints, met BEHOUD van geldige mede-eigendom;
+--   X1-X3, X2b exclusion constraints, met BEHOUD van geldige mede-eigendom.
+--              X1 en X3 controleren behalve SQLSTATE 23P01 ook de NAAM van de
+--              constraint, zodat een weigering door de oudere UNIQUE-constraint
+--              niet als succes telt;
 --   C1-C9      cascadegedrag: losse owner-, unit- en building-deletes kunnen de
 --              eigendomsketen niet meer wissen, terwijl een VOLLEDIGE
---              organisatieverwijdering de bestaande cascade behoudt;
+--              organisatieverwijdering de bestaande cascade behoudt. C6 en C9
+--              bouwen daarvoor een EIGEN organisatie op en zijn niet afhankelijk
+--              van wat eerdere asserties achterlaten;
 --   G1-G4      grants, policies, triggerstatus en constraints.
+--
+-- Wat hier BEWUST NIET wordt vastgelegd: dat de m30-preflight bestaande
+-- ongeldige eigendomsdata tegenhoudt. Die vraag kan niet binnen deze suite
+-- worden beantwoord, want de migratie is dan al toegepast. Zie de vier
+-- scenario's in `scripts/test-m30-local.mjs` plus
+-- `supabase/tests/fixtures/preflight_cases.sql`, die de ECHTE migratie tegen
+-- ongeldige datasets draaien.
 --
 -- LET OP: dit bestand mag NERGENS een kale DELETE op public.ownership doen om
 -- op te ruimen. De historieguard uit m30 weigert die zolang de organisatie
@@ -49,6 +68,11 @@ DECLARE
   oA1 uuid; oA2 uuid; oA3 uuid; oA4 uuid; oB uuid;
   ow1 uuid; ow2 uuid; ow_tmp uuid;
 
+  -- Eigen fixtures voor C6 en C9, zodat die twee niet meeliften op de toestand
+  -- die eerdere asserties achterlaten.
+  vorgC uuid; oC6 uuid;
+  vorgD uuid; vbD uuid; uD uuid; oD uuid; owD uuid;
+
   vandaag date := CURRENT_DATE;
   d_over  date;                          -- overdrachtsdatum
   v_rec   record;
@@ -56,6 +80,17 @@ DECLARE
   md5_pay_voor text; md5_pay_na text;
   md5_je_voor text; md5_je_na text;
   md5_row_voor text; md5_row_na text;
+
+  -- Rijtellingen naast de hashes: een lege verzameling hasht naar md5('') en
+  -- zou anders "onveranderd" opleveren zonder iets te meten.
+  n_ca_voor int; n_ca_na int;
+  n_pay_voor int; n_pay_na int;
+  n_je_voor int; n_je_na int;
+  md5_leeg text := md5('');
+
+  -- Voor X1/X3: bewijzen WELKE constraint de overlap weigert, niet alleen dat
+  -- er iets weigerde.
+  v_constraint text;
 
   ok boolean; n int; msg text;
   pass int := 0; fail int := 0; rep text := '';
@@ -188,12 +223,46 @@ BEGIN
 
   d_over := vandaag;
 
-  -- Financiele nulmeting VOOR de overdracht.
-  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')) INTO md5_ca_voor
+  -- ── FINANCIELE FIXTURE ───────────────────────────────────────────────────
+  --
+  -- Zonder rijen vergelijken F1-F3 md5('') met md5('') en kunnen ze niet falen.
+  -- Daarom eerst echte, herkenbare, onderling verschillende rijen. Bewust:
+  --
+  --   * eigenaar oA4 en lot u5 (gebouw vbA2), NIET oA2/u1/vbA. Anders vuurt bij
+  --     C1/C2/C3 eerst de financiele-historieguard uit m18/m22 en bewijzen die
+  --     asserties de eigendomsguard niet meer;
+  --   * bedragen en referenties zijn synthetisch en bevatten geen
+  --     persoonsgegevens.
+  INSERT INTO public.charge_allocations
+    (organization_id, unit_id, owner_id, amount_cents, label)
+  VALUES
+    (vorgA, u5, oA4, 125000, 'M30 TEST allocatie A'),
+    (vorgA, u5, oA4, 340050, 'M30 TEST allocatie B'),
+    (vorgA, u5, oA4,   9900, 'M30 TEST allocatie C');
+
+  INSERT INTO public.payments
+    (organization_id, owner_id, amount_cents, paid_on, reference)
+  VALUES
+    (vorgA, oA4, 125000, vandaag - 40, 'M30-TEST-BET-0001'),
+    (vorgA, oA4,  50000, vandaag - 20, 'M30-TEST-BET-0002');
+
+  INSERT INTO public.journal_entries
+    (organization_id, entry_date, description, amount_cents)
+  VALUES
+    (vorgA, vandaag - 40, 'M30 TEST journaalpost 1', 125000),
+    (vorgA, vandaag - 20, 'M30 TEST journaalpost 2',  50000),
+    (vorgA, vandaag - 10, 'M30 TEST journaalpost 3', 474950),
+    (vorgA, vandaag -  5, 'M30 TEST journaalpost 4',  -9900);
+
+  -- Financiele nulmeting VOOR de overdracht: hash EN rijtelling.
+  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')), count(*)
+    INTO md5_ca_voor, n_ca_voor
     FROM public.charge_allocations t WHERE t.organization_id = vorgA;
-  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')) INTO md5_pay_voor
+  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')), count(*)
+    INTO md5_pay_voor, n_pay_voor
     FROM public.payments t WHERE t.organization_id = vorgA;
-  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')) INTO md5_je_voor
+  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')), count(*)
+    INTO md5_je_voor, n_je_voor
     FROM public.journal_entries t WHERE t.organization_id = vorgA;
 
   -- T1  overdracht op vandaag, exacte grenzen D-1 en D
@@ -416,27 +485,39 @@ BEGIN
       || '  T16 overdracht in het verleden werkt met dezelfde grenzen' || coalesce(' — '||msg,''); msg := NULL;
 
   -- ══════════════════════════════════════════ F — FINANCIEEL ONGEMOEID ════
-  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')) INTO md5_ca_na
+  --
+  -- Elke assertie eist DRIE dingen, zodat een lege verzameling nooit als bewijs
+  -- kan passeren:
+  --   1. de nulmeting was niet leeg  (n_*_voor > 0 en hash <> md5(''));
+  --   2. de rijtelling is onveranderd;
+  --   3. de inhoudshash is onveranderd.
+  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')), count(*)
+    INTO md5_ca_na, n_ca_na
     FROM public.charge_allocations t WHERE t.organization_id = vorgA;
-  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')) INTO md5_pay_na
+  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')), count(*)
+    INTO md5_pay_na, n_pay_na
     FROM public.payments t WHERE t.organization_id = vorgA;
-  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')) INTO md5_je_na
+  SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')), count(*)
+    INTO md5_je_na, n_je_na
     FROM public.journal_entries t WHERE t.organization_id = vorgA;
 
-  ok := (md5_ca_voor = md5_ca_na);
+  ok := (n_ca_voor > 0) AND (md5_ca_voor <> md5_leeg)
+    AND (n_ca_voor = n_ca_na) AND (md5_ca_voor = md5_ca_na);
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-      || '  F1  charge_allocations byte-identiek over alle overdrachten heen';
+      || '  F1  charge_allocations byte-identiek (' || n_ca_voor || ' -> ' || n_ca_na || ' rijen, niet leeg)';
 
-  ok := (md5_pay_voor = md5_pay_na);
+  ok := (n_pay_voor > 0) AND (md5_pay_voor <> md5_leeg)
+    AND (n_pay_voor = n_pay_na) AND (md5_pay_voor = md5_pay_na);
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-      || '  F2  payments byte-identiek';
+      || '  F2  payments byte-identiek (' || n_pay_voor || ' -> ' || n_pay_na || ' rijen, niet leeg)';
 
-  ok := (md5_je_voor = md5_je_na);
+  ok := (n_je_voor > 0) AND (md5_je_voor <> md5_leeg)
+    AND (n_je_voor = n_je_na) AND (md5_je_voor = md5_je_na);
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-      || '  F3  journal_entries byte-identiek';
+      || '  F3  journal_entries byte-identiek (' || n_je_voor || ' -> ' || n_je_na || ' rijen, niet leeg)';
 
   -- ═══════════════════════════════════════════════════ D — DIRECTE DML ════
 
@@ -587,15 +668,28 @@ BEGIN
 
   -- ══════════════════════════════════════════ X — EXCLUSION CONSTRAINTS ═══
 
-  -- X1 twee overlappende primaire perioden op hetzelfde lot
+  -- X1 twee overlappende primaire perioden op hetzelfde lot.
+  --
+  -- De bestaande primaire periode op u1 is na T1 gesloten op [D-100, D-1]. De
+  -- nieuwe rij [D-150, D-50] valt daar ECHT overheen: hij begint eerder en
+  -- eindigt binnen die periode. Een eerdere versie gebruikte [D-200, D-150] en
+  -- overlapte daarmee niets, waardoor de INSERT terecht slaagde en de assertie
+  -- niet kon aantonen wat zij beweerde.
+  --
+  -- oA3 heeft nog geen rij op u1, dus `ownership_owner_period_excl` en
+  -- `ownership_unit_owner_start_key` kunnen hier niet eerst vuren: de weigering
+  -- moet van `ownership_primary_period_excl` komen, en dat wordt afgedwongen.
   BEGIN
     INSERT INTO public.ownership(unit_id, owner_id, share, start_date, end_date, is_primary_debtor)
-    VALUES (u1, oA3, 1, vandaag - 200, vandaag - 150, true);   -- valt binnen [ow1.start, D-1]
-    ok := false;
-  EXCEPTION WHEN others THEN ok := (SQLSTATE = '23P01'); END;
+    VALUES (u1, oA3, 1, vandaag - 150, vandaag - 50, true);
+    ok := false; v_constraint := '(geen fout)';
+  EXCEPTION WHEN others THEN
+    GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+    ok := (SQLSTATE = '23P01') AND (v_constraint = 'ownership_primary_period_excl');
+  END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-      || '  X1  overlappende primaire perioden geweigerd (ook tussen gesloten perioden)';
+      || '  X1  overlappende primaire perioden geweigerd met 23P01 via ' || coalesce(v_constraint,'?');
 
   -- X2 mede-eigendom blijft mogelijk: niet-primair mag wel overlappen
   BEGIN
@@ -618,22 +712,35 @@ BEGIN
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
       || '  X2b geldige mede-eigendom: n_active=2, n_primary=1 (toerekenbaar)';
 
-  -- X3 dezelfde eigenaar twee keer tegelijk op hetzelfde lot
+  -- X3 dezelfde eigenaar twee keer tegelijk op hetzelfde lot.
+  --
+  -- X2 gaf oA4 de lopende periode [D, oneindig). Een tweede rij met dezelfde
+  -- startdatum zou eerst `ownership_unit_owner_start_key` (UNIQUE uit m12)
+  -- raken en 23505 geven — dat is wel een weigering, maar niet van de constraint
+  -- die deze assertie bedoelt te bewijzen. Met startdatum D-10 is de combinatie
+  -- (unit, eigenaar, startdatum) uniek, terwijl de periode [D-10, oneindig)
+  -- wel degelijk overlapt met [D, oneindig).
+  --
+  -- is_primary_debtor blijft false, zodat `ownership_primary_period_excl` niet
+  -- van toepassing is en alleen `ownership_owner_period_excl` kan vuren.
   BEGIN
     INSERT INTO public.ownership(unit_id, owner_id, share, start_date, is_primary_debtor)
-    VALUES (u1, oA4, 0.25, vandaag, false);
-    ok := false;
-  EXCEPTION WHEN others THEN ok := (SQLSTATE = '23P01'); END;
+    VALUES (u1, oA4, 0.25, vandaag - 10, false);
+    ok := false; v_constraint := '(geen fout)';
+  EXCEPTION WHEN others THEN
+    GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+    ok := (SQLSTATE = '23P01') AND (v_constraint = 'ownership_owner_period_excl');
+  END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-      || '  X3  dezelfde eigenaar twee keer tegelijk op een lot geweigerd';
+      || '  X3  dezelfde eigenaar tegelijk op een lot geweigerd met 23P01 via ' || coalesce(v_constraint,'?');
 
   -- GEEN opruim-DELETE: de historieguard weigert elke ownership-delete zolang
   -- de organisatie bestaat, en die weigering zou dit testblok afbreken. X2 laat
   -- daarom bewust een geldige mede-eigenaar (oA4) op u1 achter. De cascadetests
-  -- hieronder zijn daar ongevoelig voor: C6 verwijdert oA3, die nooit eigendom
-  -- heeft gekregen, en C1/C2 vergelijken md5-waarden die met drie rijen net zo
-  -- goed werken als met twee.
+  -- hieronder zijn daar ongevoelig voor: C6 en C9 bouwen een EIGEN organisatie
+  -- en delen geen enkele rij met dit blok, en C1/C2 vergelijken md5-waarden die
+  -- met drie rijen net zo goed werken als met twee.
   PERFORM set_config('role', 'postgres', true);
 
   -- ═════════════════════════════════════════════════════ C — CASCADES ═════
@@ -720,21 +827,40 @@ BEGIN
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
       || '  C5  postgres kan een eigendomsrij niet los verwijderen';
 
-  -- C6 owner ZONDER ownership en zonder financiele historie: bestaande regel
+  -- C6 owner ZONDER ownership en zonder financiele historie blijft verwijderbaar.
+  --
+  -- Volledig eigen fixture: eigen organisatie, eigen eigenaar. Een eerdere
+  -- versie verwijderde oA3 uit organisatie A en ging ervan uit dat die eigenaar
+  -- nergens eigendom had. Die aanname hing af van het slagen OF falen van X1 —
+  -- toen X1 zijn rij wel wist te plaatsen, viel C6 om zonder dat er iets mis was
+  -- met de delete-invariant zelf. Zo'n koppeling hoort er niet te zijn.
   BEGIN
-    PERFORM set_config('request.jwt.claims', PU, true);
-    PERFORM set_config('role', 'authenticated', true);
-    DELETE FROM public.owners WHERE id = oA3;
     PERFORM set_config('role', 'postgres', true);
-    SELECT count(*) INTO n FROM public.owners WHERE id = oA3;
+    PERFORM set_config('request.jwt.claims', PU, true);
+    vorgC := public.create_organization('M30 ORG C6');
+    INSERT INTO public.owners(organization_id, full_name)
+    VALUES (vorgC, 'M30 C6 eigenaar zonder eigendom') RETURNING id INTO oC6;
+
+    -- Uitgangssituatie expliciet vastleggen in plaats van aannemen.
+    SELECT count(*) INTO n FROM public.ownership WHERE owner_id = oC6;
     ok := (n = 0);
+    SELECT count(*) INTO n FROM public.charge_allocations WHERE owner_id = oC6;
+    ok := ok AND (n = 0);
+    SELECT count(*) INTO n FROM public.payments WHERE owner_id = oC6;
+    ok := ok AND (n = 0);
+
+    PERFORM set_config('role', 'authenticated', true);
+    DELETE FROM public.owners WHERE id = oC6;
+    PERFORM set_config('role', 'postgres', true);
+    SELECT count(*) INTO n FROM public.owners WHERE id = oC6;
+    ok := ok AND (n = 0);
   EXCEPTION WHEN others THEN
     PERFORM set_config('role', 'postgres', true);
     ok := false; msg := left(SQLERRM,60);
   END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-      || '  C6  owner zonder ownership blijft verwijderbaar' || coalesce(' — '||msg,''); msg := NULL;
+      || '  C6  owner zonder ownership blijft verwijderbaar (eigen fixture)' || coalesce(' — '||msg,''); msg := NULL;
 
   -- C7 unit ZONDER ownership en zonder financiele historie
   BEGIN
@@ -776,14 +902,51 @@ BEGIN
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
       || '  C8  volledige organisatiecascade ruimt ook ownership op' || coalesce(' — '||msg,''); msg := NULL;
 
-  -- C9 geen verweesde eigendomsrijen achtergebleven
-  SELECT count(*) INTO n FROM public.ownership o
-   WHERE NOT EXISTS (SELECT 1 FROM public.owners w WHERE w.id = o.owner_id)
-      OR NOT EXISTS (SELECT 1 FROM public.units  uu WHERE uu.id = o.unit_id);
-  ok := (n = 0);
+  -- C9 zelfstandige organisatiecascade: begint met BESTAAND eigendom en eindigt
+  -- zonder wezen.
+  --
+  -- Een eerdere versie telde alleen databasebreed het aantal verweesde rijen.
+  -- In een dataloze database is dat gegarandeerd nul, en na een MISLUKTE C8 ook,
+  -- want dan is er niets gecascadeerd. De assertie kon dus slagen zonder dat er
+  -- ooit een cascade had plaatsgevonden. Nu bouwt C9 zijn eigen organisatie op,
+  -- bewijst dat er eigendom bestaat, verwijdert de organisatie en controleert
+  -- alle vijf de niveaus plus het databasebrede wezencriterium.
+  BEGIN
+    PERFORM set_config('role', 'postgres', true);
+    PERFORM set_config('request.jwt.claims', PU, true);
+    vorgD := public.create_organization('M30 ORG C9');
+    INSERT INTO public.buildings(organization_id, name, total_tantiemes)
+    VALUES (vorgD, 'M30 C9', 1000) RETURNING id INTO vbD;
+    INSERT INTO public.units(building_id, label, unit_type, tantiemes)
+    VALUES (vbD, 'D1', 'appartement', 100) RETURNING id INTO uD;
+    INSERT INTO public.owners(organization_id, full_name)
+    VALUES (vorgD, 'M30 C9 eigenaar') RETURNING id INTO oD;
+    owD := public.link_first_owner(uD, oD, vandaag - 30);
+
+    -- Er moet echt iets te cascaderen zijn.
+    SELECT count(*) INTO n FROM public.ownership WHERE unit_id = uD;
+    ok := (n = 1);
+
+    DELETE FROM public.organizations WHERE id = vorgD;
+
+    SELECT count(*) INTO n FROM public.organizations WHERE id = vorgD;      ok := ok AND (n = 0);
+    SELECT count(*) INTO n FROM public.buildings     WHERE id = vbD;        ok := ok AND (n = 0);
+    SELECT count(*) INTO n FROM public.units         WHERE id = uD;         ok := ok AND (n = 0);
+    SELECT count(*) INTO n FROM public.owners        WHERE id = oD;         ok := ok AND (n = 0);
+    SELECT count(*) INTO n FROM public.ownership     WHERE id = owD;        ok := ok AND (n = 0);
+
+    -- Databasebreed: geen eigendomsrij zonder eigenaar of zonder lot.
+    SELECT count(*) INTO n FROM public.ownership o
+     WHERE NOT EXISTS (SELECT 1 FROM public.owners w WHERE w.id = o.owner_id)
+        OR NOT EXISTS (SELECT 1 FROM public.units  uu WHERE uu.id = o.unit_id);
+    ok := ok AND (n = 0);
+  EXCEPTION WHEN others THEN
+    PERFORM set_config('role', 'postgres', true);
+    ok := false; msg := left(SQLERRM,70);
+  END;
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-      || '  C9  geen verweesde ownershiprijen na de cascade';
+      || '  C9  eigen organisatiecascade met bestaand eigendom, nul wezen' || coalesce(' — '||msg,''); msg := NULL;
 
   -- ═════════════════════════════════════════════ G — RECHTEN EN OBJECTEN ══
   ok := has_table_privilege('authenticated','public.ownership','SELECT')
