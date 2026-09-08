@@ -289,11 +289,31 @@ ALTER TABLE public.ownership
 -- RLS-zichtbaarheid; daarom SECURITY DEFINER met een lege search_path en
 -- volledig gekwalificeerde objecten. EXECUTE wordt van iedereen ingetrokken:
 -- de functie is uitsluitend als trigger bruikbaar.
+--
+-- ── WAAROM `row_security = off` ────────────────────────────────────────────
+--
+-- De escape hierboven leest "de organisatie bestaat niet meer" af uit een
+-- SELECT op `public.organizations`. Die tabel heeft RLS. Zou de functie ooit
+-- draaien onder een eigenaar die NIET van RLS is vrijgesteld, dan levert die
+-- SELECT stilzwijgend NUL RIJEN op — en dat is niet te onderscheiden van een
+-- werkelijk verwijderde organisatie. De guard zou de DELETE dan TOESTAAN. Dat
+-- is precies de verkeerde kant om te falen.
+--
+-- `row_security = off` maakt van die stille misclassificatie een harde fout:
+-- PostgreSQL weigert dan elke query waarop een policy van toepassing zou zijn
+-- ("query would be affected by row-level security policy"). Een vrijgestelde
+-- eigenaar (BYPASSRLS of superuser) merkt niets; een niet-vrijgestelde context
+-- krijgt een exceptie en de DELETE wordt geweigerd. Fail-closed dus, in plaats
+-- van fail-open op een lege verzameling.
+--
+-- De postcheck in sectie 10 legt alle drie de voorwaarden vast: SECURITY
+-- DEFINER, een eigenaar met BYPASSRLS, en row_security=off.
 CREATE OR REPLACE FUNCTION public.fn_guard_ownership_history()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
+SET row_security = off
 AS $fn$
 BEGIN
   -- ── DELETE ───────────────────────────────────────────────────────────────
@@ -708,5 +728,40 @@ BEGIN
        AND conname  = 'ownership_org_fk'
        AND confdeltype = 'c') THEN
     RAISE EXCEPTION 'M30_POSTCHECK: ownership_org_fk cascadeert niet bij organisatieverwijdering' USING ERRCODE = '23514';
+  END IF;
+
+  -- ── UITVOERINGSCONTEXT VAN DE HISTORIEGUARD ──────────────────────────────
+  --
+  -- De cascadebeslissing leest `public.organizations`, een tabel met RLS. Drie
+  -- voorwaarden maken samen dat een RLS-filter die beslissing niet stilzwijgend
+  -- kan omdraaien. Ontbreekt er een, dan is de guard fail-OPEN en moet de
+  -- migratie stoppen.
+  -- LET OP: dit DO-blok heeft een plpgsql-variabele `p` en `n`. Tabelaliassen
+  -- met die namen worden door plpgsql overschaduwd, vandaar `gp`, `gn` en `gr`.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc gp JOIN pg_namespace gn ON gn.oid = gp.pronamespace
+     WHERE gn.nspname = 'public' AND gp.proname = 'fn_guard_ownership_history'
+       AND gp.prosecdef) THEN
+    RAISE EXCEPTION 'M30_POSTCHECK: historieguard is geen SECURITY DEFINER' USING ERRCODE = '23514';
+  END IF;
+
+  -- Een eigenaar zonder BYPASSRLS zou op `organizations` een lege verzameling
+  -- kunnen krijgen; dat is niet te onderscheiden van "organisatie verwijderd".
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc gp
+      JOIN pg_namespace gn ON gn.oid = gp.pronamespace
+      JOIN pg_roles gr     ON gr.oid = gp.proowner
+     WHERE gn.nspname = 'public' AND gp.proname = 'fn_guard_ownership_history'
+       AND gr.rolbypassrls) THEN
+    RAISE EXCEPTION 'M30_POSTCHECK: eigenaar van de historieguard heeft geen BYPASSRLS' USING ERRCODE = '23514';
+  END IF;
+
+  -- En mocht die vrijstelling ooit verdwijnen, dan moet de query hard falen in
+  -- plaats van nul rijen terug te geven.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc gp JOIN pg_namespace gn ON gn.oid = gp.pronamespace
+     WHERE gn.nspname = 'public' AND gp.proname = 'fn_guard_ownership_history'
+       AND gp.proconfig @> ARRAY['row_security=off']) THEN
+    RAISE EXCEPTION 'M30_POSTCHECK: historieguard draait niet met row_security=off' USING ERRCODE = '23514';
   END IF;
 END $postcheck$;

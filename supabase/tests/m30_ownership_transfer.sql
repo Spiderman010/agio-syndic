@@ -36,7 +36,10 @@
 --              organisatieverwijdering de bestaande cascade behoudt. C6 en C9
 --              bouwen daarvoor een EIGEN organisatie op en zijn niet afhankelijk
 --              van wat eerdere asserties achterlaten;
---   G1-G4      grants, policies, triggerstatus en constraints.
+--   G1-G4      grants, policies, triggerstatus en constraints. G4 legt ook de
+--              uitvoeringscontext van de historieguard vast: SECURITY DEFINER,
+--              een eigenaar met BYPASSRLS en row_security=off, zodat een
+--              RLS-filter de cascadebeslissing niet stilzwijgend kan omdraaien.
 --
 -- Wat hier BEWUST NIET wordt vastgelegd: dat de m30-preflight bestaande
 -- ongeldige eigendomsdata tegenhoudt. Die vraag kan niet binnen deze suite
@@ -982,6 +985,14 @@ BEGIN
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
       || '  G3  uitsluitend ownership_select als policy';
 
+  -- G4 dekt de guard zelf: dat hij aanstaat, dat beide exclusion constraints er
+  -- zijn, EN dat zijn uitvoeringscontext een RLS-misclassificatie uitsluit.
+  --
+  -- Dat laatste is geen formaliteit. De cascadebeslissing leest
+  -- `public.organizations`, een tabel met RLS. Draait de guard onder een
+  -- eigenaar zonder BYPASSRLS, dan geeft die SELECT stilzwijgend nul rijen en
+  -- concludeert de guard ten onrechte "organisatie verwijderd" — hij zou de
+  -- DELETE dan TOESTAAN. `row_security=off` maakt daar een harde fout van.
   SELECT count(*) INTO n FROM pg_trigger
    WHERE tgrelid='public.ownership'::regclass
      AND tgname='trig_01_ownership_history' AND tgenabled='O';
@@ -990,9 +1001,23 @@ BEGIN
    WHERE conrelid='public.ownership'::regclass
      AND conname IN ('ownership_primary_period_excl','ownership_owner_period_excl');
   ok := ok AND (n = 2);
+
+  -- Aliassen bewust `gp`/`gn`/`gr`: plpgsql-variabelen overschaduwen gelijk
+  -- benoemde tabelaliassen, en dit DO-blok gebruikt onder meer `n` en `ok`.
+  SELECT count(*) INTO n
+    FROM pg_proc gp
+    JOIN pg_namespace gn ON gn.oid = gp.pronamespace
+    JOIN pg_roles gr     ON gr.oid = gp.proowner
+   WHERE gn.nspname = 'public'
+     AND gp.proname  = 'fn_guard_ownership_history'
+     AND gp.prosecdef                                   -- SECURITY DEFINER
+     AND gr.rolbypassrls                                -- eigenaar is RLS-vrij
+     AND gp.proconfig @> ARRAY['row_security=off'];     -- en faalt anders hard
+  ok := ok AND (n = 1);
+
   IF ok THEN pass:=pass+1; ELSE fail:=fail+1; END IF;
   rep := rep || E'\n' || CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END
-      || '  G4  historieguard actief en beide exclusion constraints aanwezig';
+      || '  G4  historieguard actief, beide exclusion constraints, en RLS-vrije context (definer+bypassrls+row_security=off)';
 
   -- ═══════════════════════════════════════════════════════ RAPPORT ════════
   RAISE EXCEPTION E'\n=== m30 ownership transfer ===\n%\n\n%  geslaagd, %  gefaald\n(deze exceptie rolt alle testdata terug)',
