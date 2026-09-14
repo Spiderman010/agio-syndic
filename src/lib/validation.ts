@@ -317,3 +317,74 @@ export function parseForm<T extends z.ZodTypeAny>(
   }
   return { ok: true, data: result.data };
 }
+
+// ── Sprint 3: eigenaren, lots en eigendom ───────────────────────────────────
+
+/** Optioneel getal: leeg of ontbrekend veld -> null, nooit stilzwijgend nul. */
+const optionalNumber = (max: number) =>
+  z.preprocess(
+    (v) => {
+      const s = blankToNull(v);
+      return s === null ? null : Number(s);
+    },
+    z
+      .number()
+      .positive("Moet groter dan nul zijn.")
+      .max(max, `Maximaal ${max}.`)
+      .nullable(),
+  );
+
+/**
+ * Een eigenaar hoort bij de ORGANISATIE, niet bij een gebouw. Daarom geen
+ * `building_id` — anders zou het formulier suggereren dat een eigenaar per
+ * gebouw bestaat, terwijl hij lots in meerdere gebouwen kan hebben.
+ */
+export const ownerCreateSchema = z.object({
+  full_name: z.string().trim().min(1, "Naam is verplicht.").max(200),
+  is_company: z.coerce.boolean().default(false),
+  email: z.preprocess(
+    blankToNull,
+    z.string().email("Ongeldig e-mailadres.").max(200).nullable(),
+  ),
+  phone: optionalText(40),
+  language: languageEnum.default("fr"),
+  is_mre: z.coerce.boolean().default(false),
+});
+
+export const ownerUpdateSchema = ownerCreateSchema.extend({ owner_id: uuid });
+
+export const lotCreateSchema = z.object({
+  building_id: uuid,
+  label: z.string().trim().min(1, "Label is verplicht.").max(80),
+  unit_type: unitTypeEnum.default("appartement"),
+  tantiemes: z.coerce
+    .number()
+    .int("Tantièmes moeten een geheel getal zijn.")
+    .min(0)
+    .max(10_000_000),
+  floor: optionalText(40),
+  area_m2: optionalNumber(100_000),
+});
+
+/** `building_id` blijft meegaan zodat de server de gebouwscope kan verifiëren. */
+export const lotUpdateSchema = lotCreateSchema.extend({ unit_id: uuid });
+
+export const linkFirstOwnerSchema = z.object({
+  building_id: uuid,
+  unit_id: uuid,
+  owner_id: uuid,
+  start_date: isoDate,
+});
+
+/**
+ * `expected_ownership_id` is verplicht en komt uit de gerenderde pagina. Zonder
+ * die waarde kan een verouderd formulier de inmiddels nieuwe eigenaar opnieuw
+ * overdragen; de RPC weigert dan met OWNERSHIP_STALE.
+ */
+export const transferOwnershipSchema = z.object({
+  building_id: uuid,
+  unit_id: uuid,
+  expected_ownership_id: uuid,
+  new_owner_id: uuid,
+  transfer_date: isoDate,
+});

@@ -23,9 +23,11 @@ describe("navigatiemodel", () => {
     expect(globalNavItems().map((i) => i.key)).toEqual([
       "dashboard",
       "buildings",
+      "owners",
     ]);
     expect(buildingNavItems(BID).map((i) => i.key)).toEqual([
       "building-overview",
+      "building-lots",
       "building-fiscal-years",
       "building-expenses",
     ]);
@@ -39,8 +41,15 @@ describe("navigatiemodel", () => {
 });
 
 describe("actieve navigatiestaat", () => {
-  const [dashboard, buildings] = globalNavItems();
-  const [overview, fiscalYears, expenses] = buildingNavItems(BID);
+  // Op SLEUTEL zoeken, niet op positie: een nieuw menu-item mag deze tests niet
+  // laten omvallen op een verschoven index.
+  const globaal = (key: string) => globalNavItems().find((i) => i.key === key)!;
+  const gebouw = (key: string) => buildingNavItems(BID).find((i) => i.key === key)!;
+  const dashboard = globaal("dashboard");
+  const buildings = globaal("buildings");
+  const overview = gebouw("building-overview");
+  const fiscalYears = gebouw("building-fiscal-years");
+  const expenses = gebouw("building-expenses");
 
   it("markeert het dashboard alleen op het dashboard zelf", () => {
     expect(isNavItemActive("/dashboard", dashboard)).toBe(true);

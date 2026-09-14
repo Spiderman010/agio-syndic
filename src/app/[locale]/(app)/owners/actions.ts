@@ -1,0 +1,88 @@
+"use server";
+
+import { getTranslations } from "next-intl/server";
+import { revalidatePath } from "next/cache";
+import { createClient } from "@/lib/supabase/server";
+import { requireOrg } from "@/lib/org";
+import { canWrite } from "@/lib/roles";
+import { localeRedirect } from "@/lib/redirect";
+import { assertInOrg } from "@/lib/guard";
+import { ownerCreateSchema, ownerUpdateSchema, parseForm } from "@/lib/validation";
+import { ownershipErrorKey } from "@/lib/ownership";
+
+/**
+ * Server actions voor organisatiebrede eigenaren.
+ *
+ * Drie regels die overal gelden:
+ *
+ *  1. `requireOrg()` bepaalt de organisatie; die komt NOOIT uit het formulier.
+ *  2. Elk route-id uit het formulier wordt server-side tegen die organisatie
+ *     gecontroleerd voordat er iets wordt geschreven. De database dwingt
+ *     dezelfde grens nogmaals af via RLS; beide lagen zijn verplicht omdat de
+ *     anon-key rechtstreeks tegen PostgREST bruikbaar is.
+ *  3. Foutmeldingen komen uit de vertaalbestanden, nooit uit de database. Er
+ *     gaan geen providerobjecten, rijwaarden of persoonsgegevens naar een log.
+ *
+ * De rolcontrole hier spiegelt `can_write` en voorkomt een mutatie waarvan we
+ * weten dat de database hem weigert; hij vervangt die grens niet.
+ */
+
+/** Vertaalt een databasefout naar een vaste, veilige gebruikerszin. */
+async function foutTekst(message: string | null | undefined): Promise<string> {
+  const t = await getTranslations("owners.errors");
+  return t(ownershipErrorKey(message));
+}
+
+export async function createOwner(formData: FormData) {
+  const { org, role } = await requireOrg();
+  if (!canWrite(role)) return { error: await foutTekst("OWNERSHIP_FORBIDDEN") };
+
+  const parsed = parseForm(ownerCreateSchema, formData, {
+    is_company: formData.get("is_company") === "on",
+    is_mre: formData.get("is_mre") === "on",
+  });
+  if (!parsed.ok) return { error: parsed.error };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("owners")
+    .insert({ organization_id: org.id, ...parsed.data })
+    .select("id")
+    .single();
+
+  if (error || !data) return { error: await foutTekst(error?.message) };
+
+  revalidatePath("/owners");
+  return localeRedirect(`/owners/${data.id}`);
+}
+
+export async function updateOwner(formData: FormData) {
+  const { org, role } = await requireOrg();
+  if (!canWrite(role)) return { error: await foutTekst("OWNERSHIP_FORBIDDEN") };
+
+  const parsed = parseForm(ownerUpdateSchema, formData, {
+    is_company: formData.get("is_company") === "on",
+    is_mre: formData.get("is_mre") === "on",
+  });
+  if (!parsed.ok) return { error: parsed.error };
+  const { owner_id, ...velden } = parsed.data;
+
+  const supabase = await createClient();
+
+  // Een vreemd of onbekend owner-id mag nooit tot een organisatiebrede update
+  // leiden; de guard controleert bestaan én eigendom in één keer.
+  const guard = await assertInOrg(supabase, "owners", owner_id, org.id, "Eigenaar");
+  if (guard) return { error: await foutTekst("OWNERSHIP_OWNER_INVALID") };
+
+  const { error } = await supabase
+    .from("owners")
+    .update(velden)
+    .eq("id", owner_id)
+    .eq("organization_id", org.id);
+
+  if (error) return { error: await foutTekst(error.message) };
+
+  revalidatePath("/owners");
+  revalidatePath(`/owners/${owner_id}`);
+  return localeRedirect(`/owners/${owner_id}`);
+}

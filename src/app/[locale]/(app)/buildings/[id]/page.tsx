@@ -1,10 +1,12 @@
 import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
 import { Link } from "@/navigation";
 import { createUnit, createOwner, assignOwner, updateBankInfo } from "./actions";
 import ActionForm from "@/components/ActionForm";
 import { TIER_LABELS, TIER_ANNEXES } from "@/lib/tier";
+import { ownerFormState } from "@/lib/ownership";
 import type { Building, Owner } from "@/lib/types";
 
 type UnitRow = {
@@ -22,6 +24,7 @@ export default async function BuildingDetail({
 }) {
   const { id } = await params;
   await requireOrg();
+  const t = await getTranslations("lots");
   const supabase = await createClient();
 
   const { data: building } = await supabase.from("buildings").select("*").eq("id", id).maybeSingle();
@@ -130,37 +133,45 @@ export default async function BuildingDetail({
               {units.length === 0 && (
                 <div className="card muted" style={{ padding: "1rem", fontSize: "0.88rem" }}>Aucun lot.</div>
               )}
-              {units.map((u) => (
-                <div key={u.id} className="card" style={{ padding: "0.85rem 1rem" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                    <div>
-                      <strong>{u.label}</strong>
-                      <span className="muted" style={{ fontSize: "0.8rem", marginLeft: 8 }}>
-                        {u.unit_type} · {u.tantiemes} tantièmes
-                      </span>
+              {units.map((u) => {
+                const status = ownerFormState(u.ownership ?? []);
+                return (
+                  <div key={u.id} className="card" style={{ padding: "0.85rem 1rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                      <div>
+                        <strong>{u.label}</strong>
+                        <span className="muted" style={{ fontSize: "0.8rem", marginLeft: 8 }}>
+                          {u.unit_type} · {u.tantiemes} tantièmes
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "0.82rem" }}>
+                        {currentOwner(u) ? (
+                          <span>{currentOwner(u)}</span>
+                        ) : (
+                          <span className="muted">sans propriétaire</span>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ fontSize: "0.82rem" }}>
-                      {currentOwner(u) ? (
-                        <span>{currentOwner(u)}</span>
-                      ) : (
-                        <span className="muted">sans propriétaire</span>
-                      )}
-                    </div>
+                    {status === "geen" && owners.length > 0 && (
+                      <ActionForm action={assignOwner} style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                        <input type="hidden" name="building_id" value={b.id} />
+                        <input type="hidden" name="unit_id" value={u.id} />
+                        <select className="input" name="owner_id" style={{ fontSize: "0.82rem", padding: "0.35rem 0.5rem" }}>
+                          {owners.map((o) => (
+                            <option key={o.id} value={o.id}>{o.full_name}</option>
+                          ))}
+                        </select>
+                        <button className="btn" style={{ padding: "0.35rem 0.7rem", fontSize: "0.8rem" }}>Affecter</button>
+                      </ActionForm>
+                    )}
+                    {status === "historieZonderEigenaar" && (
+                      <p className="muted" style={{ fontSize: "0.78rem", marginTop: 8 }} role="status">
+                        {t("ownership.historyOnly")}
+                      </p>
+                    )}
                   </div>
-                  {!currentOwner(u) && owners.length > 0 && (
-                    <ActionForm action={assignOwner} style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                      <input type="hidden" name="building_id" value={b.id} />
-                      <input type="hidden" name="unit_id" value={u.id} />
-                      <select className="input" name="owner_id" style={{ fontSize: "0.82rem", padding: "0.35rem 0.5rem" }}>
-                        {owners.map((o) => (
-                          <option key={o.id} value={o.id}>{o.full_name}</option>
-                        ))}
-                      </select>
-                      <button className="btn" style={{ padding: "0.35rem 0.7rem", fontSize: "0.8rem" }}>Affecter</button>
-                    </ActionForm>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <ActionForm action={createUnit} className="card" style={{ padding: "1.1rem", marginTop: "0.9rem" }}>

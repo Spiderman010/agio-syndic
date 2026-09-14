@@ -59,15 +59,28 @@ export async function assertInOrgOptional(
   return assertInOrg(supabase, table, id, orgId, label);
 }
 
-/** Units hebben geen eigen organization_id; de keten loopt via het gebouw. */
+/**
+ * Units hebben geen eigen organization_id; de keten loopt via het gebouw.
+ *
+ * `buildingId` is optioneel voor achterwaartse compatibiliteit, maar elke
+ * caller die ook over een `building_id` uit het formulier beschikt hoort die
+ * hier mee te geven. Zonder die check bewijst deze functie alleen dat de unit
+ * ÉRGENS in de organisatie staat, niet dat hij bij het gebouw uit de URL
+ * hoort — een gemanipuleerd formulier kan dan `building_id` van gebouw A met
+ * `unit_id` van gebouw B combineren en zo gebouw B muteren terwijl de actie
+ * gebouw A revalideert en daarheen redirect. Bij een mismatch geeft deze
+ * functie dezelfde generieke melding terug als bij een unit uit een andere
+ * organisatie, zodat er niets wordt prijsgegeven over het bestaan van de unit.
+ */
 export async function assertUnitInOrg(
   supabase: Client,
   unitId: string,
   orgId: string,
+  buildingId?: string,
 ): Promise<string | null> {
   const { data, error } = await supabase
     .from("units")
-    .select("id, buildings!inner(organization_id)")
+    .select("id, building_id, buildings!inner(organization_id)")
     .eq("id", unitId)
     .maybeSingle();
 
@@ -79,6 +92,9 @@ export async function assertUnitInOrg(
   const building = Array.isArray(raw) ? raw[0] : raw;
 
   if (!building || building.organization_id !== orgId) {
+    return "Unit bestaat niet binnen deze organisatie.";
+  }
+  if (buildingId && data.building_id !== buildingId) {
     return "Unit bestaat niet binnen deze organisatie.";
   }
   return null;
