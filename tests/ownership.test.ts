@@ -15,6 +15,7 @@ import {
   lotStatus,
   matchesSearch,
   matchesUnitSearch,
+  ownerFormState,
   ownerScopes,
   ownershipErrorKey,
   periodsOverlap,
@@ -1424,5 +1425,77 @@ describe("BL — blokkadeteksten", () => {
     expect(formulier).toContain("min={minDate}");
     expect(formulier).toContain("max={maxDate}");
     expect(formulier).toContain("defaultValue={defaultDate}");
+  });
+});
+
+/**
+ * Review finding (PR #10): de legacy gebouwpagina behandelde "geen actuele
+ * eigenaar" altijd als "nog nooit gekoppeld" en toonde het `assignOwner`-
+ * formulier ook voor een lot met uitsluitend AFGESLOTEN historische rijen.
+ * `link_first_owner` weigert die aanroep terecht met OWNERSHIP_HISTORY_EXISTS,
+ * dus dat formulier kon nooit slagen. `ownerFormState` maakt het onderscheid
+ * dat de pagina miste; deze suite bewijst de classificatie zelf en dat de
+ * pagina hem daadwerkelijk gebruikt om het formulier te verbergen.
+ */
+describe("OFS — ownerFormState (legacy gebouwpagina)", () => {
+  const eigenaar = { id: "o1", full_name: "Jamal" };
+
+  it("nul historische rijen → 'geen': het eerste-koppelingsformulier hoort zichtbaar te zijn", () => {
+    expect(ownerFormState([])).toBe("geen");
+  });
+
+  it("uitsluitend afgesloten historie → 'historieZonderEigenaar': geen formulier", () => {
+    expect(
+      ownerFormState([
+        { end_date: "2025-06-30", owners: eigenaar },
+        { end_date: "2024-01-15", owners: eigenaar },
+      ]),
+    ).toBe("historieZonderEigenaar");
+  });
+
+  it("precies één actuele rij → 'eenEigenaar'", () => {
+    expect(
+      ownerFormState([
+        { end_date: "2024-01-15", owners: eigenaar },
+        { end_date: null, owners: eigenaar },
+      ]),
+    ).toBe("eenEigenaar");
+  });
+
+  it("meerdere actuele rijen → 'ambigu'", () => {
+    expect(
+      ownerFormState([
+        { end_date: null, owners: eigenaar },
+        { end_date: null, owners: eigenaar },
+      ]),
+    ).toBe("ambigu");
+  });
+
+  it("een rij waarvan de eigenaar niet resolveert telt niet mee als actueel", () => {
+    // Verdedigend: zonder gekoppelde eigenaar is er niets zinvols te tonen of
+    // over te dragen, ook al is end_date null.
+    expect(ownerFormState([{ end_date: null, owners: null }])).toBe("historieZonderEigenaar");
+  });
+
+  it("de legacy pagina gebruikt ownerFormState om het formulier te poorten, niet !currentOwner(u)", () => {
+    const bron = readFileSync(
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "page.tsx"),
+      "utf8",
+    );
+    expect(bron).toContain('status === "geen"');
+    expect(bron).toContain('status === "historieZonderEigenaar"');
+    expect(bron).toContain("ownerFormState(u.ownership");
+    expect(bron).toContain("ownership.historyOnly");
+    // De oorspronkelijke, te ruime poort mag niet terugkomen.
+    expect(bron).not.toContain("!currentOwner(u) && owners.length > 0 && (");
+  });
+
+  it("de melding is beschikbaar in fr, nl en ar", () => {
+    for (const [naam, berichten] of Object.entries({ fr, nl, ar })) {
+      const lots = (berichten as Record<string, unknown>).lots as
+        | { ownership?: { historyOnly?: string } }
+        | undefined;
+      expect(lots?.ownership?.historyOnly, `lots.ownership.historyOnly ontbreekt in ${naam}`).toBeTruthy();
+    }
   });
 });

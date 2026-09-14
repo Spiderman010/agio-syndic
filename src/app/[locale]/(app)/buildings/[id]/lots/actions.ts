@@ -78,7 +78,7 @@ export async function updateLot(formData: FormData) {
 
   // Het lot moet niet alleen bij de organisatie horen maar ook bij DIT gebouw;
   // anders kan een gemanipuleerd formulier een lot uit een ander gebouw wijzigen.
-  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id);
+  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id, building_id);
   if (unitGuard) return { error: await foutTekst("OWNERSHIP_FORBIDDEN") };
 
   const { error } = await supabase
@@ -115,7 +115,10 @@ export async function linkFirstOwner(formData: FormData) {
 
   const buildingGuard = await assertInOrg(supabase, "buildings", building_id, org.id, "Gebouw");
   if (buildingGuard) return { error: await foutTekst("OWNERSHIP_FORBIDDEN") };
-  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id);
+  // Bewijst dat het lot bij DIT gebouw hoort, niet alleen bij de organisatie;
+  // zonder building_id hier zou een lot uit een ander gebouw in dezelfde
+  // organisatie via dit formulier gekoppeld kunnen worden.
+  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id, building_id);
   if (unitGuard) return { error: await foutTekst("OWNERSHIP_FORBIDDEN") };
   const ownerGuard = await assertInOrg(supabase, "owners", owner_id, org.id, "Eigenaar");
   if (ownerGuard) return { error: await foutTekst("OWNERSHIP_OWNER_INVALID") };
@@ -155,7 +158,10 @@ export async function transferOwnership(formData: FormData) {
 
   const buildingGuard = await assertInOrg(supabase, "buildings", building_id, org.id, "Gebouw");
   if (buildingGuard) return { error: await foutTekst("OWNERSHIP_FORBIDDEN") };
-  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id);
+  // Idem: het lot moet bij DIT gebouw horen, anders kan een gemanipuleerd
+  // formulier een overdracht op een lot uit een ander gebouw forceren terwijl
+  // de actie het gebouw uit de URL revalideert en daarheen redirect.
+  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id, building_id);
   if (unitGuard) return { error: await foutTekst("OWNERSHIP_FORBIDDEN") };
   const ownerGuard = await assertInOrg(supabase, "owners", new_owner_id, org.id, "Eigenaar");
   if (ownerGuard) return { error: await foutTekst("OWNERSHIP_OWNER_INVALID") };

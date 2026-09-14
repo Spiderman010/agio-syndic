@@ -86,7 +86,11 @@ export async function assignOwner(formData: FormData) {
   const buildingGuard = await assertInOrg(supabase, "buildings", building_id, org.id, "Gebouw");
   if (buildingGuard) return { error: t("forbidden") };
 
-  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id);
+  // Het lot moet bij DIT gebouw horen, niet alleen bij de organisatie; anders
+  // kan een gemanipuleerd formulier building_id van gebouw A combineren met
+  // unit_id van gebouw B en zo gebouw B muteren terwijl de actie gebouw A
+  // revalideert en daarheen redirect.
+  const unitGuard = await assertUnitInOrg(supabase, unit_id, org.id, building_id);
   if (unitGuard) return { error: t("forbidden") };
 
   const ownerGuard = await assertInOrg(supabase, "owners", owner_id, org.id, "Eigenaar");

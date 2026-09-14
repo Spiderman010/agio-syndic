@@ -471,6 +471,39 @@ export function lotStatus(unit: UnitRow, ownership: readonly OwnershipRow[]): Lo
   return "compleet";
 }
 
+/**
+ * De vier eigendomstoestanden van een lot, voor schermen die nog geen
+ * volledige `OwnershipRow[]` ophalen — alleen `end_date` (en of de gekoppelde
+ * eigenaar resolveert) is nodig om ACTUEEL van GESLOTEN te scheiden.
+ *
+ * Gebruikt door de legacy gebouwpagina om het `assignOwner`-formulier NOOIT
+ * te tonen op een lot met uitsluitend gesloten historie: `link_first_owner`
+ * weigert die aanroep terecht met OWNERSHIP_HISTORY_EXISTS, dus een
+ * formulier tonen zou een knop zijn waarvan al bekend is dat hij faalt. De
+ * nieuwe lots-pagina kent dezelfde vier toestanden via `classifyOwnership` +
+ * `rijen.length`; deze functie is de lichtgewicht tegenhanger voor een
+ * scherm dat alleen `end_date` en de eigenaarsnaam opvraagt.
+ */
+export type OwnerFormState =
+  /** Nog nooit een eigendomsrij gehad: het koppelformulier mag verschijnen. */
+  | "geen"
+  /** Historie bestaat, maar geen enkele rij is nog actueel: geen formulier. */
+  | "historieZonderEigenaar"
+  /** Precies één actuele rij. */
+  | "eenEigenaar"
+  /** Meerdere actuele rijen. */
+  | "ambigu";
+
+export function ownerFormState(
+  ownership: readonly { end_date: string | null; owners: unknown }[],
+): OwnerFormState {
+  const actief = ownership.filter((o) => o.end_date === null && o.owners != null);
+  if (actief.length === 0) {
+    return ownership.length > 0 ? "historieZonderEigenaar" : "geen";
+  }
+  return actief.length === 1 ? "eenEigenaar" : "ambigu";
+}
+
 export type TantiemeOverzicht = {
   /** Som van de tantièmes van alle lots in het gebouw. */
   toegekend: number;

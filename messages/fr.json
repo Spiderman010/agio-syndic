@@ -75,7 +75,10 @@
       "fr": "Français",
       "ar": "Arabe",
       "nl": "Néerlandais",
-      "en": "Anglais"
+      "en": "Anglais",
+      "es": "Espagnol",
+      "ru": "Russe",
+      "de": "Allemand"
     }
   },
   "boekjaren": {
