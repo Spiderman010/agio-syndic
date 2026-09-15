@@ -17,6 +17,8 @@ import {
 import { assertFiscalYearWritable, assertInOrg } from "@/lib/guard";
 import { isDuplicateYear, toUserError } from "@/lib/errors";
 import { reversalErrorFingerprint, reversalErrorKey } from "@/lib/reversalErrors";
+import { canWrite } from "@/lib/roles";
+import { chargeErrorKey } from "@/lib/charges";
 
 export async function createFiscalYear(formData: FormData) {
   const { org } = await requireOrg();
@@ -93,16 +95,21 @@ function collectManualLines(
  * worden gevuld en dus nooit iets anders kan zeggen dan de gebruikte regel.
  */
 export async function createChargeCall(formData: FormData) {
-  const { org } = await requireOrg();
+  const { org, role } = await requireOrg();
+  const t = await getTranslations("charges.errors");
+
+  // Rolcontrole in de applicatielaag. Dit is GEEN security boundary — de RPC
+  // toetst `can_write` zelf, SECURITY DEFINER, op basis van auth.uid() — maar
+  // het voorkomt dat een leesrol een RPC start waarvan we weten dat hij faalt,
+  // en het sluit de directe aanroep van deze Server Action af.
+  if (!canWrite(role)) return { error: t("forbidden") };
 
   const parsed = parseForm(chargeCallSchema, formData);
   if (!parsed.ok) return { error: parsed.error };
   const { fiscal_year_id, allocation_rule_id, ...call } = parsed.data;
 
   const manual = collectManualLines(formData);
-  if (manual.invalid) {
-    return { error: "Een van de handmatige bedragen is geen geldig getal." };
-  }
+  if (manual.invalid) return { error: t("manualInvalidNumber") };
 
   const supabase = await createClient();
 
@@ -115,10 +122,30 @@ export async function createChargeCall(formData: FormData) {
     .maybeSingle();
 
   if (fyError || !fy || fy.organization_id !== org.id) {
-    return { error: "Boekjaar bestaat niet binnen deze organisatie." };
+    return { error: t("fiscalYearNotFound") };
   }
-  if (fy.status === "closed") {
-    return { error: "Dit boekjaar is afgesloten en kan niet meer worden gewijzigd." };
+  if (fy.status === "closed") return { error: t("fiscalYearClosed") };
+
+  // Het gebouw uit de URL moet bij DIT boekjaar horen. Zonder deze controle kan
+  // een gemanipuleerd formulier een boekjaar van gebouw B meesturen terwijl de
+  // actie gebouw A revalideert en daarheen redirect.
+  const rawBuilding = formData.get("building_id");
+  if (typeof rawBuilding === "string" && rawBuilding !== "" && rawBuilding !== fy.building_id) {
+    return { error: t("fiscalYearNotFound") };
+  }
+
+  // Idem voor de verdeelregel: die moet bij hetzelfde gebouw horen. Leeg blijft
+  // leeg — dan kiest de database de standaardregel, en dat pad blijft van haar.
+  if (allocation_rule_id) {
+    const { data: rule, error: ruleError } = await supabase
+      .from("allocation_rules")
+      .select("building_id, status")
+      .eq("id", allocation_rule_id)
+      .maybeSingle();
+
+    if (ruleError || !rule) return { error: t("ruleNotFound") };
+    if (rule.building_id !== fy.building_id) return { error: t("ruleWrongBuilding") };
+    if (rule.status !== "active") return { error: t("ruleInactive") };
   }
 
   const { error } = await supabase.rpc("create_charge_call", {
@@ -134,7 +161,12 @@ export async function createChargeCall(formData: FormData) {
     p_manual_lines: manual.lines,
   });
 
-  if (error) return { error: toUserError(error, "Aanmaken van de lastenoproep is mislukt.") };
+  // De engine werpt `ALLOC_CODE: Nederlandse uitleg`. Alleen de CODE wordt
+  // gebruikt; de uitleg, de lotlabels en de SQLSTATE blijven achter. Wat de
+  // gebruiker ziet is de vertaalde zin die bij die code hoort.
+  if (error) {
+    return { error: t(chargeErrorKey(error.message) as Parameters<typeof t>[0]) };
+  }
 
   revalidatePath(`/buildings/${fy.building_id}/boekjaren/${fiscal_year_id}`);
   return localeRedirect(`/buildings/${fy.building_id}/boekjaren/${fiscal_year_id}`);

@@ -122,6 +122,102 @@
     "types": {
       "regulier": "Régulier",
       "exceptionnel": "Exceptionnel"
+    },
+    "new": "Nouvel appel de charges",
+    "rule": "Clé de répartition",
+    "ruleDefault": "Règle par défaut du bâtiment",
+    "ruleInactiveSuffix": "(inactive)",
+    "methods": {
+      "equal": "parts égales",
+      "tantieme": "tantièmes",
+      "percentage": "pourcentages",
+      "manual": "manuel"
+    },
+    "scopes": {
+      "whole_building": "tout le bâtiment",
+      "block": "un bloc",
+      "selected_units": "lots sélectionnés"
+    },
+    "manual": {
+      "title": "Montants manuels par lot",
+      "hint": "Chaque lot participant doit avoir un montant. La somme doit correspondre exactement au montant de l'appel ; cette vérification est faite par la base de données."
+    },
+    "steps": {
+      "input": "1. Saisie",
+      "check": "2. Contrôle avant création",
+      "create": "3. Création définitive"
+    },
+    "check": {
+      "title": "Contrôle avant création",
+      "run": "Lancer le contrôle",
+      "again": "Relancer le contrôle",
+      "intro": "Contrôle des données avant la création définitive, sur la date d'appel saisie.",
+      "participants": "Lots dans le périmètre de la règle",
+      "clear": "Aucun obstacle connu n'a été trouvé.",
+      "notGuarantee": "Ce contrôle ne garantit pas la réussite : la base de données revérifie tout au moment de la création définitive.",
+      "blockersTitle": "À corriger avant de créer",
+      "noticesTitle": "À savoir",
+      "lots": "Lots concernés",
+      "openLots": "Ouvrir les lots",
+      "stale": "Les données ont changé. Relancez le contrôle.",
+      "partialDenominator": "Écart au total de contrôle enregistré et motivé, valable jusqu'à l'exercice {year} inclus : {participating} tantièmes participants pour {declared} déclarés.",
+      "manualSumNote": "La somme des montants manuels est vérifiée par la base de données lors de la création."
+    },
+    "confirm": {
+      "title": "Création définitive",
+      "warning": "La création génère des créances par lot et des écritures comptables. Un appel créé ne peut plus être modifié.",
+      "checkbox": "Je confirme la création de cet appel de charges.",
+      "submit": "Créer l'appel définitivement",
+      "pending": "Création en cours…"
+    },
+    "result": {
+      "title": "Répartition définitive",
+      "source": "Montants issus de la répartition enregistrée par la base de données.",
+      "unit": "Lot",
+      "amount": "Montant",
+      "total": "Total",
+      "lines": "lignes",
+      "rule": "Règle appliquée",
+      "method": "Méthode",
+      "scope": "Périmètre",
+      "participants": "Lots",
+      "partial": "Écart au total de contrôle enregistré",
+      "noLines": "Aucune ligne enregistrée pour cet appel."
+    },
+    "errors": {
+      "generic": "L'appel de charges n'a pas pu être créé. Vérifiez les données et réessayez.",
+      "forbidden": "Vous n'avez pas les droits pour créer un appel de charges.",
+      "fiscalYearNotFound": "Cet exercice n'existe pas dans cette organisation.",
+      "fiscalYearClosed": "Cet exercice est clôturé et ne peut plus être modifié.",
+      "noDefaultRule": "Ce bâtiment n'a pas de clé de répartition par défaut active.",
+      "ruleNotFound": "La clé de répartition choisie n'existe pas.",
+      "ruleWrongBuilding": "La clé de répartition appartient à un autre bâtiment.",
+      "ruleInactive": "La clé de répartition choisie n'est pas active.",
+      "methodUnsupported": "Cette combinaison de méthode et de source de pondération n'est pas prise en charge.",
+      "amountInvalid": "Le montant de l'appel doit être supérieur à zéro.",
+      "emptyBlock": "Le bloc choisi ne contient aucun lot.",
+      "noParticipants": "Aucun lot ne participe à la clé de répartition choisie.",
+      "uncoveredUnits": "Certains lots ne sont pas couverts par la clé de répartition. Ajoutez-les ou excluez-les.",
+      "weightMissing": "Certains lots participants n'ont pas de tantième ou de pondération. Complétez-les ou excluez-les.",
+      "zeroDenominator": "La somme des pondérations est nulle ou négative.",
+      "percentageSum": "Les pourcentages ne totalisent pas 100 %.",
+      "controlTotal": "La somme des tantièmes des lots participants ne correspond pas aux tantièmes déclarés du bâtiment. Complétez les lots manquants ou enregistrez un écart motivé.",
+      "integrity": "Un contrôle d'intégrité de la répartition a échoué. Aucune donnée n'a été enregistrée.",
+      "manualMissing": "Une répartition manuelle exige un montant par lot.",
+      "manualMissingUnit": "Certains lots participants n'ont pas de montant.",
+      "manualOutOfScope": "Certains montants concernent des lots hors du périmètre choisi.",
+      "manualDuplicate": "Un lot apparaît plusieurs fois dans la répartition manuelle.",
+      "manualNegative": "Un montant manuel ne peut pas être négatif.",
+      "manualSum": "Les montants manuels ne correspondent pas au montant de l'appel.",
+      "manualInvalidNumber": "L'un des montants manuels n'est pas un nombre valide.",
+      "noOwner": "Certains lots n'ont pas de propriétaire à la date d'appel. Enregistrez le propriétaire.",
+      "ambiguousOwner": "Certains lots ont plusieurs propriétaires actifs sans débiteur désigné. Désignez un débiteur par lot.",
+      "ownerHasHistory": "Ce propriétaire a un historique qui empêche cette opération.",
+      "ownerHasPayments": "Ce propriétaire a des paiements qui empêchent cette opération.",
+      "unitHasHistory": "Ce lot a un historique qui empêche cette opération.",
+      "callImmutable": "Un appel de charges créé ne peut plus être modifié.",
+      "callPaid": "Cet appel a des paiements rattachés et ne peut pas être retiré.",
+      "blockMove": "Un bloc ne peut pas être déplacé vers un autre bâtiment."
     }
   },
   "payments": {

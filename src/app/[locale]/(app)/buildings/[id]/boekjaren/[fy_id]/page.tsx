@@ -2,25 +2,23 @@ import { notFound } from "next/navigation";
 import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
 import { getTranslations } from "next-intl/server";
-import { createChargeCall, createPayment } from "../actions";
+import { createPayment } from "../actions";
 import ActionForm from "@/components/ActionForm";
 import PaymentReversalActions from "@/components/PaymentReversalActions";
-import { canReverse } from "@/lib/roles";
+import ChargeCallWorkflow from "./ChargeCallWorkflow";
+import { canReverse, canWrite } from "@/lib/roles";
 import { correctionOf, fetchReversalIndex, reversalOf } from "@/lib/reversal";
+import { formatMoney } from "@/lib/money";
+import type { AllocationRuleRow, RuleUnitRow, RuleWeightRow } from "@/lib/charges";
+import type { OwnershipRow } from "@/lib/ownership";
 import type { Building, FiscalYear } from "@/lib/types";
 
-const METHOD_LABEL: Record<string, string> = {
-  equal: "parts égales",
-  tantieme: "tantièmes",
-  percentage: "pourcentages",
-  manual: "manuel",
-};
-
-const SCOPE_LABEL: Record<string, string> = {
-  whole_building: "tout le bâtiment",
-  block: "un bloc",
-  selected_units: "lots sélectionnés",
-};
+/*
+ * De methode- en reikwijdtelabels stonden hier als hardgecodeerde Franse
+ * constanten. Ze zijn vervangen door `charges.methods.*` en `charges.scopes.*`,
+ * die in FR, NL en AR bestaan: een Marokkaanse syndic die de app in het
+ * Arabisch gebruikt, hoort geen Franse termen in een keuzelijst te lezen.
+ */
 
 type AllocRow = {
   id: string;
@@ -39,6 +37,12 @@ type CallRow = {
   total_amount: number;
   call_date: string;
   due_date: string | null;
+  /** Snapshotkop: wat de engine bij het aanmaken werkelijk heeft toegepast. */
+  alloc_method: string;
+  alloc_scope: string;
+  alloc_rule_label: string;
+  alloc_unit_count: number;
+  alloc_partial_denominator: boolean;
   charge_allocations: AllocRow[];
 };
 
@@ -74,12 +78,15 @@ function allocBadge(settled: number, amount: number, dueDate: string | null) {
 export default async function FiscalYearDetail({
   params,
 }: {
-  params: Promise<{ id: string; fy_id: string }>;
+  params: Promise<{ locale: string; id: string; fy_id: string }>;
 }) {
-  const { id: buildingId, fy_id: fyId } = await params;
+  const { locale, id: buildingId, fy_id: fyId } = await params;
   const { role } = await requireOrg();
   const supabase = await createClient();
   const tr = await getTranslations("reversal");
+  const tc = await getTranslations("charges");
+  const mayWrite = canWrite(role);
+  const vandaag = new Date().toISOString().slice(0, 10);
 
   const [{ data: bData }, { data: fyData }] = await Promise.all([
     supabase.from("buildings").select("*").eq("id", buildingId).maybeSingle(),
@@ -89,10 +96,12 @@ export default async function FiscalYearDetail({
   const b = bData as Building;
   const fy = fyData as FiscalYear;
 
-  const { data: callsData } = await supabase
+  const { data: callsData, error: callsError } = await supabase
     .from("charge_calls")
     .select(`
       id, type, period, label, total_amount, call_date, due_date,
+      alloc_method, alloc_scope, alloc_rule_label, alloc_unit_count,
+      alloc_partial_denominator,
       charge_allocations(
         id, amount, settled_amount, owner_id,
         units(label),
@@ -103,39 +112,108 @@ export default async function FiscalYearDetail({
     .order("call_date", { ascending: false });
   const calls = (callsData ?? []) as unknown as CallRow[];
 
-  const { data: unitIds } = await supabase
+  // ── Bronnen voor de controle vóór aanmaken ───────────────────────────────
+  //
+  // FAIL-CLOSED. Een mislukte query mag hier NOOIT als lege of gezonde data
+  // doorgaan: nul lots zonder eigenaar ziet er precies zo uit als "de query
+  // faalde", en op dat verschil hangt een financiële handeling. Faalt één van
+  // deze bronnen, dan verschijnt het aanmaakformulier helemaal niet.
+  //
+  // `units` gaat vooruit, omdat `ownership` GEEN `building_id` draagt: de keten
+  // loopt daar via `unit_id`. Dat is geen omissie maar het model — m30 gaf
+  // `ownership` wel een `organization_id`, nooit een gebouwkolom.
+  const unitsRes = await supabase
     .from("units")
-    .select("id, label")
+    .select("id, building_id, label, tantiemes, block_id")
     .eq("building_id", buildingId)
     .order("label");
-  const lots = (unitIds ?? []) as { id: string; label: string }[];
 
-  // Actieve verdeelregels van dit gebouw. De standaardregel staat bovenaan;
-  // laat de gebruiker leeg, dan kiest de database die zelf.
-  const { data: rulesData } = await supabase
-    .from("allocation_rules")
-    .select("id, label, method, scope, is_default")
-    .eq("building_id", buildingId)
-    .eq("status", "active")
-    .order("is_default", { ascending: false })
-    .order("label");
-  const rules = (rulesData ?? []) as {
+  const unitIds = (unitsRes.data ?? []).map((u) => u.id as string);
+
+  const [rulesRes, ruleUnitsRes, ruleWeightsRes, ownershipRes, linesRes] =
+    await Promise.all([
+      supabase
+        .from("allocation_rules")
+        .select(
+          "id, building_id, code, label, method, scope, weight_source, scope_block_id, uncovered_unit_policy, status, is_default, partial_denominator_until_year",
+        )
+        .eq("building_id", buildingId)
+        .eq("status", "active")
+        .order("is_default", { ascending: false })
+        .order("label"),
+      supabase
+        .from("allocation_rule_units")
+        .select("rule_id, unit_id")
+        .eq("building_id", buildingId),
+      supabase
+        .from("allocation_rule_weights")
+        .select("rule_id, unit_id, weight")
+        .eq("building_id", buildingId),
+      supabase
+        .from("ownership")
+        .select(
+          "id, unit_id, owner_id, share, start_date, end_date, is_primary_debtor, owners(id, full_name)",
+        )
+        .in("unit_id", unitIds),
+      supabase
+        .from("charge_call_lines")
+        .select("charge_call_id, unit_id, amount_cents, units(label)")
+        .eq("building_id", buildingId),
+    ]);
+
+  /** Eén gefaalde bron is genoeg om het aanmaken te blokkeren. */
+  const bronnenOk =
+    !unitsRes.error &&
+    !rulesRes.error &&
+    !ruleUnitsRes.error &&
+    !ruleWeightsRes.error &&
+    !ownershipRes.error &&
+    !linesRes.error &&
+    !callsError;
+
+  const lots = (unitsRes.data ?? []) as {
     id: string;
+    building_id: string;
     label: string;
-    method: string;
-    scope: string;
-    is_default: boolean;
+    tantiemes: number | string | null;
+    block_id: string | null;
   }[];
-  const heeftHandmatigeRegel = rules.some((r) => r.method === "manual");
 
-  const { data: ownershipData } = await supabase
-    .from("ownership")
-    .select("owners(id, full_name)")
-    .in("unit_id", lots.map((u) => u.id))
-    .is("end_date", null);
+  const rules = (rulesRes.data ?? []) as unknown as AllocationRuleRow[];
+  const ruleUnits = (ruleUnitsRes.data ?? []) as RuleUnitRow[];
+  const ruleWeights = (ruleWeightsRes.data ?? []) as RuleWeightRow[];
 
+  const ownershipRows = (ownershipRes.data ?? []) as unknown as (OwnershipRow & {
+    owners: { id: string; full_name: string } | { id: string; full_name: string }[] | null;
+  })[];
+
+  // De definitieve verdeling, per oproep. Uitsluitend uit `charge_call_lines`:
+  // dat is de door de database vastgelegde uitkomst van de centverdeling.
+  const linesPerCall = new Map<string, { label: string; amountCents: number }[]>();
+  for (const rij of (linesRes.data ?? []) as unknown as {
+    charge_call_id: string;
+    unit_id: string;
+    amount_cents: number | string;
+    units: { label: string } | { label: string }[] | null;
+  }[]) {
+    const rawUnit = rij.units;
+    const unit = Array.isArray(rawUnit) ? (rawUnit[0] ?? null) : rawUnit;
+    const lijst = linesPerCall.get(rij.charge_call_id) ?? [];
+    lijst.push({ label: unit?.label ?? "—", amountCents: Number(rij.amount_cents) });
+    linesPerCall.set(rij.charge_call_id, lijst);
+  }
+  for (const lijst of linesPerCall.values()) {
+    lijst.sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+
+  // De eigenaarskeuze van het BETALINGSformulier. Die lijst toont bewust alleen
+  // ACTUELE eigenaars (`end_date IS NULL`), net als voorheen: de bovenstaande
+  // query haalt sinds deze sprint de volledige historie op voor de controle vóór
+  // aanmaken, en zonder dit filter zouden oud-eigenaars in dat formulier komen.
   const eigenaarMap = new Map<string, string>();
-  for (const row of ownershipData ?? []) {
+  for (const row of ownershipRows) {
+    if (row.end_date !== null) continue;
     const rawOwner = row.owners as { id: string; full_name: string }[] | { id: string; full_name: string } | null;
     const o = Array.isArray(rawOwner) ? (rawOwner[0] ?? null) : rawOwner;
     if (o) eigenaarMap.set(o.id, o.full_name);
@@ -306,95 +384,112 @@ export default async function FiscalYearDetail({
                           </div>
                         </div>
                       )}
+
+                      {/*
+                        De DEFINITIEVE verdeling, letterlijk uit
+                        `charge_call_lines`. Dat is de door de database
+                        vastgelegde uitkomst van de centverdeling, inclusief de
+                        restcenten; hier wordt niets herberekend. De snapshotkop
+                        erboven vertelt welke regel er werkelijk is toegepast.
+                      */}
+                      <details style={{ marginTop: "0.75rem" }}>
+                        <summary className="cursor-pointer text-[0.8rem] font-medium">
+                          {tc("result.title")}
+                        </summary>
+                        <div className="mt-2 flex flex-col gap-2">
+                          <dl className="text-ink-soft m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[0.75rem]">
+                            <dt>{tc("result.rule")}</dt>
+                            <dd className="m-0">{cc.alloc_rule_label}</dd>
+                            <dt>{tc("result.method")}</dt>
+                            <dd className="m-0">
+                              {tc(`methods.${cc.alloc_method}` as never)} /{" "}
+                              {tc(`scopes.${cc.alloc_scope}` as never)}
+                            </dd>
+                            <dt>{tc("result.participants")}</dt>
+                            <dd className="m-0 [font-variant-numeric:tabular-nums]">
+                              {cc.alloc_unit_count}
+                            </dd>
+                            {cc.alloc_partial_denominator && (
+                              <>
+                                <dt>{tc("result.partial")}</dt>
+                                <dd className="text-warn m-0">✓</dd>
+                              </>
+                            )}
+                          </dl>
+
+                          {(linesPerCall.get(cc.id) ?? []).length === 0 ? (
+                            <p className="text-ink-soft m-0 text-[0.78rem]">
+                              {tc("result.noLines")}
+                            </p>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-[0.78rem] [font-variant-numeric:tabular-nums]">
+                                <caption className="text-ink-soft text-start text-[0.72rem]">
+                                  {tc("result.source")}
+                                </caption>
+                                <thead>
+                                  <tr>
+                                    <th className="text-ink-soft text-start font-medium">
+                                      {tc("result.unit")}
+                                    </th>
+                                    <th className="text-ink-soft text-end font-medium">
+                                      {tc("result.amount")}
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(linesPerCall.get(cc.id) ?? []).map((regel) => (
+                                    <tr key={`${cc.id}-${regel.label}`}>
+                                      <td className="text-start">{regel.label}</td>
+                                      <td className="text-end">
+                                        {formatMoney(regel.amountCents / 100, locale)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      </details>
                     </div>
                   );
                 })}
               </div>
             </section>
 
-            {fy.status === "open" && (
-              <ActionForm action={createChargeCall} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
-                <input type="hidden" name="building_id" value={buildingId} />
-                <input type="hidden" name="fiscal_year_id" value={fyId} />
-                <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.9rem" }}>Nouvel appel de charges</h3>
+            {/*
+              De workflow vervangt het losse formulier: invoeren, controleren en
+              pas daarna definitief aanmaken. Drie poorten staan ervoor.
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.7rem", marginBottom: "0.7rem" }}>
-                  <div>
-                    <label className="label" htmlFor="cc_type">Type</label>
-                    <select className="input" id="cc_type" name="type" defaultValue="regulier">
-                      <option value="regulier">Régulier</option>
-                      <option value="exceptionnel">Exceptionnel</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="period">Période</label>
-                    <input className="input" id="period" name="period" placeholder="ex. T1 2026" />
-                  </div>
+              1. SCHRIJFRECHT. Een leesrol krijgt het formulier niet te zien.
+                 Dat is geen beveiliging - de RPC toetst `can_write` zelf - maar
+                 het voorkomt een knop waarvan we weten dat hij faalt.
+              2. OPEN BOEKJAAR. Een gesloten boekjaar weigert de database.
+              3. VOLLEDIGE BRONNEN. Faalde een van de queries waarop de controle
+                 steunt, dan verschijnt er GEEN aanmaakknop en geen groene
+                 gereedmelding, maar een foutmelding. Een mislukte query mag
+                 nooit als gezonde data doorgaan.
+            */}
+            {mayWrite && fy.status === "open" && (
+              bronnenOk ? (
+                <ChargeCallWorkflow
+                  buildingId={buildingId}
+                  fiscalYearId={fyId}
+                  fiscalYear={{ year: fy.year, status: fy.status }}
+                  declaredTantiemes={b.total_tantiemes}
+                  rules={rules}
+                  units={lots}
+                  ruleUnits={ruleUnits}
+                  ruleWeights={ruleWeights}
+                  ownership={ownershipRows}
+                  today={vandaag}
+                />
+              ) : (
+                <div className="card mt-4 p-4" role="alert">
+                  <p className="m-0 text-[0.85rem] font-medium">{tc("errors.generic")}</p>
                 </div>
-
-                <div style={{ marginBottom: "0.7rem" }}>
-                  <label className="label" htmlFor="cc_label">Libellé (optionnel)</label>
-                  <input className="input" id="cc_label" name="label" placeholder="Entretien ascenseur T2" />
-                </div>
-
-                <div style={{ marginBottom: "0.7rem" }}>
-                  <label className="label" htmlFor="allocation_rule_id">Clé de répartition</label>
-                  <select className="input" id="allocation_rule_id" name="allocation_rule_id" defaultValue="">
-                    <option value="">Règle par défaut du bâtiment</option>
-                    {rules.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.label} — {METHOD_LABEL[r.method] ?? r.method} / {SCOPE_LABEL[r.scope] ?? r.scope}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {heeftHandmatigeRegel && lots.length > 0 && (
-                  <details style={{ marginBottom: "0.9rem" }}>
-                    <summary style={{ cursor: "pointer", fontSize: "0.82rem", color: "var(--muted)" }}>
-                      Montants manuels par lot — uniquement pour une règle « manuel »
-                    </summary>
-                    <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0.5rem 0" }}>
-                      Chaque lot participant doit avoir un montant. Un champ vide compte comme 0,00 MAD.
-                      La somme doit correspondre exactement au montant de l&apos;appel.
-                    </p>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.5rem" }}>
-                      {lots.map((u) => (
-                        <div key={u.id}>
-                          <label className="label" htmlFor={`manual_${u.id}`}>{u.label}</label>
-                          <input
-                            className="input"
-                            id={`manual_${u.id}`}
-                            name={`manual_${u.id}`}
-                            type="text"
-                            inputMode="decimal"
-                            placeholder="0.00"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                )}
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.7rem", marginBottom: "0.9rem" }}>
-                  <div>
-                    <label className="label" htmlFor="total_amount">Montant (MAD)</label>
-                    <input className="input" id="total_amount" name="total_amount" type="text" placeholder="1200.00" required />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="call_date">Date d&apos;appel</label>
-                    <input className="input" id="call_date" name="call_date" type="date" required />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="due_date">Échéance</label>
-                    <input className="input" id="due_date" name="due_date" type="date" />
-                  </div>
-                </div>
-
-                <button className="btn btn-primary" style={{ width: "100%" }}>
-                  Créer l&apos;appel
-                </button>
-              </ActionForm>
+              )
             )}
           </div>
 

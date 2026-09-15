@@ -102,9 +102,19 @@ export function periodsOverlap(a: OwnershipRow, b: OwnershipRow): boolean {
  * die de vordering krijgt.
  */
 export function currentOwnership(rows: readonly OwnershipRow[]): OwnershipRow | null {
-  const lopend = rows.filter(isCurrent);
-  if (lopend.length === 0) return null;
-  const gesorteerd = [...lopend].sort(
+  return kiesDebiteur(rows.filter(isCurrent));
+}
+
+/**
+ * De volgorde van `fn_alloc_resolve_owner`, letterlijk:
+ *
+ *     ORDER BY is_primary_debtor DESC, share DESC, start_date DESC, id ASC
+ *
+ * Eén plek, zodat "wie krijgt de vordering" niet per aanroeper kan verschillen.
+ */
+function kiesDebiteur(rijen: readonly OwnershipRow[]): OwnershipRow | null {
+  if (rijen.length === 0) return null;
+  const gesorteerd = [...rijen].sort(
     (a, b) =>
       Number(b.is_primary_debtor) - Number(a.is_primary_debtor) ||
       num(b.share) - num(a.share) ||
@@ -322,6 +332,70 @@ export function classifyOwnership(
     nPrimary,
     klasse,
     debiteur: currentOwnership(ownership),
+    toewijsbaar: klasse === "enkel" || klasse === "medeEigendom",
+  };
+}
+
+/** Alle rijen die op `date` actief zijn; de filterhelft van `fn_alloc_resolve_owner`. */
+export function ownershipsOn(
+  rows: readonly OwnershipRow[],
+  date: string,
+): OwnershipRow[] {
+  return rows.filter((r) => isActiveOn(r, date));
+}
+
+/** De rij die op `date` de vordering zou krijgen, of null. */
+export function resolveOwnerOn(
+  rows: readonly OwnershipRow[],
+  date: string,
+): OwnershipRow | null {
+  return kiesDebiteur(ownershipsOn(rows, date));
+}
+
+/**
+ * Classificeert de eigendomstoestand van één lot OP EEN OPGEGEVEN DATUM.
+ *
+ * Dit is de variant die de lastenoproep nodig heeft. `classifyOwnership()`
+ * beoordeelt uitsluitend `end_date IS NULL` — "wie is nu eigenaar" — en dat is
+ * iets anders dan wat `create_charge_call` doet: die resolveert per lot op
+ * `p_call_date`. Een oproep met terugwerkende kracht over een periode vóór een
+ * verkoop moet bij de VORIGE eigenaar uitkomen, en een lot waarvan de eigendom
+ * pas ná de oproepdatum begint heeft op die datum géén eigenaar. Beide gevallen
+ * beoordeelt de datumloze variant verkeerd, dus die mag hier niet worden
+ * hergebruikt.
+ *
+ * De datumsemantiek is inclusief aan beide kanten en komt uit `isActiveOn()`,
+ * dat letterlijk de formule van `fn_alloc_resolve_owner` draagt:
+ *
+ *     start_date <= call_date AND (end_date IS NULL OR end_date >= call_date)
+ *
+ * De klassegrenzen spiegelen exact de twee harde condities uit m20:
+ *
+ *     n_active = 0                 -> ALLOC_NO_OWNER
+ *     n_active > 1 AND n_primary<>1 -> ALLOC_AMBIGUOUS_OWNER
+ *
+ * Alles daarbuiten is toegestaan, inclusief één eigenaar die niet als debiteur
+ * is aangewezen en mede-eigendom met exact één aangewezen debiteur.
+ */
+export function classifyOwnershipOn(
+  ownership: readonly OwnershipRow[],
+  callDate: string,
+): OwnershipClassification {
+  const actief = ownershipsOn(ownership, callDate);
+  const nActive = actief.length;
+  const nPrimary = actief.filter((r) => r.is_primary_debtor).length;
+
+  let klasse: OwnershipClass;
+  if (nActive === 0) klasse = "geenEigenaar";
+  else if (nActive === 1) klasse = "enkel";
+  else if (nPrimary === 1) klasse = "medeEigendom";
+  else klasse = "ambigu";
+
+  return {
+    nActive,
+    nPrimary,
+    klasse,
+    debiteur: kiesDebiteur(actief),
     toewijsbaar: klasse === "enkel" || klasse === "medeEigendom",
   };
 }

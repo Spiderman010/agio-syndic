@@ -1,0 +1,318 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import type { AllocationRuleRow, ChargeUnitRow } from "@/lib/charges";
+import type { OwnershipRow } from "@/lib/ownership";
+
+/**
+ * De workflow in de browser: invoeren -> controleren -> bevestigen -> aanmaken.
+ *
+ * Wat hier wordt vastgelegd is het GEDRAG van de drie poorten. De knop die geld
+ * vastlegt bestaat niet vóór de controle, is geblokkeerd zolang er niet
+ * expliciet is bevestigd, en blijft geblokkeerd tijdens het verzenden. Elke
+ * invoerwijziging maakt een eerdere uitkomst ongeldig.
+ */
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+const BLD = "11111111-1111-1111-1111-111111111111";
+const U1 = "u1111111-0000-0000-0000-000000000001";
+const U2 = "u2222222-0000-0000-0000-000000000002";
+const REGEL = "r1111111-0000-0000-0000-000000000001";
+
+const acties: FormData[] = [];
+
+vi.mock("next-intl", () => ({
+  useTranslations: (namespace?: string) => {
+    const fn = (key: string, waarden?: Record<string, unknown>) => {
+      const basis = namespace ? `${namespace}.${key}` : key;
+      return waarden ? `${basis}(${Object.values(waarden).join(",")})` : basis;
+    };
+    return Object.assign(fn, { rich: fn, markup: fn, raw: fn, has: () => true });
+  },
+  useLocale: () => "fr",
+}));
+
+vi.mock("@/navigation", () => ({
+  Link: ({ href, children }: { href: string; children: React.ReactNode }) => (
+    <a href={href} onClick={(e) => e.preventDefault()}>
+      {children}
+    </a>
+  ),
+}));
+
+vi.mock("../src/app/[locale]/(app)/buildings/[id]/boekjaren/actions", () => ({
+  createChargeCall: async (formData: FormData) => {
+    acties.push(formData);
+    return undefined;
+  },
+}));
+
+vi.mock("@/app/[locale]/(app)/buildings/[id]/boekjaren/actions", () => ({
+  createChargeCall: async (formData: FormData) => {
+    acties.push(formData);
+    return undefined;
+  },
+}));
+
+const { default: ChargeCallWorkflow } = await import(
+  "@/app/[locale]/(app)/buildings/[id]/boekjaren/[fy_id]/ChargeCallWorkflow"
+);
+
+function unit(id: string, label: string, tantiemes: number): ChargeUnitRow {
+  return { id, building_id: BLD, label, tantiemes, block_id: null };
+}
+
+function bezit(unitId: string, over: Partial<OwnershipRow> = {}): OwnershipRow {
+  return {
+    id: `own-${unitId}`,
+    unit_id: unitId,
+    owner_id: "o1",
+    share: 1,
+    start_date: "2026-01-01",
+    end_date: null,
+    is_primary_debtor: true,
+    ...over,
+  };
+}
+
+const REGEL_STANDAARD: AllocationRuleRow = {
+  id: REGEL,
+  building_id: BLD,
+  code: "general",
+  label: "Charges générales",
+  method: "tantieme",
+  scope: "whole_building",
+  weight_source: "unit_tantiemes",
+  scope_block_id: null,
+  uncovered_unit_policy: "scope_default",
+  status: "active",
+  is_default: true,
+  partial_denominator_until_year: null,
+};
+
+function toon(over: Partial<React.ComponentProps<typeof ChargeCallWorkflow>> = {}) {
+  return render(
+    <ChargeCallWorkflow
+      buildingId={BLD}
+      fiscalYearId="fy-1"
+      fiscalYear={{ year: 2026, status: "open" }}
+      declaredTantiemes={100}
+      rules={[REGEL_STANDAARD]}
+      units={[unit(U1, "A1", 60), unit(U2, "A2", 40)]}
+      ruleUnits={[]}
+      ruleWeights={[]}
+      ownership={[bezit(U1), bezit(U2)]}
+      today="2026-06-30"
+      {...over}
+    />,
+  );
+}
+
+beforeEach(() => {
+  acties.length = 0;
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("WF — de drie stappen", () => {
+  it("WF1 — vóór de controle bestaat er geen aanmaakknop", () => {
+    toon();
+    expect(screen.queryByTestId("readiness")).toBeNull();
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+    expect(screen.queryByTestId("confirm-checkbox")).toBeNull();
+  });
+
+  it("WF2 — de controle toont de uitkomst en het aantal deelnemende lots", () => {
+    toon();
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("readiness")).toBeTruthy();
+    expect(screen.getByTestId("clear")).toBeTruthy();
+    expect(screen.getByTestId("readiness").textContent).toContain("2");
+  });
+
+  it("WF3 — een blokkade krijgt role=alert en er komt geen aanmaakknop", () => {
+    // A2 heeft geen eigenaar op de oproepdatum.
+    toon({ ownership: [bezit(U1)] });
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+
+    const blokkades = screen.getByTestId("blockers");
+    expect(blokkades.getAttribute("role")).toBe("alert");
+    expect(blokkades.textContent).toContain("charges.errors.noOwner");
+    // Het lotlabel komt uit de eigen query, niet uit databasefouttekst.
+    expect(blokkades.textContent).toContain("A2");
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+  });
+
+  it("WF4 — de controle belooft nooit dat het aanmaken zal slagen", () => {
+    toon();
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    const tekst = screen.getByTestId("readiness").textContent ?? "";
+    expect(tekst).toContain("charges.check.notGuarantee");
+    expect(tekst).not.toContain("charges.check.willSucceed");
+  });
+});
+
+describe("BV — bevestigen en verzenden", () => {
+  it("BV1 — zonder bevestiging is de aanmaakknop geblokkeerd", () => {
+    toon();
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    const knop = screen.getByTestId("final-submit");
+    expect(knop.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("BV2 — na bevestiging is de knop vrij", () => {
+    toon();
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("confirm-checkbox"));
+    });
+    expect(screen.getByTestId("final-submit").getAttribute("aria-disabled")).toBe("false");
+  });
+
+  it("BV3 — een geblokkeerde knop start geen verzending, ook niet bij dubbelklikken", () => {
+    toon();
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    const knop = screen.getByTestId("final-submit");
+    act(() => {
+      fireEvent.click(knop);
+      fireEvent.click(knop);
+    });
+    expect(acties).toHaveLength(0);
+  });
+
+  it("BV4 — een invoerwijziging maakt controle én bevestiging ongeldig", () => {
+    toon();
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("confirm-checkbox"));
+    });
+    expect(screen.getByTestId("final-submit").getAttribute("aria-disabled")).toBe("false");
+
+    // Een andere oproepdatum hoort de eerdere uitkomst te laten vervallen.
+    act(() => {
+      fireEvent.change(screen.getByLabelText(/charges\.callDate/), {
+        target: { value: "2026-09-01" },
+      });
+    });
+    expect(screen.queryByTestId("readiness")).toBeNull();
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+  });
+
+  it("BV5 — de oproepdatum stuurt de eigenaarscontrole", () => {
+    // A1 wisselt op 01-06-2026 van eigenaar; A2 heeft pas eigendom vanaf juli.
+    toon({
+      ownership: [
+        bezit(U1, { start_date: "2026-01-01", end_date: "2026-05-31" }),
+        bezit(U1, { id: "own-u1-b", owner_id: "o2", start_date: "2026-06-01" }),
+        bezit(U2, { start_date: "2026-07-01" }),
+      ],
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    // Op 30-06 heeft A2 nog geen eigenaar.
+    expect(screen.getByTestId("blockers").textContent).toContain("A2");
+
+    act(() => {
+      fireEvent.change(screen.getByLabelText(/charges\.callDate/), {
+        target: { value: "2026-07-15" },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("clear")).toBeTruthy();
+  });
+
+  it("BV6 — de bevestiging waarschuwt dat er vorderingen en journaalregels ontstaan", () => {
+    toon();
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    const kaart = screen.getByTestId("charge-call-workflow");
+    expect(kaart.textContent).toContain("charges.confirm.warning");
+    expect(kaart.querySelector('[role="alert"]')).toBeTruthy();
+  });
+});
+
+describe("TG — toegankelijkheid en opmaak", () => {
+  it("TG1 — elk invoerveld heeft een gekoppeld label", () => {
+    const { container } = toon();
+    const velden = container.querySelectorAll("input[name], select[name]");
+    expect(velden.length).toBeGreaterThan(4);
+    for (const veld of Array.from(velden)) {
+      const id = veld.getAttribute("id");
+      if (!id || veld.getAttribute("type") === "hidden") continue;
+      expect(container.querySelector(`label[for="${id}"]`), id).toBeTruthy();
+    }
+  });
+
+  it("TG2 — de bevestigingsstap is geen modaal venster maar inline en met toetsenbord bedienbaar", () => {
+    const { container } = toon();
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(container.querySelector("dialog")).toBeNull();
+    const checkbox = screen.getByTestId("confirm-checkbox") as HTMLInputElement;
+    expect(checkbox.type).toBe("checkbox");
+    expect(checkbox.tabIndex).toBeGreaterThanOrEqual(0);
+    // aria-disabled houdt de knop in de tabvolgorde, anders dan `disabled`.
+    expect(screen.getByTestId("final-submit").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("TG3 — de opmaak is logisch en responsive, zonder vaste breedtes", () => {
+    const bron = readFileSync(
+      join(
+        REPO,
+        "src",
+        "app",
+        "[locale]",
+        "(app)",
+        "buildings",
+        "[id]",
+        "boekjaren",
+        "[fy_id]",
+        "ChargeCallWorkflow.tsx",
+      ),
+      "utf8",
+    );
+    // Geen links/rechts: de schil zet `dir`, de opmaak volgt logisch.
+    expect(bron).not.toMatch(/\bml-\d|\bmr-\d|\btext-left\b|\btext-right\b|\bpl-\d|\bpr-\d/);
+    // Geen vaste pixelbreedtes die op 360px zouden overlopen.
+    expect(bron).not.toMatch(/width:\s*\d{3,}px/);
+    expect(bron).not.toMatch(/minWidth/);
+    // Eén kolom op klein scherm, twee vanaf sm.
+    expect(bron).toContain("sm:grid-cols-2");
+  });
+
+  it("TG4 — de component werkt binnen een RTL-container", () => {
+    const { container } = toon();
+    container.setAttribute("dir", "rtl");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("readiness")).toBeTruthy();
+    expect(container.getAttribute("dir")).toBe("rtl");
+  });
+});

@@ -122,6 +122,102 @@
     "types": {
       "regulier": "Regulier",
       "exceptionnel": "Uitzonderlijk"
+    },
+    "new": "Nieuwe lastenoproep",
+    "rule": "Verdeelregel",
+    "ruleDefault": "Standaardregel van het gebouw",
+    "ruleInactiveSuffix": "(niet actief)",
+    "methods": {
+      "equal": "gelijke delen",
+      "tantieme": "tantièmes",
+      "percentage": "percentages",
+      "manual": "handmatig"
+    },
+    "scopes": {
+      "whole_building": "het hele gebouw",
+      "block": "één blok",
+      "selected_units": "geselecteerde lots"
+    },
+    "manual": {
+      "title": "Handmatige bedragen per lot",
+      "hint": "Elk deelnemend lot moet een bedrag hebben. De som moet exact gelijk zijn aan het oproepbedrag; die controle doet de database."
+    },
+    "steps": {
+      "input": "1. Invoeren",
+      "check": "2. Controle vóór aanmaken",
+      "create": "3. Definitief aanmaken"
+    },
+    "check": {
+      "title": "Controle vóór aanmaken",
+      "run": "Controle uitvoeren",
+      "again": "Controle opnieuw uitvoeren",
+      "intro": "Controle van de gegevens vóór het definitief aanmaken, op de ingevoerde oproepdatum.",
+      "participants": "Lots binnen de scope van de regel",
+      "clear": "Geen bekende blokkades gevonden.",
+      "notGuarantee": "Deze controle is geen garantie: de database controleert alles opnieuw bij het definitief aanmaken.",
+      "blockersTitle": "Eerst herstellen",
+      "noticesTitle": "Goed om te weten",
+      "lots": "Betrokken lots",
+      "openLots": "Lots openen",
+      "stale": "De gegevens zijn gewijzigd. Voer de controle opnieuw uit.",
+      "partialDenominator": "Vastgelegde en onderbouwde afwijking van het controletotaal, geldig tot en met boekjaar {year}: {participating} deelnemende tantièmes tegenover {declared} verklaarde.",
+      "manualSumNote": "De som van de handmatige bedragen wordt door de database gecontroleerd bij het aanmaken."
+    },
+    "confirm": {
+      "title": "Definitief aanmaken",
+      "warning": "Aanmaken creëert vorderingen per lot en journaalregels. Een aangemaakte oproep kan niet meer worden gewijzigd.",
+      "checkbox": "Ik bevestig het aanmaken van deze lastenoproep.",
+      "submit": "Oproep definitief aanmaken",
+      "pending": "Bezig met aanmaken…"
+    },
+    "result": {
+      "title": "Definitieve verdeling",
+      "source": "Bedragen uit de door de database vastgelegde verdeling.",
+      "unit": "Lot",
+      "amount": "Bedrag",
+      "total": "Totaal",
+      "lines": "regels",
+      "rule": "Toegepaste regel",
+      "method": "Methode",
+      "scope": "Reikwijdte",
+      "participants": "Lots",
+      "partial": "Vastgelegde afwijking van het controletotaal",
+      "noLines": "Geen vastgelegde regels voor deze oproep."
+    },
+    "errors": {
+      "generic": "De lastenoproep kon niet worden aangemaakt. Controleer de gegevens en probeer het opnieuw.",
+      "forbidden": "Je hebt geen rechten om een lastenoproep aan te maken.",
+      "fiscalYearNotFound": "Dit boekjaar bestaat niet binnen deze organisatie.",
+      "fiscalYearClosed": "Dit boekjaar is afgesloten en kan niet meer worden gewijzigd.",
+      "noDefaultRule": "Dit gebouw heeft geen actieve standaard-verdeelregel.",
+      "ruleNotFound": "De gekozen verdeelregel bestaat niet.",
+      "ruleWrongBuilding": "De verdeelregel hoort bij een ander gebouw.",
+      "ruleInactive": "De gekozen verdeelregel is niet actief.",
+      "methodUnsupported": "Deze combinatie van methode en gewichtsbron wordt niet ondersteund.",
+      "amountInvalid": "Het bedrag van de oproep moet groter dan nul zijn.",
+      "emptyBlock": "Het gekozen blok bevat geen lots.",
+      "noParticipants": "Geen enkel lot neemt deel aan de gekozen verdeelregel.",
+      "uncoveredUnits": "Sommige lots vallen buiten de verdeelregel. Voeg ze toe of sluit ze uit.",
+      "weightMissing": "Sommige deelnemende lots hebben geen tantième of gewicht. Vul die aan of sluit ze uit.",
+      "zeroDenominator": "De som van de gewichten is nul of negatief.",
+      "percentageSum": "De percentages tellen niet op tot 100 procent.",
+      "controlTotal": "De som van de tantièmes van de deelnemende lots wijkt af van de verklaarde tantièmes van het gebouw. Vul de ontbrekende lots aan of leg een onderbouwde afwijking vast.",
+      "integrity": "Een integriteitscontrole op de verdeling is mislukt. Er is niets vastgelegd.",
+      "manualMissing": "Bij een handmatige verdeling moeten bedragen per lot worden meegegeven.",
+      "manualMissingUnit": "Sommige deelnemende lots hebben geen bedrag.",
+      "manualOutOfScope": "Sommige bedragen horen bij lots buiten de gekozen reikwijdte.",
+      "manualDuplicate": "Een lot komt meer dan een keer voor in de handmatige verdeling.",
+      "manualNegative": "Een handmatig bedrag mag niet negatief zijn.",
+      "manualSum": "De handmatige bedragen komen niet overeen met het oproepbedrag.",
+      "manualInvalidNumber": "Een van de handmatige bedragen is geen geldig getal.",
+      "noOwner": "Sommige lots hebben geen eigenaar op de oproepdatum. Leg de eigenaar vast.",
+      "ambiguousOwner": "Sommige lots hebben meerdere actieve eigenaars zonder aangewezen debiteur. Wijs per lot een debiteur aan.",
+      "ownerHasHistory": "Deze eigenaar heeft historie die deze handeling verhindert.",
+      "ownerHasPayments": "Deze eigenaar heeft betalingen die deze handeling verhinderen.",
+      "unitHasHistory": "Dit lot heeft historie die deze handeling verhindert.",
+      "callImmutable": "Een aangemaakte lastenoproep kan niet meer worden gewijzigd.",
+      "callPaid": "Deze oproep heeft gekoppelde betalingen en kan niet worden ingetrokken.",
+      "blockMove": "Een blok kan niet naar een ander gebouw worden verplaatst."
     }
   },
   "payments": {
