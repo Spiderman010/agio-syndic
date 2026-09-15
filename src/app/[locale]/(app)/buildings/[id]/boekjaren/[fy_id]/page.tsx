@@ -93,6 +93,15 @@ export default async function FiscalYearDetail({
     supabase.from("fiscal_years").select("*").eq("id", fyId).maybeSingle(),
   ]);
   if (!bData || !fyData) notFound();
+
+  // Het boekjaar moet bij HET GEBOUW UIT DE URL horen. RLS scoopt op
+  // lidmaatschap, niet op gebouw: binnen dezelfde organisatie levert
+  // /buildings/A/boekjaren/<boekjaar van B> anders een pagina op die de naam
+  // en de lots van gebouw A draagt boven de oproepen en betalingen van gebouw
+  // B. Deze controle staat bewust vóór elke financiële query, zodat er bij een
+  // mismatch niets wordt opgehaald en niets wordt gerenderd.
+  if ((fyData as { building_id: string }).building_id !== buildingId) notFound();
+
   const b = bData as Building;
   const fy = fyData as FiscalYear;
 

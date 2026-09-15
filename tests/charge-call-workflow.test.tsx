@@ -94,8 +94,19 @@ const REGEL_STANDAARD: AllocationRuleRow = {
   partial_denominator_until_year: null,
 };
 
-function toon(over: Partial<React.ComponentProps<typeof ChargeCallWorkflow>> = {}) {
-  return render(
+/**
+ * Rendert de workflow en vult standaard een GELDIG oproepbedrag in.
+ *
+ * Zonder bedrag is de controle terecht niet groen — dat is het gedrag dat
+ * blokker 2 heeft toegevoegd. Tests die over scope, eigendom of bevestiging
+ * gaan moeten dus met een geldig bedrag beginnen; wie de lege staat wil
+ * onderzoeken geeft `{ bedrag: null }` mee.
+ */
+function toon(
+  over: Partial<React.ComponentProps<typeof ChargeCallWorkflow>> = {},
+  opties: { bedrag?: string | null } = {},
+) {
+  const resultaat = render(
     <ChargeCallWorkflow
       buildingId={BLD}
       fiscalYearId="fy-1"
@@ -110,6 +121,15 @@ function toon(over: Partial<React.ComponentProps<typeof ChargeCallWorkflow>> = {
       {...over}
     />,
   );
+
+  const bedrag = opties.bedrag === undefined ? "1200,00" : opties.bedrag;
+  const veld = resultaat.container.querySelector("#cc-amount");
+  if (bedrag !== null && veld) {
+    act(() => {
+      fireEvent.change(veld, { target: { value: bedrag } });
+    });
+  }
+  return resultaat;
 }
 
 beforeEach(() => {
@@ -253,6 +273,132 @@ describe("BV — bevestigen en verzenden", () => {
     const kaart = screen.getByTestId("charge-call-workflow");
     expect(kaart.textContent).toContain("charges.confirm.warning");
     expect(kaart.querySelector('[role="alert"]')).toBeTruthy();
+  });
+});
+
+describe("GR — geen actieve verdeelregels", () => {
+  it("GR1 — nul actieve regels geeft een melding en geen bruikbare workflow", () => {
+    toon({ rules: [] });
+    expect(screen.getByTestId("no-rules").textContent).toContain("charges.noActiveRule");
+    // Geen lege select, geen controleknop, geen aanmaakknop.
+    expect(screen.queryByTestId("run-check")).toBeNull();
+    expect(screen.queryByTestId("readiness")).toBeNull();
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+    expect(screen.queryByTestId("clear")).toBeNull();
+    expect(document.querySelector('select[name="allocation_rule_id"]')).toBeNull();
+  });
+
+  it("GR2 — één actieve standaardregel staat geselecteerd", () => {
+    const { container } = toon();
+    const select = container.querySelector(
+      'select[name="allocation_rule_id"]',
+    ) as HTMLSelectElement;
+    expect(select.value).toBe(REGEL);
+  });
+
+  it("GR3 — zonder standaard wordt de enige actieve regel geselecteerd", () => {
+    const gewoon = { ...REGEL_STANDAARD, id: "r-gewoon", is_default: false };
+    const { container } = toon({ rules: [gewoon] });
+    const select = container.querySelector(
+      'select[name="allocation_rule_id"]',
+    ) as HTMLSelectElement;
+    expect(select.value).toBe("r-gewoon");
+  });
+
+  it("GR4 — een gekozen niet-standaardregel gaat expliciet mee naar de RPC", () => {
+    const tweede = { ...REGEL_STANDAARD, id: "r-tweede", is_default: false, label: "Ascenseur" };
+    const { container } = toon({ rules: [REGEL_STANDAARD, tweede] });
+    const select = container.querySelector(
+      'select[name="allocation_rule_id"]',
+    ) as HTMLSelectElement;
+    expect(select.value).toBe(REGEL);
+
+    act(() => {
+      fireEvent.change(select, { target: { value: "r-tweede" } });
+    });
+    expect(select.value).toBe("r-tweede");
+    expect(select.name).toBe("allocation_rule_id");
+  });
+});
+
+describe("FV — vooraf kenbare formulierfouten blokkeren groen", () => {
+  function vulBedrag(container: HTMLElement, waarde: string) {
+    act(() => {
+      fireEvent.change(container.querySelector("#cc-amount")!, { target: { value: waarde } });
+    });
+  }
+
+  it("FV1 — zonder ingevuld bedrag is de controle niet groen", () => {
+    toon({}, { bedrag: null });
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.queryByTestId("clear")).toBeNull();
+    expect(screen.getByTestId("blockers").textContent).toContain("charges.errors.amountInvalid");
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+  });
+
+  it("FV2 — een geldig bedrag maakt de controle groen", () => {
+    const { container } = toon();
+    vulBedrag(container, "1200,00");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("clear")).toBeTruthy();
+    expect(screen.getByTestId("final-submit")).toBeTruthy();
+  });
+
+  it("FV3 — 'abc' als bedrag blokkeert", () => {
+    const { container } = toon();
+    vulBedrag(container, "abc");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("blockers").textContent).toContain("charges.errors.amountInvalid");
+  });
+
+  it("FV4 — een vervaldatum vóór de oproepdatum blokkeert", () => {
+    const { container } = toon();
+    vulBedrag(container, "1200");
+    act(() => {
+      fireEvent.change(container.querySelector("#cc-due-date")!, {
+        target: { value: "2026-06-29" },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("blockers").textContent).toContain("charges.errors.dueBeforeCall");
+  });
+
+  it("FV5 — het bedrag wijzigen ná de controle maakt controle en bevestiging ongeldig", () => {
+    const { container } = toon();
+    vulBedrag(container, "1200");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("confirm-checkbox"));
+    });
+    expect(screen.getByTestId("final-submit").getAttribute("aria-disabled")).toBe("false");
+
+    vulBedrag(container, "1500");
+    expect(screen.queryByTestId("readiness")).toBeNull();
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+  });
+
+  it("FV6 — de vervaldatum wijzigen ná de controle invalideert eveneens", () => {
+    const { container } = toon();
+    vulBedrag(container, "1200");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    act(() => {
+      fireEvent.change(container.querySelector("#cc-due-date")!, {
+        target: { value: "2026-12-31" },
+      });
+    });
+    expect(screen.queryByTestId("readiness")).toBeNull();
   });
 });
 

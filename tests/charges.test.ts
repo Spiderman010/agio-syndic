@@ -10,6 +10,9 @@ import {
   chargeErrorKey,
   chargeErrorKeys,
   mappedChargeErrorCodes,
+  parseFormAmount,
+  parseManualAmount,
+  percentageTotalPpm,
   ruleScopeUnits,
   uncoveredUnits,
   type AllocationRuleRow,
@@ -85,6 +88,10 @@ function invoer(over: Partial<ReadinessInput> = {}): ReadinessInput {
     ruleUnits: [],
     ruleWeights: [],
     ownership: [bezit({ unit_id: U1 }), bezit({ unit_id: U2 })],
+    // Geldige formulierinvoer, zodat een test die over de scope of de
+    // eigendom gaat niet per ongeluk op een formulierblokkade stuit.
+    totalAmount: "1200.00",
+    dueDate: "",
     ...over,
   };
 }
@@ -304,18 +311,296 @@ describe("GW — gewichten binnen de regelscope", () => {
     expect(codes(uit)).not.toContain("ALLOC_WEIGHT_MISSING");
   });
 
-  it("GW5 — handmatig: een deelnemend lot zonder bedrag blokkeert", () => {
+  it("GW5 — handmatig: een leeg veld telt als 0,00 en blokkeert dus niet", () => {
+    // Exact wat `collectManualLines()` doet: leeg wordt 0 cent. Blokkeren zou
+    // rood tonen op invoer die de applicatie daarna gewoon accepteert.
     const r = regel({ method: "manual", weight_source: "charge_call_lines" });
-    const uit = chargeCallReadiness(invoer({ rule: r, manualUnitIds: [U1] }));
-    const blok = uit.blockers.find((b) => b.code === "ALLOC_MANUAL_MISSING_UNIT");
-    expect(blok && "units" in blok ? blok.units.map((u) => u.label) : []).toEqual(["A2"]);
+    const uit = chargeCallReadiness(
+      invoer({ rule: r, manualAmounts: { [U1]: "1200,00", [U2]: "" } }),
+    );
+    expect(uit.blockers).toEqual([]);
+    expect(uit.clear).toBe(true);
   });
 
   it("GW6 — handmatig: de SOM blijft bij de database, dit scherm rekent niet mee", () => {
     const r = regel({ method: "manual", weight_source: "charge_call_lines" });
-    const uit = chargeCallReadiness(invoer({ rule: r, manualUnitIds: [U1, U2] }));
+    // 600 + 400 telt niet op tot 1200, maar dat oordeel is van de database.
+    const uit = chargeCallReadiness(
+      invoer({ rule: r, manualAmounts: { [U1]: "600", [U2]: "400" } }),
+    );
     expect(uit.blockers).toEqual([]);
     expect(uit.notices.map((n) => n.code)).toContain("MANUAL_SUM_CHECKED_BY_DATABASE");
+  });
+
+  it("GW7 — handmatig: geen enkel veld ingevuld blokkeert met ALLOC_MANUAL_MISSING", () => {
+    // De actie stuurt dan `p_manual_lines = null`; m20 weigert dat hard.
+    const r = regel({ method: "manual", weight_source: "charge_call_lines" });
+    const uit = chargeCallReadiness(invoer({ rule: r, manualAmounts: {} }));
+    expect(codes(uit)).toContain("ALLOC_MANUAL_MISSING");
+    expect(uit.clear).toBe(false);
+  });
+
+  it("GW8 — handmatig: een niet-numeriek bedrag blokkeert, met het lot erbij", () => {
+    const r = regel({ method: "manual", weight_source: "charge_call_lines" });
+    const uit = chargeCallReadiness(
+      invoer({ rule: r, manualAmounts: { [U1]: "600", [U2]: "abc" } }),
+    );
+    const blok = uit.blockers.find((b) => b.code === "FORM_MANUAL_INVALID");
+    expect(blok && "units" in blok ? blok.units.map((u) => u.label) : []).toEqual(["A2"]);
+    expect(uit.clear).toBe(false);
+  });
+
+  it("GW9 — handmatig: een negatief bedrag blokkeert", () => {
+    const r = regel({ method: "manual", weight_source: "charge_call_lines" });
+    const uit = chargeCallReadiness(
+      invoer({ rule: r, manualAmounts: { [U1]: "1400", [U2]: "-200" } }),
+    );
+    const blok = uit.blockers.find((b) => b.code === "ALLOC_MANUAL_NEGATIVE");
+    expect(blok && "units" in blok ? blok.units.map((u) => u.label) : []).toEqual(["A2"]);
+    expect(uit.clear).toBe(false);
+  });
+
+  it("GW10 — handmatig: nul is toegestaan, want de database staat het toe", () => {
+    // m20 weigert alleen `amount_cents < 0`; nul is een geldige regel.
+    const r = regel({ method: "manual", weight_source: "charge_call_lines" });
+    const uit = chargeCallReadiness(
+      invoer({ rule: r, manualAmounts: { [U1]: "1200", [U2]: "0" } }),
+    );
+    expect(uit.blockers).toEqual([]);
+    expect(uit.clear).toBe(true);
+  });
+});
+
+// ── Percentagesom (ALLOC_PCT_SUM) ───────────────────────────────────────────
+
+describe("PC — percentages tellen op tot exact 100", () => {
+  const pctRegel = regel({ method: "percentage", weight_source: "rule_weights" });
+
+  function metGewichten(gewichten: RuleWeightRow[], over: Partial<ReadinessInput> = {}) {
+    return chargeCallReadiness(invoer({ rule: pctRegel, ruleWeights: gewichten, ...over }));
+  }
+
+  it("PC1 — 60 + 40 geeft geen percentageblokkade", () => {
+    const uit = metGewichten([
+      { rule_id: REGEL, unit_id: U1, weight: 60 },
+      { rule_id: REGEL, unit_id: U2, weight: 40 },
+    ]);
+    expect(codes(uit)).not.toContain("ALLOC_PCT_SUM");
+    expect(uit.clear).toBe(true);
+  });
+
+  it("PC2 — 60 + 30 blokkeert met ALLOC_PCT_SUM en is niet groen", () => {
+    const uit = metGewichten([
+      { rule_id: REGEL, unit_id: U1, weight: 60 },
+      { rule_id: REGEL, unit_id: U2, weight: 30 },
+    ]);
+    const blok = uit.blockers.find((b) => b.code === "ALLOC_PCT_SUM");
+    expect(blok).toBeDefined();
+    expect(blok && "ppm" in blok ? blok.ppm : null).toBe(90_000_000);
+    expect(uit.clear).toBe(false);
+  });
+
+  it("PC3 — het gewicht van een UITGESLOTEN lot telt niet mee", () => {
+    // U3 is via allocation_rule_units uitgesloten bij whole_building, maar
+    // draagt nog wel een gewichtrij. Die mag de som niet vervuilen.
+    const uit = metGewichten(
+      [
+        { rule_id: REGEL, unit_id: U1, weight: 60 },
+        { rule_id: REGEL, unit_id: U2, weight: 40 },
+        { rule_id: REGEL, unit_id: U3, weight: 25 },
+      ],
+      {
+        units: [unit(U1, "A1", 60), unit(U2, "A2", 40), unit(U3, "B1", 25)],
+        ruleUnits: [{ rule_id: REGEL, unit_id: U3 }],
+        ownership: [bezit({ unit_id: U1 }), bezit({ unit_id: U2 })],
+      },
+    );
+    expect(codes(uit)).not.toContain("ALLOC_PCT_SUM");
+    expect(uit.participantCount).toBe(2);
+    expect(uit.clear).toBe(true);
+  });
+
+  it("PC4 — gewichten van een ANDERE regel tellen niet mee", () => {
+    const uit = metGewichten([
+      { rule_id: REGEL, unit_id: U1, weight: 60 },
+      { rule_id: REGEL, unit_id: U2, weight: 40 },
+      { rule_id: "andere-regel", unit_id: U1, weight: 500 },
+    ]);
+    expect(codes(uit)).not.toContain("ALLOC_PCT_SUM");
+  });
+
+  it("PC5 — stringwaarden uit PostgREST worden correct gelezen", () => {
+    const uit = metGewichten([
+      { rule_id: REGEL, unit_id: U1, weight: "60.000000" },
+      { rule_id: REGEL, unit_id: U2, weight: "40.000000" },
+    ]);
+    expect(codes(uit)).not.toContain("ALLOC_PCT_SUM");
+    expect(uit.clear).toBe(true);
+  });
+
+  it("PC6 — de som gebruikt de precisie van m20: round(weight * 1000000) per rij", () => {
+    // Drie keer 33,333333 is 99,999999 procent en dus NIET geldig; de database
+    // rekent in miljoensten en vergelijkt met 100000000.
+    const uit = metGewichten(
+      [
+        { rule_id: REGEL, unit_id: U1, weight: "33.333333" },
+        { rule_id: REGEL, unit_id: U2, weight: "33.333333" },
+        { rule_id: REGEL, unit_id: U3, weight: "33.333333" },
+      ],
+      {
+        units: [unit(U1, "A1", 1), unit(U2, "A2", 1), unit(U3, "B1", 1)],
+        ownership: [bezit({ unit_id: U1 }), bezit({ unit_id: U2 }), bezit({ unit_id: U3 })],
+      },
+    );
+    const blok = uit.blockers.find((b) => b.code === "ALLOC_PCT_SUM");
+    expect(blok && "ppm" in blok ? blok.ppm : null).toBe(99_999_999);
+
+    expect(
+      percentageTotalPpm(
+        pctRegel,
+        [unit(U1, "A1", 1), unit(U2, "A2", 1)],
+        [
+          { rule_id: REGEL, unit_id: U1, weight: "0.0000004" },
+          { rule_id: REGEL, unit_id: U2, weight: "0.0000004" },
+        ],
+      ),
+      // Per rij afgerond naar nul, niet als som naar 1 miljoenste.
+    ).toBe(0);
+  });
+
+  it("PC7 — een ontbrekende gewichtrij blijft ALLOC_WEIGHT_MISSING", () => {
+    const uit = metGewichten([{ rule_id: REGEL, unit_id: U1, weight: 100 }]);
+    expect(codes(uit)).toContain("ALLOC_WEIGHT_MISSING");
+    // Zonder volledige gewichten zegt de som niets; geen dubbele melding.
+    expect(codes(uit)).not.toContain("ALLOC_PCT_SUM");
+    expect(uit.clear).toBe(false);
+  });
+
+  it("PC8 — een tantièmeregel op rule_weights kent géén percentagecontrole", () => {
+    const uit = chargeCallReadiness(
+      invoer({
+        rule: regel({ method: "tantieme", weight_source: "rule_weights" }),
+        ruleWeights: [
+          { rule_id: REGEL, unit_id: U1, weight: 60 },
+          { rule_id: REGEL, unit_id: U2, weight: 30 },
+        ],
+      }),
+    );
+    expect(codes(uit)).not.toContain("ALLOC_PCT_SUM");
+  });
+});
+
+// ── Vooraf kenbare formulierfouten ──────────────────────────────────────────
+
+describe("FV — formuliervalidatie vóór de controle groen wordt", () => {
+  it("FV1 — een leeg totaalbedrag is niet groen", () => {
+    const uit = chargeCallReadiness(invoer({ totalAmount: "" }));
+    expect(codes(uit)).toContain("FORM_AMOUNT_INVALID");
+    expect(uit.clear).toBe(false);
+  });
+
+  it("FV2 — 'abc' als totaalbedrag is niet groen", () => {
+    expect(codes(chargeCallReadiness(invoer({ totalAmount: "abc" })))).toContain(
+      "FORM_AMOUNT_INVALID",
+    );
+  });
+
+  it("FV3 — nul of negatief is niet groen", () => {
+    for (const bedrag of ["0", "0,00", "-1", "-0.01"]) {
+      expect(codes(chargeCallReadiness(invoer({ totalAmount: bedrag }))), bedrag).toContain(
+        "FORM_AMOUNT_INVALID",
+      );
+    }
+  });
+
+  it("FV4 — punt én komma als decimaalteken zijn geldig, net als in validation.ts", () => {
+    for (const bedrag of ["1200.00", "1200,00", " 1 200,50 ", "0.01"]) {
+      const uit = chargeCallReadiness(invoer({ totalAmount: bedrag }));
+      expect(codes(uit), bedrag).not.toContain("FORM_AMOUNT_INVALID");
+      expect(uit.clear, bedrag).toBe(true);
+    }
+  });
+
+  it("FV5 — een onrealistisch hoog bedrag is niet groen", () => {
+    expect(codes(chargeCallReadiness(invoer({ totalAmount: "1000000001" })))).toContain(
+      "FORM_AMOUNT_INVALID",
+    );
+  });
+
+  it("FV6 — een vervaldatum vóór de oproepdatum is niet groen", () => {
+    const uit = chargeCallReadiness(
+      invoer({ callDate: "2026-06-30", dueDate: "2026-06-29" }),
+    );
+    expect(codes(uit)).toContain("FORM_DUE_BEFORE_CALL");
+    expect(uit.clear).toBe(false);
+  });
+
+  it("FV7 — een vervaldatum gelijk aan de oproepdatum is toegestaan", () => {
+    const uit = chargeCallReadiness(
+      invoer({ callDate: "2026-06-30", dueDate: "2026-06-30" }),
+    );
+    expect(codes(uit)).not.toContain("FORM_DUE_BEFORE_CALL");
+    expect(uit.clear).toBe(true);
+  });
+
+  it("FV8 — een lege vervaldatum is toegestaan", () => {
+    const uit = chargeCallReadiness(invoer({ dueDate: "" }));
+    expect(codes(uit)).not.toContain("FORM_DUE_BEFORE_CALL");
+    expect(uit.clear).toBe(true);
+  });
+
+  it("FV11 — een bedrag onder een halve cent is niet groen", () => {
+    // `validation.ts` rondt NA de `> 0`-controle af op hele centen, dus 0,004
+    // komt als 0,00 bij de RPC aan en m20 weigert met ALLOC_AMOUNT_INVALID.
+    for (const bedrag of ["0.001", "0.004", "0.0049999"]) {
+      const uit = chargeCallReadiness(invoer({ totalAmount: bedrag }));
+      expect(codes(uit), bedrag).toContain("FORM_AMOUNT_INVALID");
+      expect(uit.clear, bedrag).toBe(false);
+    }
+    // Precies een halve cent rondt naar 0,01 en is dus wél geldig.
+    expect(codes(chargeCallReadiness(invoer({ totalAmount: "0.005" })))).not.toContain(
+      "FORM_AMOUNT_INVALID",
+    );
+  });
+
+  it("FV12 — een lege of onvolledige oproepdatum is niet groen", () => {
+    for (const datum of ["", "2026-06", "30-06-2026", "geen datum"]) {
+      const uit = chargeCallReadiness(invoer({ callDate: datum }));
+      expect(codes(uit), datum).toContain("FORM_CALL_DATE_INVALID");
+      expect(uit.clear, datum).toBe(false);
+    }
+  });
+
+  it("FV13 — bij een ongeldige oproepdatum wordt niet ten onrechte 'geen eigenaar' gemeld", () => {
+    // Zonder deze poort zou `start_date <= ""` voor elk lot falen en zou elk
+    // lot als eigenaarloos worden aangemerkt — de verkeerde oorzaak.
+    const uit = chargeCallReadiness(invoer({ callDate: "" }));
+    expect(codes(uit)).toContain("FORM_CALL_DATE_INVALID");
+    expect(codes(uit)).not.toContain("ALLOC_NO_OWNER");
+  });
+
+  it("FV14 — een lege oproepdatum verbergt geen datumvolgordefout", () => {
+    // `"2026-06-29" < ""` is false; zonder de datumpoort zou dit stil slagen.
+    const uit = chargeCallReadiness(invoer({ callDate: "", dueDate: "2026-06-29" }));
+    expect(uit.clear).toBe(false);
+    expect(codes(uit)).toContain("FORM_CALL_DATE_INVALID");
+  });
+
+  it("FV9 — parseFormAmount spiegelt parseFloat, niet een strengere parser", () => {
+    // validation.ts gebruikt parseFloat; die is mild. Strenger zijn zou rood
+    // tonen op invoer die de Server Action daarna accepteert.
+    expect(parseFormAmount("12abc")).toEqual({ ok: true, value: 12 });
+    expect(parseFormAmount("abc").ok).toBe(false);
+    expect(parseFormAmount("").ok).toBe(false);
+    expect(parseFormAmount("   ").ok).toBe(false);
+  });
+
+  it("FV10 — parseManualAmount spiegelt Number(), inclusief leeg = 0", () => {
+    // collectManualLines gebruikt Number(), niet parseFloat.
+    expect(parseManualAmount("")).toEqual({ ok: true, value: 0, filled: false });
+    expect(parseManualAmount("600,50")).toEqual({ ok: true, value: 600.5, filled: true });
+    expect(parseManualAmount("12abc").ok).toBe(false);
+    expect(parseManualAmount("-5")).toEqual({ ok: true, value: -5, filled: true });
   });
 });
 
@@ -481,10 +766,18 @@ describe("GV — geen verdeling in de applicatielaag", () => {
     // die uitleg hoort niet als overtreding te tellen.
     const code = zonderCommentaar(readFileSync(join(REPO, "src", "lib", "charges.ts"), "utf8"));
     expect(code).not.toMatch(/remainder/i);
+    expect(code).not.toMatch(/amount_cents/);
+    // Centconversie hoort hier niet thuis: bedragen blijven bij de database.
     expect(code).not.toMatch(/\*\s*100\b/);
     expect(code).not.toMatch(/\/\s*100\b/);
-    expect(code).not.toMatch(/Math\.round/);
-    expect(code).not.toMatch(/amount_cents/);
+
+    // Er wordt exact ÉÉN keer afgerond, en uitsluitend om een GEWICHT naar
+    // miljoensten te schalen — letterlijk `round(weight * 1000000)` uit m20.
+    // Elke andere afronding in dit bestand zou een tweede financiële waarheid
+    // zijn en moet deze test laten omvallen.
+    const afrondingen = code.split("\n").filter((r) => r.includes("Math.round("));
+    expect(afrondingen).toHaveLength(1);
+    expect(afrondingen[0]).toMatch(/Math\.round\(getal\(w\.weight\)\s*\*\s*1_000_000\)/);
   });
 
   it("GV3 — de workflowcomponent berekent geen bedragen", () => {

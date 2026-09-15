@@ -78,6 +78,8 @@ export default function ChargeCallWorkflow({
   const standaard = rules.find((r) => r.is_default && r.status === "active") ?? rules[0];
   const [ruleId, setRuleId] = useState<string>(standaard?.id ?? "");
   const [callDate, setCallDate] = useState<string>(today);
+  const [dueDate, setDueDate] = useState<string>("");
+  const [totalAmount, setTotalAmount] = useState<string>("");
   const [manueel, setManueel] = useState<Record<string, string>>({});
   const [gecontroleerd, setGecontroleerd] = useState(false);
   const [bevestigd, setBevestigd] = useState(false);
@@ -93,14 +95,6 @@ export default function ChargeCallWorkflow({
     setBevestigd(false);
   }
 
-  const manualUnitIds = useMemo(
-    () =>
-      Object.entries(manueel)
-        .filter(([, v]) => v.trim() !== "")
-        .map(([id]) => id),
-    [manueel],
-  );
-
   const uitkomst = useMemo(() => {
     if (!regel) return null;
     return chargeCallReadiness({
@@ -113,7 +107,9 @@ export default function ChargeCallWorkflow({
       ruleUnits,
       ruleWeights,
       ownership,
-      manualUnitIds,
+      totalAmount,
+      dueDate,
+      manualAmounts: manueel,
     });
   }, [
     regel,
@@ -125,12 +121,36 @@ export default function ChargeCallWorkflow({
     ruleUnits,
     ruleWeights,
     ownership,
-    manualUnitIds,
+    totalAmount,
+    dueDate,
+    manueel,
   ]);
 
   const deelnemers = uitkomst?.participants ?? [];
   const handmatig = regel?.method === "manual";
   const magAanmaken = Boolean(gecontroleerd && bevestigd && uitkomst?.clear);
+
+  /*
+   * Geen enkele actieve verdeelregel.
+   *
+   * De serverquery filtert al op `status = 'active'`, dus een lege lijst is
+   * geen technische bronfout maar een domeinblokkade: zonder regel kan
+   * `create_charge_call` niets verdelen en weigert de database met
+   * ALLOC_NO_DEFAULT_RULE. Een lege keuzelijst met een controleknop die niets
+   * kan zeggen is dan erger dan geen formulier: de beheerder zou blijven
+   * proberen. Vandaar één vertaalde melding en verder niets — geen select,
+   * geen controleknop, geen gereedmelding, geen aanmaakknop.
+   */
+  if (rules.length === 0) {
+    return (
+      <Card className="mt-4" data-testid="charge-call-workflow">
+        <h3 className="mt-0 mb-1 text-[1rem] font-semibold">{t("new")}</h3>
+        <p className="m-0 text-[0.85rem]" role="status" data-testid="no-rules">
+          {t("noActiveRule")}
+        </p>
+      </Card>
+    );
+  }
 
   return (
     <Card className="mt-4" data-testid="charge-call-workflow">
@@ -214,7 +234,11 @@ export default function ChargeCallWorkflow({
               required
               placeholder="1200.00"
               className="input w-full"
-              onChange={invalideer}
+              value={totalAmount}
+              onChange={(e) => {
+                setTotalAmount(e.target.value);
+                invalideer();
+              }}
             />
           </Field>
 
@@ -239,7 +263,11 @@ export default function ChargeCallWorkflow({
               name="due_date"
               type="date"
               className="input w-full"
-              onChange={invalideer}
+              value={dueDate}
+              onChange={(e) => {
+                setDueDate(e.target.value);
+                invalideer();
+              }}
             />
           </Field>
         </div>

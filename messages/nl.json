@@ -140,7 +140,7 @@
     },
     "manual": {
       "title": "Handmatige bedragen per lot",
-      "hint": "Elk deelnemend lot moet een bedrag hebben. De som moet exact gelijk zijn aan het oproepbedrag; die controle doet de database."
+      "hint": "Een leeg veld telt als 0,00 MAD. De som moet exact gelijk zijn aan het oproepbedrag; die controle doet de database."
     },
     "steps": {
       "input": "1. Invoeren",
@@ -217,8 +217,11 @@
       "unitHasHistory": "Dit lot heeft historie die deze handeling verhindert.",
       "callImmutable": "Een aangemaakte lastenoproep kan niet meer worden gewijzigd.",
       "callPaid": "Deze oproep heeft gekoppelde betalingen en kan niet worden ingetrokken.",
-      "blockMove": "Een blok kan niet naar een ander gebouw worden verplaatst."
-    }
+      "blockMove": "Een blok kan niet naar een ander gebouw worden verplaatst.",
+      "dueBeforeCall": "De vervaldatum mag niet vóór de oproepdatum liggen.",
+      "callDateInvalid": "Vul een geldige oproepdatum in."
+    },
+    "noActiveRule": "Geen actieve verdeelregel voor dit gebouw. Er kan geen lastenoproep worden aangemaakt zolang er geen regel actief is."
   },
   "payments": {
     "title": "Betalingen",

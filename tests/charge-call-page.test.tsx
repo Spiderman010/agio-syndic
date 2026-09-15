@@ -23,7 +23,9 @@ type Resultaat = { data: unknown; error: unknown };
 const state: {
   rol: string;
   tabellen: Record<string, Resultaat>;
-} = { rol: "manager", tabellen: {} };
+  /** Elke tabel die de pagina aanraakt, in volgorde. */
+  bevraagd: string[];
+} = { rol: "manager", tabellen: {}, bevraagd: [] };
 
 function standaardTabellen(): Record<string, Resultaat> {
   return {
@@ -113,7 +115,10 @@ vi.mock("next-intl/server", () => ({
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
-    from: (tabel: string) => keten(state.tabellen[tabel] ?? { data: [], error: null }),
+    from: (tabel: string) => {
+      state.bevraagd.push(tabel);
+      return keten(state.tabellen[tabel] ?? { data: [], error: null });
+    },
   }),
 }));
 
@@ -168,6 +173,7 @@ const ESSENTIELE_BRONNEN = [
 beforeEach(() => {
   state.rol = "manager";
   state.tabellen = standaardTabellen();
+  state.bevraagd = [];
 });
 
 afterEach(() => {
@@ -229,6 +235,71 @@ describe("RB — rolgebonden zichtbaarheid", () => {
     };
     await toonPagina();
     expect(screen.queryByTestId("workflow")).toBeNull();
+  });
+});
+
+describe("SC — het boekjaar moet bij het gebouw uit de URL horen", () => {
+  /** Alles wat financieel dragend is en dus niet mag worden aangeraakt. */
+  const FINANCIEEL = [
+    "charge_calls",
+    "charge_call_lines",
+    "units",
+    "allocation_rules",
+    "allocation_rule_units",
+    "allocation_rule_weights",
+    "ownership",
+    "payments",
+    "journal_entries",
+  ];
+
+  it("SC1 — een gebouw met zijn EIGEN boekjaar rendert gewoon", async () => {
+    await toonPagina();
+    expect(screen.getByTestId("workflow")).toBeTruthy();
+  });
+
+  it("SC2 — een boekjaar van een ANDER gebouw geeft notFound", async () => {
+    state.tabellen.fiscal_years = {
+      data: {
+        id: FY,
+        building_id: "99999999-9999-9999-9999-999999999999",
+        year: 2026,
+        status: "open",
+        start_date: "2026-01-01",
+        end_date: "2026-12-31",
+      },
+      error: null,
+    };
+    await expect(toonPagina()).rejects.toThrow("NOT_FOUND");
+  });
+
+  it("SC3 — bij die mismatch wordt geen enkele financiële bron bevraagd", async () => {
+    state.tabellen.fiscal_years = {
+      data: {
+        id: FY,
+        building_id: "99999999-9999-9999-9999-999999999999",
+        year: 2026,
+        status: "open",
+        start_date: "2026-01-01",
+        end_date: "2026-12-31",
+      },
+      error: null,
+    };
+    await expect(toonPagina()).rejects.toThrow("NOT_FOUND");
+
+    for (const tabel of FINANCIEEL) {
+      expect(state.bevraagd, tabel).not.toContain(tabel);
+    }
+    // Alleen de twee lookups die de scope zelf vaststellen.
+    expect(new Set(state.bevraagd)).toEqual(new Set(["buildings", "fiscal_years"]));
+  });
+
+  it("SC4 — een onbekend boekjaar of gebouw blijft notFound", async () => {
+    state.tabellen.fiscal_years = { data: null, error: null };
+    await expect(toonPagina()).rejects.toThrow("NOT_FOUND");
+
+    state.tabellen = standaardTabellen();
+    state.tabellen.buildings = { data: null, error: null };
+    await expect(toonPagina()).rejects.toThrow("NOT_FOUND");
   });
 });
 

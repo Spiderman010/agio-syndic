@@ -86,6 +86,62 @@ function getal(v: number | string | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+// ── Invoer uit het formulier ────────────────────────────────────────────────
+
+/**
+ * Het oproepbedrag zoals `validation.ts` het leest.
+ *
+ * Exact dezelfde stappen als het `amount`-schema, inclusief de eigenaardigheden:
+ * witruimte eruit, de EERSTE komma wordt een punt, en dan `parseFloat` — die is
+ * bewust mild, dus "12abc" levert 12 op. Strenger zijn zou een rode melding
+ * opleveren op invoer die de applicatie daarna gewoon accepteert; dat is net zo
+ * fout als vals groen.
+ */
+export function parseFormAmount(
+  raw: string,
+): { ok: true; value: number } | { ok: false } {
+  const tekst = raw.trim();
+  if (tekst === "") return { ok: false };
+  const n = Number.parseFloat(tekst.replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(n)) return { ok: false };
+  if (n <= 0) return { ok: false };
+  if (n > 1_000_000_000) return { ok: false };
+  // Onder een halve cent is `n > 0` niet genoeg. `validation.ts` rondt het
+  // bedrag NA die controle af op hele centen, dus 0,004 komt als 0,00 bij de
+  // RPC aan en m20 weigert dan met ALLOC_AMOUNT_INVALID. Een drempel in plaats
+  // van een afronding: hier wordt niets met centen gerekend.
+  if (n < HALVE_CENT) return { ok: false };
+  return { ok: true, value: n };
+}
+
+/** Het kleinste bedrag dat na afronding op hele centen nog boven nul uitkomt. */
+const HALVE_CENT = 0.005;
+
+/** Het datumformaat dat `validation.ts` als enige accepteert. */
+const ISO_DATUM = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Eén handmatig bedrag zoals `collectManualLines()` het leest.
+ *
+ * Let op het verschil met het oproepbedrag: die gebruikt `parseFloat`, deze
+ * `Number()`. `Number("12abc")` is NaN, `parseFloat("12abc")` is 12. Dat is
+ * bestaand gedrag van twee verschillende plekken; deze functie spiegelt de
+ * plek die er werkelijk toe doet voor dit veld.
+ *
+ * Een LEEG veld is geldig en betekent 0,00 — precies wat `collectManualLines()`
+ * ervan maakt. Nul is toegestaan: de database weigert alleen een NEGATIEF
+ * bedrag (`ALLOC_MANUAL_NEGATIVE`).
+ */
+export function parseManualAmount(
+  raw: string,
+): { ok: true; value: number; filled: boolean } | { ok: false } {
+  const tekst = raw.trim().replace(",", ".");
+  if (tekst === "") return { ok: true, value: 0, filled: false };
+  const n = Number(tekst);
+  if (!Number.isFinite(n)) return { ok: false };
+  return { ok: true, value: n, filled: true };
+}
+
 function naarLotRef(u: ChargeUnitRow): LotRef {
   return { id: u.id, label: u.label };
 }
@@ -162,7 +218,34 @@ export type ReadinessBlocker =
   | { code: "ALLOC_WEIGHT_MISSING"; units: LotRef[] }
   | { code: "ALLOC_NO_OWNER"; units: LotRef[] }
   | { code: "ALLOC_AMBIGUOUS_OWNER"; units: LotRef[] }
-  | { code: "ALLOC_MANUAL_MISSING_UNIT"; units: LotRef[] }
+  | { code: "ALLOC_MANUAL_MISSING" }
+  | { code: "ALLOC_MANUAL_NEGATIVE"; units: LotRef[] }
+  | {
+      /** Een handmatig veld is geen getal; `collectManualLines()` weigert dit. */
+      code: "FORM_MANUAL_INVALID";
+      units: LotRef[];
+    }
+  | {
+      /** Leeg, niet-numeriek, niet-eindig, nul, negatief of onrealistisch hoog. */
+      code: "FORM_AMOUNT_INVALID";
+    }
+  | {
+      /** `chargeCallSchema` eist `due_date >= call_date`; gelijk mag. */
+      code: "FORM_DUE_BEFORE_CALL";
+    }
+  | {
+      /** Geen of geen volledige `YYYY-MM-DD`; `isoDate` weigert dat. */
+      code: "FORM_CALL_DATE_INVALID";
+    }
+  | {
+      /**
+       * De percentages tellen niet op tot exact 100. De database rekent in
+       * miljoensten en vergelijkt met 100000000; zie `percentageTotalPpm()`.
+       */
+      code: "ALLOC_PCT_SUM";
+      /** De som in miljoensten, zoals m20 hem berekent. */
+      ppm: number;
+    }
   | {
       code: "ALLOC_CONTROL_TOTAL";
       /** Som van de tantièmes van de deelnemende lots. */
@@ -211,9 +294,45 @@ export type ReadinessInput = {
   ruleWeights: readonly RuleWeightRow[];
   /** Eigendomsrijen van de lots van dit gebouw. */
   ownership: readonly OwnershipRow[];
-  /** Bij een handmatige regel: de lots waarvoor een bedrag is ingevuld. */
-  manualUnitIds?: readonly string[];
+  /** Het ingevulde oproepbedrag, onbewerkt uit het formulier. */
+  totalAmount: string;
+  /** De ingevulde vervaldatum, onbewerkt; leeg is toegestaan. */
+  dueDate: string;
+  /** Bij een handmatige regel: de onbewerkte bedragen per lot-id. */
+  manualAmounts?: Readonly<Record<string, string>>;
 };
+
+/**
+ * De som van de percentages in MILJOENSTEN, exact zoals m20 hem berekent:
+ *
+ *     round(weight * 1000000)  per deelnemende rij, daarna sommeren
+ *
+ * Afronden gebeurt PER RIJ en niet over de som, omdat de database dat ook zo
+ * doet — `array_agg(round(w.weight * 1000000)::bigint)` gevolgd door `sum`.
+ * Rond je pas op het eind af, dan wijkt de uitkomst af bij gewichten met meer
+ * dan zes decimalen.
+ *
+ * Dit is GEWICHTSVALIDATIE, geen geldverdeling: er komt geen bedrag, geen cent
+ * en geen restverdeling aan te pas.
+ */
+export function percentageTotalPpm(
+  rule: AllocationRuleRow,
+  participants: readonly ChargeUnitRow[],
+  ruleWeights: readonly RuleWeightRow[],
+): number {
+  const inScope = new Set(participants.map((u) => u.id));
+  let ppm = 0;
+  for (const w of ruleWeights) {
+    // Alleen de gekozen regel, en alleen de daadwerkelijke deelnemers.
+    if (w.rule_id !== rule.id) continue;
+    if (!inScope.has(w.unit_id)) continue;
+    ppm += Math.round(getal(w.weight) * 1_000_000);
+  }
+  return ppm;
+}
+
+/** De waarde die m20 eist voor een percentageregel: 100,000000 procent. */
+const PERCENTAGE_TOTAAL_PPM = 100_000_000;
 
 /**
  * De controle vóór aanmaken.
@@ -234,11 +353,34 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
     ruleUnits,
     ruleWeights,
     ownership,
-    manualUnitIds,
+    totalAmount,
+    dueDate,
+    manualAmounts,
   } = input;
 
   const blockers: ReadinessBlocker[] = [];
   const notices: ReadinessNotice[] = [];
+
+  // 0. Wat het formulier NU bevat. Deze twee weigeringen zijn deterministisch
+  //    bekend vóór er ook maar iets naar de server gaat: `chargeCallSchema`
+  //    weigert het bedrag, en de refine erop weigert de datumvolgorde. Een
+  //    groene controle op invoer die de volgende stap zeker afkeurt is precies
+  //    het gedrag dat deze controle moet uitsluiten.
+  if (!parseFormAmount(totalAmount).ok) {
+    blockers.push({ code: "FORM_AMOUNT_INVALID" });
+  }
+
+  // Een lege of onvolledige oproepdatum is geen detail: `isoDate` weigert hem,
+  // en zonder geldige datum is "wie is op die dag eigenaar" een zinloze vraag.
+  // Zonder deze controle zou de vergelijking met de vervaldatum stilletjes
+  // slagen (`"2026-06-29" < ""` is false) en zou elk lot ten onrechte als
+  // "geen eigenaar" worden gemeld.
+  const datumGeldig = ISO_DATUM.test(callDate);
+  if (!datumGeldig) blockers.push({ code: "FORM_CALL_DATE_INVALID" });
+
+  if (datumGeldig && dueDate.trim() !== "" && dueDate < callDate) {
+    blockers.push({ code: "FORM_DUE_BEFORE_CALL" });
+  }
 
   // 1. Regel en boekjaar — de poortcondities uit stap 3 en 4 van m20.
   if (rule.building_id !== buildingId) {
@@ -294,17 +436,49 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
       .map(naarLotRef)
       .sort(opLabel);
     if (zonder.length > 0) blockers.push({ code: "ALLOC_WEIGHT_MISSING", units: zonder });
+
+    // De noemer telt pas ergens op als élk deelnemend lot een gewicht heeft;
+    // met een ontbrekende rij zegt de som niets en staat er al een blokkade.
+    if (zonder.length === 0 && rule.method === "percentage") {
+      const ppm = percentageTotalPpm(rule, deelnemers, ruleWeights);
+      if (ppm !== PERCENTAGE_TOTAAL_PPM) {
+        blockers.push({ code: "ALLOC_PCT_SUM", ppm });
+      }
+    }
   } else if (rule.method === "manual") {
-    // Alleen VOLLEDIGHEID: welk deelnemend lot heeft nog geen bedrag? Of de
-    // ingevulde bedragen exact optellen tot de oproep is een geldsom, en die
-    // blijft bij de database (ALLOC_MANUAL_SUM) — dit scherm rekent niet mee.
-    const ingevuld = new Set(manualUnitIds ?? []);
-    const zonder = deelnemers
-      .filter((u) => !ingevuld.has(u.id))
-      .map(naarLotRef)
-      .sort(opLabel);
-    if (zonder.length > 0) {
-      blockers.push({ code: "ALLOC_MANUAL_MISSING_UNIT", units: zonder });
+    // Twee dingen die `collectManualLines()` en m20 deterministisch weigeren:
+    // een veld dat geen getal is, en een negatief bedrag. Een LEEG veld is
+    // geldig en telt als 0,00 — precies wat de actie ervan maakt — en nul is
+    // toegestaan; alleen negatief niet.
+    //
+    // Of de bedragen exact optellen tot het oproepbedrag blijft bij de
+    // database (ALLOC_MANUAL_SUM). Die som in TypeScript naleggen zou een
+    // tweede financiële waarheid opleveren over afronding van centen.
+    const bedragen = manualAmounts ?? {};
+    const ongeldig: LotRef[] = [];
+    const negatief: LotRef[] = [];
+    let ingevuld = false;
+
+    for (const u of deelnemers) {
+      const gelezen = parseManualAmount(bedragen[u.id] ?? "");
+      if (!gelezen.ok) {
+        ongeldig.push(naarLotRef(u));
+        continue;
+      }
+      if (gelezen.filled) ingevuld = true;
+      if (gelezen.value < 0) negatief.push(naarLotRef(u));
+    }
+
+    if (ongeldig.length > 0) {
+      blockers.push({ code: "FORM_MANUAL_INVALID", units: ongeldig.sort(opLabel) });
+    }
+    if (negatief.length > 0) {
+      blockers.push({ code: "ALLOC_MANUAL_NEGATIVE", units: negatief.sort(opLabel) });
+    }
+    // Geen enkel veld ingevuld: de actie stuurt dan `p_manual_lines = null` en
+    // de database weigert met ALLOC_MANUAL_MISSING.
+    if (!ingevuld && ongeldig.length === 0) {
+      blockers.push({ code: "ALLOC_MANUAL_MISSING" });
     }
     notices.push({ code: "MANUAL_SUM_CHECKED_BY_DATABASE" });
   }
@@ -345,7 +519,9 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
 
   const zonderEigenaar: LotRef[] = [];
   const ambigu: LotRef[] = [];
-  for (const u of deelnemers) {
+  // Zonder geldige oproepdatum heeft deze vraag geen antwoord; hem toch stellen
+  // zou elk lot als "geen eigenaar" melden en de echte oorzaak verbergen.
+  for (const u of datumGeldig ? deelnemers : []) {
     const { klasse } = classifyOwnershipOn(perUnit.get(u.id) ?? [], callDate);
     if (klasse === "geenEigenaar") zonderEigenaar.push(naarLotRef(u));
     else if (klasse === "ambigu") ambigu.push(naarLotRef(u));
@@ -438,6 +614,20 @@ const CHARGE_ERROR_KEYS: Record<string, string> = {
   ALLOC_TRUNCATE_BLOCKED: "integrity",
 };
 
+/**
+ * Codes die alléén uit de controle vóór aanmaken komen.
+ *
+ * Ze dragen bewust geen `ALLOC_`-voorvoegsel: de engine kent ze niet. Het zijn
+ * weigeringen van de laag ervoor — `chargeCallSchema` en `collectManualLines()`
+ * — die deterministisch bekend zijn zolang de gebruiker nog typt.
+ */
+const FORM_BLOCKER_KEYS: Record<string, string> = {
+  FORM_AMOUNT_INVALID: "amountInvalid",
+  FORM_CALL_DATE_INVALID: "callDateInvalid",
+  FORM_DUE_BEFORE_CALL: "dueBeforeCall",
+  FORM_MANUAL_INVALID: "manualInvalidNumber",
+};
+
 /** Precies het patroon van de engine: een kale code gevolgd door een dubbele punt. */
 const ENGINE_CODE = /^([A-Z][A-Z0-9_]{4,}):/;
 
@@ -462,12 +652,14 @@ export function chargeErrorKey(message: string | null | undefined): string {
 
 /** Vertaalsleutel voor een blokkade uit de controle vóór aanmaken. */
 export function blockerKey(blocker: ReadinessBlocker): string {
-  return CHARGE_ERROR_KEYS[blocker.code] ?? "generic";
+  return CHARGE_ERROR_KEYS[blocker.code] ?? FORM_BLOCKER_KEYS[blocker.code] ?? "generic";
 }
 
 /** Alle codes die een vertaling moeten hebben; gebruikt door de pariteittest. */
 export function chargeErrorKeys(): string[] {
-  return Array.from(new Set(Object.values(CHARGE_ERROR_KEYS))).sort();
+  return Array.from(
+    new Set([...Object.values(CHARGE_ERROR_KEYS), ...Object.values(FORM_BLOCKER_KEYS)]),
+  ).sort();
 }
 
 /** Alle door de engine gedocumenteerde codes die deze mapping dekt. */
