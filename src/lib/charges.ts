@@ -99,47 +99,67 @@ function getal(v: number | string | null | undefined): number {
  */
 export function parseFormAmount(
   raw: string,
-): { ok: true; value: number } | { ok: false } {
+): { ok: true; cents: number } | { ok: false } {
   const tekst = raw.trim();
   if (tekst === "") return { ok: false };
   const n = Number.parseFloat(tekst.replace(/\s/g, "").replace(",", "."));
   if (!Number.isFinite(n)) return { ok: false };
   if (n <= 0) return { ok: false };
   if (n > 1_000_000_000) return { ok: false };
-  // Onder een halve cent is `n > 0` niet genoeg. `validation.ts` rondt het
-  // bedrag NA die controle af op hele centen, dus 0,004 komt als 0,00 bij de
-  // RPC aan en m20 weigert dan met ALLOC_AMOUNT_INVALID. Een drempel in plaats
-  // van een afronding: hier wordt niets met centen gerekend.
-  if (n < HALVE_CENT) return { ok: false };
-  return { ok: true, value: n };
-}
 
-/** Het kleinste bedrag dat na afronding op hele centen nog boven nul uitkomt. */
-const HALVE_CENT = 0.005;
+  // `validation.ts` rondt NA de `> 0`-controle af op hele centen. Dat maakt twee
+  // dingen waar: 0,004 komt als 0,00 bij de RPC aan (en m20 weigert dan met
+  // ALLOC_AMOUNT_INVALID), en het bedrag dat de RPC werkelijk krijgt is het
+  // AFGERONDE bedrag. Alleen dat afgeronde bedrag komt hier naar buiten, in
+  // hele centen: één eenheid door de hele module, zodat er nergens anders nog
+  // van euro naar cent of terug hoeft te worden gerekend.
+  const cents = Math.round(n * 100);
+  if (cents <= 0) return { ok: false };
+  return { ok: true, cents };
+}
 
 /** Het datumformaat dat `validation.ts` als enige accepteert. */
 const ISO_DATUM = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Eén handmatig bedrag zoals `collectManualLines()` het leest.
+ * Een datum zoals `isoDate` in `validation.ts` hem beoordeelt: het patroon
+ * `YYYY-MM-DD` ÉN een `Date.parse` die geen NaN oplevert.
+ *
+ * Beide voorwaarden zijn nodig en geen van beide is overbodig: `2026-6-3`
+ * struikelt over het patroon, `2026-99-99` en `2026-13-01` komen er wel
+ * doorheen maar geven NaN. `2026-02-30` slaagt voor allebei — JavaScript rolt
+ * die door naar 2 maart — en dat is precies wat de server ook doet. Strenger
+ * zijn dan de server zou rood tonen op invoer die daarna gewoon wordt
+ * geaccepteerd.
+ */
+export function isValidIsoDate(raw: string): boolean {
+  return ISO_DATUM.test(raw) && !Number.isNaN(Date.parse(raw));
+}
+
+/**
+ * Eén handmatig bedrag zoals `collectManualLines()` het leest, in HELE CENTEN.
+ *
+ * Dit is de gedeelde bron: de Server Action gebruikt deze functie om
+ * `amount_cents` te vullen, en de controle vóór aanmaken gebruikt exact
+ * dezelfde uitkomsten. Twee losse implementaties zouden precies het verschil
+ * opleveren dat deze controle moet uitsluiten.
  *
  * Let op het verschil met het oproepbedrag: die gebruikt `parseFloat`, deze
  * `Number()`. `Number("12abc")` is NaN, `parseFloat("12abc")` is 12. Dat is
  * bestaand gedrag van twee verschillende plekken; deze functie spiegelt de
- * plek die er werkelijk toe doet voor dit veld.
+ * plek die voor dit veld geldt.
  *
- * Een LEEG veld is geldig en betekent 0,00 — precies wat `collectManualLines()`
- * ervan maakt. Nul is toegestaan: de database weigert alleen een NEGATIEF
- * bedrag (`ALLOC_MANUAL_NEGATIVE`).
+ * Een LEEG veld is geldig en betekent 0 cent. Nul is toegestaan: de database
+ * weigert alleen een NEGATIEF bedrag (`ALLOC_MANUAL_NEGATIVE`).
  */
 export function parseManualAmount(
   raw: string,
-): { ok: true; value: number; filled: boolean } | { ok: false } {
+): { ok: true; cents: number; filled: boolean } | { ok: false } {
   const tekst = raw.trim().replace(",", ".");
-  if (tekst === "") return { ok: true, value: 0, filled: false };
+  if (tekst === "") return { ok: true, cents: 0, filled: false };
   const n = Number(tekst);
   if (!Number.isFinite(n)) return { ok: false };
-  return { ok: true, value: n, filled: true };
+  return { ok: true, cents: Math.round(n * 100), filled: true };
 }
 
 function naarLotRef(u: ChargeUnitRow): LotRef {
@@ -221,6 +241,14 @@ export type ReadinessBlocker =
   | { code: "ALLOC_MANUAL_MISSING" }
   | { code: "ALLOC_MANUAL_NEGATIVE"; units: LotRef[] }
   | {
+      /**
+       * De ingevoerde bedragen tellen niet op tot het oproeptotaal. Bewust
+       * ZONDER cijfers: de melding hoort te zeggen wat er mis is, niet een
+       * tweede berekening te tonen naast die van de database.
+       */
+      code: "ALLOC_MANUAL_SUM";
+    }
+  | {
       /** Een handmatig veld is geen getal; `collectManualLines()` weigert dit. */
       code: "FORM_MANUAL_INVALID";
       units: LotRef[];
@@ -236,6 +264,10 @@ export type ReadinessBlocker =
   | {
       /** Geen of geen volledige `YYYY-MM-DD`; `isoDate` weigert dat. */
       code: "FORM_CALL_DATE_INVALID";
+    }
+  | {
+      /** Wel ingevuld, maar geen geldige datum volgens `isoDate`. */
+      code: "FORM_DUE_DATE_INVALID";
     }
   | {
       /**
@@ -262,10 +294,6 @@ export type ReadinessNotice =
       participating: number;
       declared: number;
       untilYear: number;
-    }
-  | {
-      /** Handmatige verdeling: de database toetst de som, niet dit scherm. */
-      code: "MANUAL_SUM_CHECKED_BY_DATABASE";
     };
 
 export type ChargeCallReadiness = {
@@ -366,19 +394,24 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
   //    weigert het bedrag, en de refine erop weigert de datumvolgorde. Een
   //    groene controle op invoer die de volgende stap zeker afkeurt is precies
   //    het gedrag dat deze controle moet uitsluiten.
-  if (!parseFormAmount(totalAmount).ok) {
-    blockers.push({ code: "FORM_AMOUNT_INVALID" });
-  }
+  const bedrag = parseFormAmount(totalAmount);
+  if (!bedrag.ok) blockers.push({ code: "FORM_AMOUNT_INVALID" });
 
-  // Een lege of onvolledige oproepdatum is geen detail: `isoDate` weigert hem,
-  // en zonder geldige datum is "wie is op die dag eigenaar" een zinloze vraag.
-  // Zonder deze controle zou de vergelijking met de vervaldatum stilletjes
-  // slagen (`"2026-06-29" < ""` is false) en zou elk lot ten onrechte als
-  // "geen eigenaar" worden gemeld.
-  const datumGeldig = ISO_DATUM.test(callDate);
+  // Een lege, onvolledige of onbestaande oproepdatum is geen detail: `isoDate`
+  // weigert hem, en zonder geldige datum is "wie is op die dag eigenaar" een
+  // zinloze vraag. Zonder deze poort zou de vergelijking met de vervaldatum
+  // stilletjes slagen (`"2026-06-29" < ""` is false) en zou elk lot ten
+  // onrechte als "geen eigenaar" worden gemeld.
+  const datumGeldig = isValidIsoDate(callDate);
   if (!datumGeldig) blockers.push({ code: "FORM_CALL_DATE_INVALID" });
 
-  if (datumGeldig && dueDate.trim() !== "" && dueDate < callDate) {
+  const vervalIngevuld = dueDate.trim() !== "";
+  const vervalGeldig = !vervalIngevuld || isValidIsoDate(dueDate);
+  if (!vervalGeldig) blockers.push({ code: "FORM_DUE_DATE_INVALID" });
+
+  // Pas vergelijken als BEIDE datums geldig zijn; anders vergelijk je tekst
+  // waarvan de betekenis niet vaststaat.
+  if (datumGeldig && vervalIngevuld && vervalGeldig && dueDate < callDate) {
     blockers.push({ code: "FORM_DUE_BEFORE_CALL" });
   }
 
@@ -446,18 +479,22 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
       }
     }
   } else if (rule.method === "manual") {
-    // Twee dingen die `collectManualLines()` en m20 deterministisch weigeren:
-    // een veld dat geen getal is, en een negatief bedrag. Een LEEG veld is
-    // geldig en telt als 0,00 — precies wat de actie ervan maakt — en nul is
-    // toegestaan; alleen negatief niet.
+    // Drie dingen die `collectManualLines()` en m20 deterministisch weigeren:
+    // een veld dat geen getal is, een negatief bedrag, en een som die niet
+    // gelijk is aan het oproepbedrag. Een LEEG veld is geldig en telt als
+    // 0,00 — precies wat de actie ervan maakt — en nul is toegestaan; alleen
+    // negatief niet.
     //
-    // Of de bedragen exact optellen tot het oproepbedrag blijft bij de
-    // database (ALLOC_MANUAL_SUM). Die som in TypeScript naleggen zou een
-    // tweede financiële waarheid opleveren over afronding van centen.
+    // De som wordt hier NIET verdeeld en niet herverdeeld: de gebruiker heeft
+    // elk bedrag zelf getypt. `parseManualAmount()` is letterlijk dezelfde
+    // functie die de Server Action gebruikt, dus het optellen van die centen
+    // levert geen tweede financiële waarheid op — het is exact het getal dat
+    // straks naar `create_charge_call` gaat.
     const bedragen = manualAmounts ?? {};
     const ongeldig: LotRef[] = [];
     const negatief: LotRef[] = [];
     let ingevuld = false;
+    let somCenten = 0;
 
     for (const u of deelnemers) {
       const gelezen = parseManualAmount(bedragen[u.id] ?? "");
@@ -466,7 +503,8 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
         continue;
       }
       if (gelezen.filled) ingevuld = true;
-      if (gelezen.value < 0) negatief.push(naarLotRef(u));
+      if (gelezen.cents < 0) negatief.push(naarLotRef(u));
+      somCenten += gelezen.cents;
     }
 
     if (ongeldig.length > 0) {
@@ -480,7 +518,15 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
     if (!ingevuld && ongeldig.length === 0) {
       blockers.push({ code: "ALLOC_MANUAL_MISSING" });
     }
-    notices.push({ code: "MANUAL_SUM_CHECKED_BY_DATABASE" });
+
+    // De som van de INGEVOERDE bedragen tegenover het oproeptotaal. Dit is geen
+    // verdeling: de gebruiker heeft elk bedrag zelf getypt en beide kanten
+    // komen uit dezelfde parser als de Server Action. Zonder deze controle
+    // wordt 600 + 400 bij een oproep van 1200 groen, waarna m20 alsnog weigert
+    // met ALLOC_MANUAL_SUM.
+    if (bedrag.ok && ingevuld && ongeldig.length === 0 && negatief.length === 0) {
+      if (somCenten !== bedrag.cents) blockers.push({ code: "ALLOC_MANUAL_SUM" });
+    }
   }
 
   // 4. Controlewaarde (F09). Geldt UITSLUITEND voor een tantième-verdeling over
@@ -624,6 +670,7 @@ const CHARGE_ERROR_KEYS: Record<string, string> = {
 const FORM_BLOCKER_KEYS: Record<string, string> = {
   FORM_AMOUNT_INVALID: "amountInvalid",
   FORM_CALL_DATE_INVALID: "callDateInvalid",
+  FORM_DUE_DATE_INVALID: "dueDateInvalid",
   FORM_DUE_BEFORE_CALL: "dueBeforeCall",
   FORM_MANUAL_INVALID: "manualInvalidNumber",
 };

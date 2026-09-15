@@ -170,15 +170,36 @@ export default async function FiscalYearDetail({
         .eq("building_id", buildingId),
     ]);
 
-  /** Eén gefaalde bron is genoeg om het aanmaken te blokkeren. */
-  const bronnenOk =
+  /*
+   * DRIE GESCHEIDEN POORTEN.
+   *
+   * Eerder hing alles aan één vlag, en die vlag stond bovendien binnen
+   * `mayWrite && open`. Daardoor kon een viewer — of iedereen op een gesloten
+   * boekjaar — bij een mislukte `charge_calls`-query "0 MAD appelés" en "geen
+   * oproepen" te zien krijgen zonder enige foutmelding. Een lege lijst en een
+   * mislukte query zien er identiek uit, en juist op dat verschil hangt hier
+   * geld.
+   *
+   * De poorten zijn nu gescheiden naar wat ze werkelijk beschermen:
+   *
+   *   callsOk      de oproepen zelf: totaal, aantal, lijst en lege toestand;
+   *   linesOk      de definitieve verdeling per oproep;
+   *   saldoOk      het saldo per eigenaar;
+   *   paymentsOk   de betalingenlijst;
+   *   workflowOk   de bronnen waarop de controle vóór aanmaken steunt.
+   *
+   * Een fout in een workflowbron verbergt dus geen betrouwbare oproepen meer,
+   * en een fout in de oproepen blokkeert niet stilzwijgend alleen het
+   * aanmaakformulier.
+   */
+  const callsOk = !callsError;
+  const linesOk = !linesRes.error;
+  const workflowOk =
     !unitsRes.error &&
     !rulesRes.error &&
     !ruleUnitsRes.error &&
     !ruleWeightsRes.error &&
-    !ownershipRes.error &&
-    !linesRes.error &&
-    !callsError;
+    !ownershipRes.error;
 
   const lots = (unitsRes.data ?? []) as {
     id: string;
@@ -229,7 +250,7 @@ export default async function FiscalYearDetail({
   }
   const eigenaars = Array.from(eigenaarMap.entries()).map(([id, full_name]) => ({ id, full_name }));
 
-  const { data: paysData } = await supabase
+  const { data: paysData, error: paysError } = await supabase
     .from("payments")
     .select(`
       id, amount, method, value_date, reference,
@@ -246,6 +267,10 @@ export default async function FiscalYearDetail({
     .eq("building_id", buildingId)
     .order("value_date", { ascending: false })
     .limit(20);
+  // Zelfde regel als bij de oproepen: een mislukte betalingenquery mag niet als
+  // "geen betalingen" verschijnen. Dat is geen cosmetisch verschil - wie op die
+  // lege lijst afgaat, boekt een betaling een tweede keer.
+  const paymentsOk = !paysError;
   const pays = (paysData ?? []) as unknown as PayRow[];
 
   // ---- Financial Reversal Engine -------------------------------------------
@@ -283,12 +308,17 @@ export default async function FiscalYearDetail({
     teLaat: number;
   }[] = [];
 
+  // Ook deze query is financieel dragend: zonder foutafvangst zou een mislukte
+  // allocatiequery als "geen enkele eigenaar heeft een saldo" verschijnen.
+  let allocError: unknown = null;
+
   if (callIds.length > 0) {
-    const { data: allocData } = await supabase
+    const { data: allocData, error: allocErr } = await supabase
       .from("charge_allocations")
       .select("amount, settled_amount, owner_id, owners(id, full_name), charge_calls(due_date)")
       .in("charge_call_id", callIds)
       .not("owner_id", "is", null);
+    allocError = allocErr;
 
     const saldoMap = new Map<string, { naam: string; opgeroepen: number; voldaan: number; teLaat: number }>();
     for (const row of allocData ?? []) {
@@ -310,6 +340,7 @@ export default async function FiscalYearDetail({
       .sort((a, b) => (b.opgeroepen - b.voldaan) - (a.opgeroepen - a.voldaan));
   }
 
+  const saldoOk = callsOk && !allocError;
   const totalOpgeroepen = calls.reduce((s, c) => s + Number(c.total_amount), 0);
 
   return (
@@ -323,7 +354,8 @@ export default async function FiscalYearDetail({
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            {totalOpgeroepen > 0 && (
+            {/* Geen bedrag zolang de oproepen niet betrouwbaar zijn geladen. */}
+            {callsOk && totalOpgeroepen > 0 && (
               <span style={{ fontWeight: 600, fontSize: "1.05rem" }}>{fmt(totalOpgeroepen)} MAD appelés</span>
             )}
             <span className={`badge ${fy.status === "open" ? "badge-klein" : "badge-midden"}`}>
@@ -336,17 +368,38 @@ export default async function FiscalYearDetail({
           <div>
             <section>
               <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>
-                Appels de charges ({calls.length})
+                {/* Zonder betrouwbare gegevens ook geen aantal: "(0)" zou een
+                    bewering zijn die we niet kunnen waarmaken. */}
+                {tc("title")}
+                {callsOk ? ` (${calls.length})` : null}
               </h2>
 
-              {calls.length === 0 && (
+              {/*
+                FAIL-CLOSED. Deze melding staat bewust BUITEN elke rol- en
+                boekjaarvoorwaarde: een viewer en een gesloten boekjaar hebben
+                net zo goed recht op de waarschuwing dat de cijfers ontbreken.
+                Geen totaal, geen aantal, geen "geen oproepen" — en nooit de
+                databasetekst zelf.
+              */}
+              {!callsOk && (
+                <div
+                  className="card"
+                  style={{ padding: "1rem", fontSize: "0.88rem" }}
+                  role="alert"
+                  data-testid="calls-error"
+                >
+                  {tc("errors.callsUnavailable")}
+                </div>
+              )}
+
+              {callsOk && calls.length === 0 && (
                 <div className="card muted" style={{ padding: "1rem", fontSize: "0.88rem" }}>
-                  Aucun appel de charges.
+                  {tc("noCharges")}
                 </div>
               )}
 
               <div style={{ display: "grid", gap: "0.7rem" }}>
-                {calls.map((cc) => {
+                {(callsOk ? calls : []).map((cc) => {
                   const telaat = cc.due_date && new Date(cc.due_date) < new Date();
                   return (
                     <div key={cc.id} className="card" style={{ padding: "0.9rem 1rem" }}>
@@ -426,7 +479,16 @@ export default async function FiscalYearDetail({
                             )}
                           </dl>
 
-                          {(linesPerCall.get(cc.id) ?? []).length === 0 ? (
+                          {!linesOk ? (
+                            /* Niet "geen regels": we weten het simpelweg niet. */
+                            <p
+                              className="text-crit m-0 text-[0.78rem]"
+                              role="alert"
+                              data-testid="lines-error"
+                            >
+                              {tc("result.unavailable")}
+                            </p>
+                          ) : (linesPerCall.get(cc.id) ?? []).length === 0 ? (
                             <p className="text-ink-soft m-0 text-[0.78rem]">
                               {tc("result.noLines")}
                             </p>
@@ -481,7 +543,7 @@ export default async function FiscalYearDetail({
                  nooit als gezonde data doorgaan.
             */}
             {mayWrite && fy.status === "open" && (
-              bronnenOk ? (
+              workflowOk ? (
                 <ChargeCallWorkflow
                   buildingId={buildingId}
                   fiscalYearId={fyId}
@@ -495,7 +557,7 @@ export default async function FiscalYearDetail({
                   today={vandaag}
                 />
               ) : (
-                <div className="card mt-4 p-4" role="alert">
+                <div className="card mt-4 p-4" role="alert" data-testid="workflow-error">
                   <p className="m-0 text-[0.85rem] font-medium">{tc("errors.generic")}</p>
                 </div>
               )
@@ -506,14 +568,25 @@ export default async function FiscalYearDetail({
             <section id="betalingen">
               <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>Paiements</h2>
 
-              {pays.length === 0 && (
+              {!paymentsOk && (
+                <div
+                  className="card"
+                  style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                  role="alert"
+                  data-testid="payments-error"
+                >
+                  {tc("errors.paymentsUnavailable")}
+                </div>
+              )}
+
+              {paymentsOk && pays.length === 0 && (
                 <div className="card muted" style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}>
                   Aucun paiement.
                 </div>
               )}
 
               <div style={{ display: "grid", gap: "0.55rem" }}>
-                {pays.map((p) => {
+                {(paymentsOk ? pays : []).map((p) => {
                   // `reversal` = deze betaling is gestorneerd.
                   // `correction` = deze betaling IS de vervangende rij.
                   const reversal = reversalOf(reversals, p.id);
@@ -646,13 +719,24 @@ export default async function FiscalYearDetail({
             <section>
               <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>Solde par propriétaire</h2>
 
-              {saldoRows.length === 0 && (
+              {!saldoOk && (
+                <div
+                  className="card"
+                  style={{ padding: "0.8rem 1rem", fontSize: "0.85rem" }}
+                  role="alert"
+                  data-testid="balance-error"
+                >
+                  {tc("errors.balanceUnavailable")}
+                </div>
+              )}
+
+              {saldoOk && saldoRows.length === 0 && (
                 <div className="card muted" style={{ padding: "0.8rem 1rem", fontSize: "0.85rem" }}>
                   Aucun appel ou propriétaire lié.
                 </div>
               )}
 
-              {saldoRows.length > 0 && (
+              {saldoOk && saldoRows.length > 0 && (
                 <div className="card" style={{ overflow: "hidden" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.83rem" }}>
                     <thead>

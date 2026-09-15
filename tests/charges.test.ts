@@ -322,14 +322,15 @@ describe("GW — gewichten binnen de regelscope", () => {
     expect(uit.clear).toBe(true);
   });
 
-  it("GW6 — handmatig: de SOM blijft bij de database, dit scherm rekent niet mee", () => {
+  it("GW6 — handmatig: een som die niet klopt is niet groen", () => {
     const r = regel({ method: "manual", weight_source: "charge_call_lines" });
-    // 600 + 400 telt niet op tot 1200, maar dat oordeel is van de database.
+    // 600 + 400 is 1000, de oproep is 1200. m20 weigert dat hoe dan ook met
+    // ALLOC_MANUAL_SUM, dus het scherm mag hier niet groen zeggen.
     const uit = chargeCallReadiness(
       invoer({ rule: r, manualAmounts: { [U1]: "600", [U2]: "400" } }),
     );
-    expect(uit.blockers).toEqual([]);
-    expect(uit.notices.map((n) => n.code)).toContain("MANUAL_SUM_CHECKED_BY_DATABASE");
+    expect(codes(uit)).toContain("ALLOC_MANUAL_SUM");
+    expect(uit.clear).toBe(false);
   });
 
   it("GW7 — handmatig: geen enkel veld ingevuld blokkeert met ALLOC_MANUAL_MISSING", () => {
@@ -368,6 +369,201 @@ describe("GW — gewichten binnen de regelscope", () => {
     );
     expect(uit.blockers).toEqual([]);
     expect(uit.clear).toBe(true);
+  });
+});
+
+// ── Handmatige som (ALLOC_MANUAL_SUM) ───────────────────────────────────────
+
+describe("MS — de handmatige som tegenover het oproepbedrag", () => {
+  const handmatig = regel({ method: "manual", weight_source: "charge_call_lines" });
+
+  /** Wat `collectManualLines()` uit het formulier zou halen, met dezelfde parser. */
+  function alsActie(bedragen: Record<string, string>): number | null {
+    let som = 0;
+    let ingevuld = false;
+    for (const ruw of Object.values(bedragen)) {
+      const gelezen = parseManualAmount(ruw);
+      if (!gelezen.ok) return null;
+      if (gelezen.filled) ingevuld = true;
+      som += gelezen.cents;
+    }
+    return ingevuld ? som : null;
+  }
+
+  it("MS1 — een kloppende som is groen", () => {
+    const uit = chargeCallReadiness(
+      invoer({ rule: handmatig, manualAmounts: { [U1]: "600", [U2]: "600" } }),
+    );
+    expect(uit.blockers).toEqual([]);
+    expect(uit.clear).toBe(true);
+  });
+
+  it("MS2 — een som die te laag is, is niet groen", () => {
+    const uit = chargeCallReadiness(
+      invoer({ rule: handmatig, manualAmounts: { [U1]: "600", [U2]: "400" } }),
+    );
+    expect(codes(uit)).toContain("ALLOC_MANUAL_SUM");
+    expect(uit.clear).toBe(false);
+  });
+
+  it("MS3 — een som die te hoog is, is evenmin groen", () => {
+    const uit = chargeCallReadiness(
+      invoer({ rule: handmatig, manualAmounts: { [U1]: "700", [U2]: "600" } }),
+    );
+    expect(codes(uit)).toContain("ALLOC_MANUAL_SUM");
+    expect(uit.clear).toBe(false);
+  });
+
+  it("MS4 — komma en punt zijn hetzelfde bedrag, in beide richtingen", () => {
+    const metKomma = chargeCallReadiness(
+      invoer({
+        rule: handmatig,
+        totalAmount: "1200,00",
+        manualAmounts: { [U1]: "600,50", [U2]: "599,50" },
+      }),
+    );
+    expect(metKomma.blockers).toEqual([]);
+
+    const metPunt = chargeCallReadiness(
+      invoer({
+        rule: handmatig,
+        totalAmount: "1200.00",
+        manualAmounts: { [U1]: "600.50", [U2]: "599.50" },
+      }),
+    );
+    expect(metPunt.blockers).toEqual([]);
+
+    // En een cent ernaast is in beide notaties rood.
+    const ernaast = chargeCallReadiness(
+      invoer({
+        rule: handmatig,
+        totalAmount: "1200,00",
+        manualAmounts: { [U1]: "600,51", [U2]: "599,50" },
+      }),
+    );
+    expect(codes(ernaast)).toContain("ALLOC_MANUAL_SUM");
+  });
+
+  it("MS5 — de centen zijn exact die van de Server Action, niet een eigen afronding", () => {
+    // Drie bedragen die in drijvende komma NIET netjes optellen (0.1+0.2 is
+    // 0.30000000000000004). In hele centen doen ze dat wél, en de controle
+    // gebruikt letterlijk dezelfde parser als `collectManualLines()`.
+    const bedragen = { [U1]: "0.10", [U2]: "0.20" };
+    expect(alsActie(bedragen)).toBe(30);
+
+    const uit = chargeCallReadiness(
+      invoer({ rule: handmatig, totalAmount: "0.30", manualAmounts: bedragen }),
+    );
+    expect(uit.blockers).toEqual([]);
+    expect(uit.clear).toBe(true);
+  });
+
+  it("MS6 — een leeg veld telt aan beide kanten als 0,00", () => {
+    const bedragen = { [U1]: "1200,00", [U2]: "" };
+    expect(alsActie(bedragen)).toBe(120000);
+
+    const uit = chargeCallReadiness(
+      invoer({ rule: handmatig, manualAmounts: bedragen }),
+    );
+    expect(uit.blockers).toEqual([]);
+    expect(uit.clear).toBe(true);
+
+    // En met dat lege veld erbij klopt de som dus níét meer als de rest te laag is.
+    const teLaag = chargeCallReadiness(
+      invoer({ rule: handmatig, manualAmounts: { [U1]: "1100,00", [U2]: "" } }),
+    );
+    expect(codes(teLaag)).toContain("ALLOC_MANUAL_SUM");
+  });
+
+  it("MS7 — de som verdringt de hardere fouten niet", () => {
+    // Bij een niet-numeriek of negatief bedrag is de som betekenisloos; dan
+    // hoort die oorzaak te blijven staan en niet te worden overschaduwd.
+    const nietNumeriek = chargeCallReadiness(
+      invoer({ rule: handmatig, manualAmounts: { [U1]: "600", [U2]: "abc" } }),
+    );
+    expect(codes(nietNumeriek)).toContain("FORM_MANUAL_INVALID");
+    expect(codes(nietNumeriek)).not.toContain("ALLOC_MANUAL_SUM");
+
+    const negatief = chargeCallReadiness(
+      invoer({ rule: handmatig, manualAmounts: { [U1]: "1400", [U2]: "-200" } }),
+    );
+    expect(codes(negatief)).toContain("ALLOC_MANUAL_NEGATIVE");
+    expect(codes(negatief)).not.toContain("ALLOC_MANUAL_SUM");
+  });
+
+  it("MS8 — zonder geldig oproepbedrag wordt er geen som beoordeeld", () => {
+    // Het bedrag zelf is dan al de blokkade; een tweede rode melding over een
+    // som tegen een onbekend totaal zou de oorzaak alleen maar vertroebelen.
+    const uit = chargeCallReadiness(
+      invoer({
+        rule: handmatig,
+        totalAmount: "abc",
+        manualAmounts: { [U1]: "600", [U2]: "400" },
+      }),
+    );
+    expect(codes(uit)).toContain("FORM_AMOUNT_INVALID");
+    expect(codes(uit)).not.toContain("ALLOC_MANUAL_SUM");
+  });
+
+  it("MS9 — de som telt alleen lots binnen de regelscope", () => {
+    // Een bedrag bij een uitgesloten lot gaat ook niet mee in `manual_`-lijnen
+    // die de actie stuurt, want dat veld staat niet in het rooster.
+    const r = regel({
+      method: "manual",
+      weight_source: "charge_call_lines",
+      scope: "selected_units",
+    });
+    const uit = chargeCallReadiness(
+      invoer({
+        rule: r,
+        units: [unit(U1, "A1", 60), unit(U2, "A2", 40)],
+        ruleUnits: [{ rule_id: REGEL, unit_id: U1 }],
+        manualAmounts: { [U1]: "1200", [U2]: "999" },
+      }),
+    );
+    expect(uit.participants.map((u) => u.label)).toEqual(["A1"]);
+    expect(codes(uit)).not.toContain("ALLOC_MANUAL_SUM");
+  });
+
+  it("MS10 — de som is één optelling, geen verdeling", () => {
+    // De uitkomst draagt nergens een bedrag per lot: de blokkade zegt alleen
+    // DAT de som niet klopt, nooit wat elk lot dan zou moeten betalen.
+    const uit = chargeCallReadiness(
+      invoer({ rule: handmatig, manualAmounts: { [U1]: "600", [U2]: "400" } }),
+    );
+    const blok = uit.blockers.find((b) => b.code === "ALLOC_MANUAL_SUM");
+    expect(blok).toEqual({ code: "ALLOC_MANUAL_SUM" });
+    expect(JSON.stringify(uit)).not.toMatch(/cent/i);
+  });
+
+  it("MS11 — de Server Action en de controle delen letterlijk dezelfde parser", () => {
+    const actie = zonderCommentaar(
+      readFileSync(
+        join(
+          REPO,
+          "src",
+          "app",
+          "[locale]",
+          "(app)",
+          "buildings",
+          "[id]",
+          "boekjaren",
+          "actions.ts",
+        ),
+        "utf8",
+      ),
+    );
+    // De actie importeert de parser uit de gedeelde module ...
+    expect(actie).toMatch(/import\s*\{[^}]*parseManualAmount[^}]*\}\s*from\s*"@\/lib\/charges"/);
+    // ... en leest geen enkel handmatig bedrag nog zelf.
+    expect(actie).not.toMatch(/Number\(String\(value\)/);
+    expect(actie).not.toMatch(/parseFloat\(String\(value\)/);
+    const manueleRegels = actie
+      .split("\n")
+      .filter((r) => r.includes("amount_cents"))
+      .join("\n");
+    expect(manueleRegels).toMatch(/gelezen\.cents/);
+    expect(manueleRegels).not.toMatch(/\*\s*100/);
   });
 });
 
@@ -588,8 +784,10 @@ describe("FV — formuliervalidatie vóór de controle groen wordt", () => {
 
   it("FV9 — parseFormAmount spiegelt parseFloat, niet een strengere parser", () => {
     // validation.ts gebruikt parseFloat; die is mild. Strenger zijn zou rood
-    // tonen op invoer die de Server Action daarna accepteert.
-    expect(parseFormAmount("12abc")).toEqual({ ok: true, value: 12 });
+    // tonen op invoer die de Server Action daarna accepteert. De uitkomst is
+    // in HELE CENTEN, precies het getal dat de RPC krijgt.
+    expect(parseFormAmount("12abc")).toEqual({ ok: true, cents: 1200 });
+    expect(parseFormAmount("1200,00")).toEqual({ ok: true, cents: 120000 });
     expect(parseFormAmount("abc").ok).toBe(false);
     expect(parseFormAmount("").ok).toBe(false);
     expect(parseFormAmount("   ").ok).toBe(false);
@@ -597,10 +795,46 @@ describe("FV — formuliervalidatie vóór de controle groen wordt", () => {
 
   it("FV10 — parseManualAmount spiegelt Number(), inclusief leeg = 0", () => {
     // collectManualLines gebruikt Number(), niet parseFloat.
-    expect(parseManualAmount("")).toEqual({ ok: true, value: 0, filled: false });
-    expect(parseManualAmount("600,50")).toEqual({ ok: true, value: 600.5, filled: true });
+    expect(parseManualAmount("")).toEqual({ ok: true, cents: 0, filled: false });
+    expect(parseManualAmount("600,50")).toEqual({ ok: true, cents: 60050, filled: true });
     expect(parseManualAmount("12abc").ok).toBe(false);
-    expect(parseManualAmount("-5")).toEqual({ ok: true, value: -5, filled: true });
+    expect(parseManualAmount("-5")).toEqual({ ok: true, cents: -500, filled: true });
+  });
+
+  it("FV15 — een onbestaande datum is niet groen, precies zoals isoDate oordeelt", () => {
+    // `isoDate` in validation.ts is patroon ÉN `Date.parse` zonder NaN.
+    // "2026-99-99" komt door het patroon maar geeft NaN; zonder de tweede
+    // voorwaarde zou dit scherm groen zeggen en zou de server alsnog weigeren.
+    const alsOproep = chargeCallReadiness(invoer({ callDate: "2026-99-99" }));
+    expect(codes(alsOproep)).toContain("FORM_CALL_DATE_INVALID");
+    expect(alsOproep.clear).toBe(false);
+
+    const alsVerval = chargeCallReadiness(
+      invoer({ callDate: "2026-06-30", dueDate: "2026-99-99" }),
+    );
+    expect(codes(alsVerval)).toContain("FORM_DUE_DATE_INVALID");
+    expect(alsVerval.clear).toBe(false);
+  });
+
+  it("FV16 — een ongeldige datum blokkeert, maar bedenkt geen tweede oorzaak", () => {
+    // Bij een onbestaande oproepdatum is de eigendom op die datum niet te
+    // beoordelen; dan hoort er GEEN 'geen eigenaar' bij te staan, en ook geen
+    // volgordefout tegen een datum die niet bestaat.
+    const uit = chargeCallReadiness(
+      invoer({ callDate: "2026-99-99", dueDate: "2026-01-01" }),
+    );
+    expect(codes(uit)).toContain("FORM_CALL_DATE_INVALID");
+    expect(codes(uit)).not.toContain("ALLOC_NO_OWNER");
+    expect(codes(uit)).not.toContain("FORM_DUE_BEFORE_CALL");
+  });
+
+  it("FV17 — een geldige datum die de server ook accepteert is groen", () => {
+    // 2026-02-30 slaagt voor patroon én Date.parse (JavaScript rolt door naar
+    // 2 maart) — net als op de server. Strenger zijn dan de server is óók fout.
+    for (const datum of ["2026-06-30", "2026-01-01", "2026-12-31", "2026-02-30"]) {
+      const uit = chargeCallReadiness(invoer({ callDate: datum }));
+      expect(codes(uit), datum).not.toContain("FORM_CALL_DATE_INVALID");
+    }
   });
 });
 
@@ -767,17 +1001,29 @@ describe("GV — geen verdeling in de applicatielaag", () => {
     const code = zonderCommentaar(readFileSync(join(REPO, "src", "lib", "charges.ts"), "utf8"));
     expect(code).not.toMatch(/remainder/i);
     expect(code).not.toMatch(/amount_cents/);
-    // Centconversie hoort hier niet thuis: bedragen blijven bij de database.
-    expect(code).not.toMatch(/\*\s*100\b/);
-    expect(code).not.toMatch(/\/\s*100\b/);
 
-    // Er wordt exact ÉÉN keer afgerond, en uitsluitend om een GEWICHT naar
-    // miljoensten te schalen — letterlijk `round(weight * 1000000)` uit m20.
-    // Elke andere afronding in dit bestand zou een tweede financiële waarheid
-    // zijn en moet deze test laten omvallen.
+    // Er wordt op precies DRIE plaatsen afgerond, en elke plaats moet één van
+    // de toegestane vormen zijn:
+    //
+    //   * euro's naar hele centen, exact zoals `validation.ts` en
+    //     `collectManualLines()` het doen — geen eigen regel, maar dezelfde;
+    //   * een GEWICHT naar miljoensten, letterlijk `round(weight * 1000000)`
+    //     uit m20.
+    //
+    // Elke andere afronding zou een tweede financiële waarheid zijn en moet
+    // deze test laten omvallen.
+    const TOEGESTAAN = [
+      /Math\.round\(n\s*\*\s*100\)/,
+      /Math\.round\(getal\(w\.weight\)\s*\*\s*1_000_000\)/,
+    ];
     const afrondingen = code.split("\n").filter((r) => r.includes("Math.round("));
-    expect(afrondingen).toHaveLength(1);
-    expect(afrondingen[0]).toMatch(/Math\.round\(getal\(w\.weight\)\s*\*\s*1_000_000\)/);
+    expect(afrondingen).toHaveLength(3);
+    for (const regel of afrondingen) {
+      expect(TOEGESTAAN.some((vorm) => vorm.test(regel)), regel.trim()).toBe(true);
+    }
+    // Delen komt er niet in voor: dat is wat verdelen zou zijn.
+    expect(code).not.toMatch(/Math\.floor\(/);
+    expect(code).not.toMatch(/\/\s*(deelnemers|participants|units)\b/);
   });
 
   it("GV3 — de workflowcomponent berekent geen bedragen", () => {
@@ -955,6 +1201,30 @@ describe("VT — vertalingen FR/NL/AR", () => {
       expect(zin, naam).not.toContain("{");
       expect(t("errors.noOwner"), naam).not.toContain("{");
       expect(t("confirm.warning"), naam).not.toContain("{");
+    }
+  });
+
+  it("VT6 — de fail-closed meldingen bestaan in fr, nl en ar en zijn echte tekst", () => {
+    // Zonder deze sleutels zou next-intl in productie op de sleutelnaam
+    // terugvallen en zou de gebruiker "charges.errors.callsUnavailable" lezen
+    // op de plek waar een bedrag hoorde te staan.
+    const paden: [string, string][] = [
+      ["errors", "callsUnavailable"],
+      ["errors", "paymentsUnavailable"],
+      ["errors", "balanceUnavailable"],
+      ["result", "unavailable"],
+    ];
+    for (const [naam, berichten] of Object.entries(talen)) {
+      const charges = berichten.charges as Record<string, Record<string, string>>;
+      for (const [groep, sleutel] of paden) {
+        const tekst = charges[groep]?.[sleutel];
+        expect(tekst, `charges.${groep}.${sleutel} ontbreekt in ${naam}`).toBeTruthy();
+        expect(tekst, `${naam}.${groep}.${sleutel}`).not.toContain("{");
+        // Een foutmelding mag niet klinken als een lege, geslaagde uitkomst.
+        expect(tekst!.toLowerCase(), `${naam}.${groep}.${sleutel}`).not.toMatch(
+          /\b(aucun|geen enkele|0,00)\b/,
+        );
+      }
     }
   });
 

@@ -337,9 +337,28 @@ describe("UI — de aanmaakactie is achter schrijfrecht gezet", () => {
     expect(pagina).toContain("canWrite(role)");
   });
 
-  test("UI2 — de workflow verschijnt alleen wanneer alle bronnen goed zijn geladen", () => {
-    expect(pagina).toContain("bronnenOk");
-    expect(pagina).toContain("bronnenOk ?");
+  test("UI2 — de workflow verschijnt alleen wanneer zijn eigen bronnen goed zijn geladen", () => {
+    // De poort van de aanmaakworkflow staat LOS van die van de weergave: een
+    // fout in units/rules/gewichten/eigendom blokkeert het formulier, maar
+    // verbergt de reeds vastgelegde oproepen niet.
+    expect(pagina).toContain("workflowOk ?");
+    expect(pagina).not.toContain("bronnenOk");
+    const poort = /const workflowOk =([\s\S]*?);/.exec(pagina);
+    expect(poort).not.toBeNull();
+    const bronnen = poort![1];
+    for (const bron of [
+      "unitsRes.error",
+      "rulesRes.error",
+      "ruleUnitsRes.error",
+      "ruleWeightsRes.error",
+      "ownershipRes.error",
+    ]) {
+      expect(bronnen, bron).toContain(bron);
+    }
+    // En juist NIET de financiële bronnen: die hebben hun eigen poort.
+    expect(bronnen).not.toContain("callsError");
+    expect(bronnen).not.toContain("linesRes");
+    expect(bronnen).not.toContain("allocError");
   });
 
   test("UI3 — de oude, hardgecodeerde Franse labels zijn weg", () => {

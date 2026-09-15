@@ -18,7 +18,7 @@ import { assertFiscalYearWritable, assertInOrg } from "@/lib/guard";
 import { isDuplicateYear, toUserError } from "@/lib/errors";
 import { reversalErrorFingerprint, reversalErrorKey } from "@/lib/reversalErrors";
 import { canWrite } from "@/lib/roles";
-import { chargeErrorKey } from "@/lib/charges";
+import { chargeErrorKey, parseManualAmount } from "@/lib/charges";
 
 export async function createFiscalYear(formData: FormData) {
   const { org } = await requireOrg();
@@ -73,11 +73,13 @@ function collectManualLines(
   for (const [key, value] of formData.entries()) {
     if (!key.startsWith("manual_")) continue;
     const unitId = key.slice("manual_".length);
-    const raw = String(value).trim().replace(",", ".");
-    if (raw !== "") ingevuld = true;
-    const mad = raw === "" ? 0 : Number(raw);
-    if (!Number.isFinite(mad)) return { invalid: true };
-    lines.push({ unit_id: unitId, amount_cents: Math.round(mad * 100) });
+    // Eén gedeelde parser met de controle vóór aanmaken. Twee losse
+    // implementaties zouden precies het verschil opleveren dat die controle
+    // moet uitsluiten: een scherm dat groen zegt en een RPC die weigert.
+    const gelezen = parseManualAmount(String(value));
+    if (!gelezen.ok) return { invalid: true };
+    if (gelezen.filled) ingevuld = true;
+    lines.push({ unit_id: unitId, amount_cents: gelezen.cents });
   }
 
   // Het rooster staat altijd in het formulier; is er niets ingevuld, dan is dit

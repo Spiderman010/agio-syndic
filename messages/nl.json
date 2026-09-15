@@ -182,7 +182,8 @@
       "scope": "Reikwijdte",
       "participants": "Lots",
       "partial": "Vastgelegde afwijking van het controletotaal",
-      "noLines": "Geen vastgelegde regels voor deze oproep."
+      "noLines": "Geen vastgelegde regels voor deze oproep.",
+      "unavailable": "De definitieve verdeling kon niet worden geladen."
     },
     "errors": {
       "generic": "De lastenoproep kon niet worden aangemaakt. Controleer de gegevens en probeer het opnieuw.",
@@ -208,7 +209,7 @@
       "manualOutOfScope": "Sommige bedragen horen bij lots buiten de gekozen reikwijdte.",
       "manualDuplicate": "Een lot komt meer dan een keer voor in de handmatige verdeling.",
       "manualNegative": "Een handmatig bedrag mag niet negatief zijn.",
-      "manualSum": "De handmatige bedragen komen niet overeen met het oproepbedrag.",
+      "manualSum": "De ingevoerde bedragen komen niet overeen met het oproepbedrag.",
       "manualInvalidNumber": "Een van de handmatige bedragen is geen geldig getal.",
       "noOwner": "Sommige lots hebben geen eigenaar op de oproepdatum. Leg de eigenaar vast.",
       "ambiguousOwner": "Sommige lots hebben meerdere actieve eigenaars zonder aangewezen debiteur. Wijs per lot een debiteur aan.",
@@ -219,7 +220,11 @@
       "callPaid": "Deze oproep heeft gekoppelde betalingen en kan niet worden ingetrokken.",
       "blockMove": "Een blok kan niet naar een ander gebouw worden verplaatst.",
       "dueBeforeCall": "De vervaldatum mag niet vóór de oproepdatum liggen.",
-      "callDateInvalid": "Vul een geldige oproepdatum in."
+      "callDateInvalid": "Vul een geldige oproepdatum in.",
+      "dueDateInvalid": "Vul een geldige vervaldatum in.",
+      "callsUnavailable": "De lastenoproepen konden niet worden geladen. Er worden geen bedragen getoond zolang de gegevens niet betrouwbaar zijn.",
+      "paymentsUnavailable": "De betalingen konden niet worden geladen. De lijst wordt niet getoond zolang de gegevens niet betrouwbaar zijn.",
+      "balanceUnavailable": "De saldi konden niet worden geladen."
     },
     "noActiveRule": "Geen actieve verdeelregel voor dit gebouw. Er kan geen lastenoproep worden aangemaakt zolang er geen regel actief is."
   },

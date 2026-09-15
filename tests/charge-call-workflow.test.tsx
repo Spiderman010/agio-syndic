@@ -462,3 +462,121 @@ describe("TG — toegankelijkheid en opmaak", () => {
     expect(container.getAttribute("dir")).toBe("rtl");
   });
 });
+
+// ── BLOKKER 2: de handmatige som in de browser ──────────────────────────────
+
+/**
+ * Wat de gebruiker intypt is precies wat de Server Action meestuurt. De
+ * controle telt die bedragen op met DEZELFDE parser en weigert groen te worden
+ * wanneer de som niet gelijk is aan het oproepbedrag — want dan weigert m20
+ * straks met ALLOC_MANUAL_SUM.
+ */
+describe("HS — handmatige som in het scherm", () => {
+  const HANDMATIG: AllocationRuleRow = {
+    ...REGEL_STANDAARD,
+    method: "manual",
+    weight_source: "charge_call_lines",
+  };
+
+  function vul(container: HTMLElement, id: string, waarde: string) {
+    act(() => {
+      fireEvent.change(container.querySelector(`#manual_${id}`)!, {
+        target: { value: waarde },
+      });
+    });
+  }
+
+  it("HS1 — een kloppende som is groen", () => {
+    const { container } = toon({ rules: [HANDMATIG] });
+    vul(container, U1, "600");
+    vul(container, U2, "600");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("clear")).toBeTruthy();
+    expect(screen.getByTestId("final-submit")).toBeTruthy();
+  });
+
+  it("HS2 — 600 + 400 bij een oproep van 1200 is NIET groen", () => {
+    const { container } = toon({ rules: [HANDMATIG] });
+    vul(container, U1, "600");
+    vul(container, U2, "400");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.queryByTestId("clear")).toBeNull();
+    expect(screen.getByTestId("blockers").textContent).toContain("charges.errors.manualSum");
+    // En dus ook geen knop die geld vastlegt.
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+  });
+
+  it("HS3 — de melding zegt WAT er mis is, zonder een tweede berekening", () => {
+    const { container } = toon({ rules: [HANDMATIG] });
+    vul(container, U1, "600");
+    vul(container, U2, "400");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    const tekst = screen.getByTestId("blockers").textContent ?? "";
+    // Geen verschilbedrag, geen voorgestelde correctie per lot.
+    expect(tekst).not.toMatch(/\b200\b/);
+    expect(tekst).not.toMatch(/\b1000\b/);
+  });
+
+  it("HS4 — een bedrag corrigeren maakt de controle ongeldig en daarna groen", () => {
+    const { container } = toon({ rules: [HANDMATIG] });
+    vul(container, U1, "600");
+    vul(container, U2, "400");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.queryByTestId("clear")).toBeNull();
+
+    vul(container, U2, "600");
+    // Elke wijziging trekt de vorige uitkomst in.
+    expect(screen.queryByTestId("readiness")).toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("clear")).toBeTruthy();
+  });
+
+  it("HS5 — wat wordt verzonden is exact wat de controle heeft opgeteld", async () => {
+    // Komma-notatie, en een cent die in drijvende komma zou wegvallen.
+    const { container } = toon({ rules: [HANDMATIG] });
+    act(() => {
+      fireEvent.change(container.querySelector("#cc-amount")!, {
+        target: { value: "1200,00" },
+      });
+    });
+    vul(container, U1, "600,50");
+    vul(container, U2, "599,50");
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("clear")).toBeTruthy();
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("confirm-checkbox"));
+    });
+    await act(async () => {
+      fireEvent.submit(container.querySelector("form")!);
+    });
+
+    expect(acties.length).toBe(1);
+    const verzonden = acties[0];
+    expect(verzonden.get(`manual_${U1}`)).toBe("600,50");
+    expect(verzonden.get(`manual_${U2}`)).toBe("599,50");
+  });
+
+  it("HS6 — een leeg veld blijft geldig en telt als 0,00", () => {
+    const { container } = toon({ rules: [HANDMATIG] });
+    vul(container, U1, "1200");
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    expect(screen.getByTestId("clear")).toBeTruthy();
+  });
+});

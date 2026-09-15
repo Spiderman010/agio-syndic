@@ -27,6 +27,26 @@ const state: {
   bevraagd: string[];
 } = { rol: "manager", tabellen: {}, bevraagd: [] };
 
+/** Eén vastgelegde oproep, zoals de pagina hem uit de database krijgt. */
+function oproep(over: Record<string, unknown> = {}) {
+  return {
+    id: "cc-1",
+    type: "regulier",
+    period: "T2 2026",
+    label: "Entretien",
+    total_amount: 1000,
+    call_date: "2026-06-30",
+    due_date: "2026-07-31",
+    alloc_method: "tantieme",
+    alloc_scope: "whole_building",
+    alloc_rule_label: "Charges générales",
+    alloc_unit_count: 2,
+    alloc_partial_denominator: false,
+    charge_allocations: [],
+    ...over,
+  };
+}
+
 function standaardTabellen(): Record<string, Resultaat> {
   return {
     buildings: { data: { id: BLD, name: "Résidence Atlas", total_tantiemes: 100 }, error: null },
@@ -160,14 +180,12 @@ async function toonPagina() {
 }
 
 /** De bronnen waarop de controle vóór aanmaken steunt. */
-const ESSENTIELE_BRONNEN = [
-  "charge_calls",
+const WORKFLOW_BRONNEN = [
   "units",
   "allocation_rules",
   "allocation_rule_units",
   "allocation_rule_weights",
   "ownership",
-  "charge_call_lines",
 ] as const;
 
 beforeEach(() => {
@@ -187,14 +205,14 @@ describe("FC — fail-closed per bron", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it.each(ESSENTIELE_BRONNEN)(
+  it.each(WORKFLOW_BRONNEN)(
     "FC2 — een queryfout op %s blokkeert het aanmaken",
     async (tabel) => {
       state.tabellen[tabel] = { data: null, error: { message: "boom" } };
       await toonPagina();
 
       expect(screen.queryByTestId("workflow"), tabel).toBeNull();
-      const melding = screen.getByRole("alert");
+      const melding = screen.getByTestId("workflow-error");
       expect(melding.textContent).toContain("charges.errors.generic");
       // Nooit de databasetekst zelf.
       expect(melding.textContent).not.toContain("boom");
@@ -206,6 +224,24 @@ describe("FC — fail-closed per bron", () => {
     state.tabellen.units = { data: [], error: null };
     await toonPagina();
     expect(screen.getByTestId("workflow")).toBeTruthy();
+  });
+
+  it("FC4 — een fout in een workflowbron verbergt de vastgelegde oproepen niet", async () => {
+    // De twee poorten staan los van elkaar. Wie het formulier niet mag zien
+    // omdat de gewichten ontbreken, heeft nog steeds recht op de cijfers die
+    // al betrouwbaar in de database staan.
+    state.tabellen.charge_calls = { data: [oproep()], error: null };
+    state.tabellen.allocation_rule_weights = { data: null, error: { message: "boom" } };
+
+    const { container } = await toonPagina();
+    expect(screen.queryByTestId("workflow")).toBeNull();
+    expect(screen.getByTestId("workflow-error")).toBeTruthy();
+
+    // De oproep staat er gewoon, met bedrag en aantal.
+    expect(screen.queryByTestId("calls-error")).toBeNull();
+    const tekst = container.textContent ?? "";
+    expect(tekst).toContain("Entretien");
+    expect(tekst).toMatch(/charges\.title \(1\)/);
   });
 });
 
@@ -339,5 +375,141 @@ describe("DV — definitieve verdeling", () => {
     expect(tekst).toMatch(/666[.,]67/);
     expect(tekst).toMatch(/333[.,]33/);
     expect(tekst).toContain("charges.result.source");
+  });
+});
+
+// ── BLOKKER 1: de financiële weergave is fail-closed ────────────────────────
+
+/**
+ * Een mislukte financiële query mag NOOIT als een betrouwbaar nulbedrag of een
+ * lege lijst worden getoond. "0 MAD appelés" en "geen oproepen" zijn beweringen
+ * over geld; als de query faalde, kunnen we die niet waarmaken.
+ *
+ * Deze suite eist per financiële bron: een zichtbare foutmelding, GEEN nul,
+ * GEEN aantal en GEEN lege-lijstmelding — en dat los van rol en boekjaarstatus,
+ * want een leesrol en een gesloten boekjaar lezen dezelfde cijfers.
+ */
+describe("FF — fail-closed financiële weergave", () => {
+  const STUK = { data: null, error: { message: "boom" } };
+
+  /** Wat er op het scherm mag staan als de oproepen niet geladen zijn. */
+  function geenOproepbeweringen(tekst: string) {
+    expect(tekst).toContain("charges.errors.callsUnavailable");
+    // Geen totaal, in geen enkele opmaak.
+    expect(tekst).not.toMatch(/MAD appelés/);
+    // Geen aantal achter de kop.
+    expect(tekst).not.toMatch(/charges\.title \(/);
+    // En vooral niet: "er zijn geen oproepen".
+    expect(tekst).not.toContain("charges.noCharges");
+    // Nooit de databasetekst zelf.
+    expect(tekst).not.toContain("boom");
+  }
+
+  it("FF1 — een queryfout op charge_calls meldt de fout, als manager", async () => {
+    state.tabellen.charge_calls = STUK;
+    const { container } = await toonPagina();
+    expect(screen.getByTestId("calls-error")).toBeTruthy();
+    geenOproepbeweringen(container.textContent ?? "");
+  });
+
+  it("FF2 — diezelfde fout is ook voor een viewer zichtbaar", async () => {
+    // De melding mag niet achter schrijfrecht verstopt zitten: wie alleen
+    // leest, leest juist deze cijfers.
+    state.rol = "viewer";
+    state.tabellen.charge_calls = STUK;
+    const { container } = await toonPagina();
+    expect(screen.getByTestId("calls-error")).toBeTruthy();
+    expect(screen.queryByTestId("workflow")).toBeNull();
+    geenOproepbeweringen(container.textContent ?? "");
+  });
+
+  it("FF3 — en ook op een GESLOTEN boekjaar", async () => {
+    state.tabellen.fiscal_years = {
+      data: { id: FY, building_id: BLD, year: 2026, status: "closed", start_date: "2026-01-01", end_date: "2026-12-31" },
+      error: null,
+    };
+    state.tabellen.charge_calls = STUK;
+    const { container } = await toonPagina();
+    expect(screen.getByTestId("calls-error")).toBeTruthy();
+    geenOproepbeweringen(container.textContent ?? "");
+  });
+
+  it("FF4 — een GESLAAGDE lege query blijft gewoon de lege toestand", async () => {
+    // Het verschil dat deze hele suite bewaakt: leeg is niet hetzelfde als stuk.
+    state.tabellen.charge_calls = { data: [], error: null };
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+    expect(screen.queryByTestId("calls-error")).toBeNull();
+    expect(tekst).toContain("charges.noCharges");
+    expect(tekst).toMatch(/charges\.title \(0\)/);
+  });
+
+  it("FF5 — een fout op charge_call_lines zegt niet 'geen regels'", async () => {
+    state.tabellen.charge_calls = { data: [oproep()], error: null };
+    state.tabellen.charge_call_lines = STUK;
+
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+    expect(screen.getByTestId("lines-error")).toBeTruthy();
+    expect(tekst).toContain("charges.result.unavailable");
+    expect(tekst).not.toContain("charges.result.noLines");
+    expect(tekst).not.toContain("boom");
+    // De oproep zelf is wél betrouwbaar geladen en blijft staan.
+    expect(tekst).toContain("Entretien");
+    expect(screen.queryByTestId("calls-error")).toBeNull();
+  });
+
+  it("FF6 — een GESLAAGDE lege regelquery blijft 'geen regels'", async () => {
+    state.tabellen.charge_calls = { data: [oproep()], error: null };
+    state.tabellen.charge_call_lines = { data: [], error: null };
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+    expect(screen.queryByTestId("lines-error")).toBeNull();
+    expect(tekst).toContain("charges.result.noLines");
+  });
+
+  it("FF7 — een fout op charge_allocations toont geen saldo van nul", async () => {
+    state.tabellen.charge_calls = { data: [oproep()], error: null };
+    state.tabellen.charge_allocations = STUK;
+
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+    expect(screen.getByTestId("balance-error")).toBeTruthy();
+    expect(tekst).toContain("charges.errors.balanceUnavailable");
+    expect(tekst).not.toContain("Aucun appel ou propriétaire lié.");
+    expect(tekst).not.toContain("boom");
+  });
+
+  it("FF8 — een onbetrouwbare oproeplijst maakt ook het saldo onbetrouwbaar", async () => {
+    // Het saldo wordt uit de oproep-id's opgebouwd; zonder betrouwbare lijst is
+    // "iedereen op nul" een bewering die we niet kunnen waarmaken.
+    state.tabellen.charge_calls = STUK;
+    const { container } = await toonPagina();
+    expect(screen.getByTestId("balance-error")).toBeTruthy();
+    expect(container.textContent ?? "").not.toContain("Aucun appel ou propriétaire lié.");
+  });
+
+  it("FF9 — een fout op payments toont geen 'Aucun paiement'", async () => {
+    state.tabellen.payments = STUK;
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+    expect(screen.getByTestId("payments-error")).toBeTruthy();
+    expect(tekst).toContain("charges.errors.paymentsUnavailable");
+    expect(tekst).not.toContain("Aucun paiement.");
+    expect(tekst).not.toContain("boom");
+  });
+
+  it("FF10 — elke financiële bron heeft zijn EIGEN melding", async () => {
+    // Eén stukke bron mag de andere niet meeslepen: dat zou de gebruiker naar
+    // de verkeerde oorzaak sturen.
+    state.tabellen.charge_calls = { data: [oproep()], error: null };
+    state.tabellen.payments = STUK;
+    await toonPagina();
+    expect(screen.getByTestId("payments-error")).toBeTruthy();
+    expect(screen.queryByTestId("calls-error")).toBeNull();
+    expect(screen.queryByTestId("lines-error")).toBeNull();
+    expect(screen.queryByTestId("balance-error")).toBeNull();
+    // En de aanmaakworkflow staat er nog: zijn eigen bronnen zijn gezond.
+    expect(screen.getByTestId("workflow")).toBeTruthy();
   });
 });

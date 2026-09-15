@@ -182,7 +182,8 @@
       "scope": "Périmètre",
       "participants": "Lots",
       "partial": "Écart au total de contrôle enregistré",
-      "noLines": "Aucune ligne enregistrée pour cet appel."
+      "noLines": "Aucune ligne enregistrée pour cet appel.",
+      "unavailable": "La répartition définitive n'a pas pu être chargée."
     },
     "errors": {
       "generic": "L'appel de charges n'a pas pu être créé. Vérifiez les données et réessayez.",
@@ -208,7 +209,7 @@
       "manualOutOfScope": "Certains montants concernent des lots hors du périmètre choisi.",
       "manualDuplicate": "Un lot apparaît plusieurs fois dans la répartition manuelle.",
       "manualNegative": "Un montant manuel ne peut pas être négatif.",
-      "manualSum": "Les montants manuels ne correspondent pas au montant de l'appel.",
+      "manualSum": "Les montants saisis ne correspondent pas au montant de l'appel.",
       "manualInvalidNumber": "L'un des montants manuels n'est pas un nombre valide.",
       "noOwner": "Certains lots n'ont pas de propriétaire à la date d'appel. Enregistrez le propriétaire.",
       "ambiguousOwner": "Certains lots ont plusieurs propriétaires actifs sans débiteur désigné. Désignez un débiteur par lot.",
@@ -219,7 +220,11 @@
       "callPaid": "Cet appel a des paiements rattachés et ne peut pas être retiré.",
       "blockMove": "Un bloc ne peut pas être déplacé vers un autre bâtiment.",
       "dueBeforeCall": "La date d'échéance ne peut pas précéder la date d'appel.",
-      "callDateInvalid": "Indiquez une date d'appel valide."
+      "callDateInvalid": "Indiquez une date d'appel valide.",
+      "dueDateInvalid": "Indiquez une date d'échéance valide.",
+      "callsUnavailable": "Les appels de charges n'ont pas pu être chargés. Les montants ne sont pas affichés tant que les données ne sont pas fiables.",
+      "paymentsUnavailable": "Les paiements n'ont pas pu être chargés. La liste n'est pas affichée tant que les données ne sont pas fiables.",
+      "balanceUnavailable": "Les soldes n'ont pas pu être chargés."
     },
     "noActiveRule": "Aucune clé de répartition active pour ce bâtiment. Un appel de charges ne peut pas être créé tant qu'aucune règle n'est active."
   },
