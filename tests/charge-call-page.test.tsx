@@ -20,12 +20,50 @@ const FY = "44444444-4444-4444-4444-444444444444";
 
 type Resultaat = { data: unknown; error: unknown };
 
+type ReversalRij = import("@/lib/reversal").ReversalViewRow;
+
 const state: {
   rol: string;
   tabellen: Record<string, Resultaat>;
   /** Elke tabel die de pagina aanraakt, in volgorde. */
   bevraagd: string[];
-} = { rol: "manager", tabellen: {}, bevraagd: [] };
+  /** Het resultaat van `fetchReversalIndexResult()`; los injecteerbaar. */
+  reversals: { rijen: ReversalRij[]; error: unknown };
+} = { rol: "manager", tabellen: {}, bevraagd: [], reversals: { rijen: [], error: null } };
+
+/** Eén betaling zoals de pagina hem uit de database krijgt. */
+function betaling(over: Record<string, unknown> = {}) {
+  return {
+    id: "pay-1",
+    amount: 300,
+    method: "virement",
+    value_date: "2026-07-05",
+    reference: "VIR-2026-001",
+    owners: { full_name: "Youssef El Amrani" },
+    payment_allocations: [],
+    ...over,
+  };
+}
+
+/** Eén rij uit `v_financial_reversals`: deze betaling is gestorneerd. */
+function storno(over: Partial<ReversalRij> = {}): ReversalRij {
+  return {
+    reversal_id: "rev-1",
+    source_type: "payment",
+    source_id: "pay-1",
+    correction_source_id: null,
+    reason: "Dubbel geboekt door de syndic.",
+    effective_date: "2026-07-10",
+    is_correctie: false,
+    is_correctie_vorig_boekjaar: false,
+    ...over,
+  };
+}
+
+/** Eén journaalpost van een betaling, in een boekjaar met deze status. */
+function journaal(status: "open" | "closed", sourceId = "pay-1") {
+  return { source_id: sourceId, fiscal_years: { status } };
+}
 
 /** Eén vastgelegde oproep, zoals de pagina hem uit de database krijgt. */
 function oproep(over: Record<string, unknown> = {}) {
@@ -142,11 +180,30 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 
-vi.mock("@/lib/reversal", () => ({
-  fetchReversalIndex: async () => new Map(),
-  reversalOf: () => null,
-  correctionOf: () => null,
-}));
+/*
+  De reversal-engine draait ECHT; alleen het ophalen is injecteerbaar.
+
+  De oude mock gaf altijd `new Map()` terug - succes, altijd leeg, verkeerde
+  vorm - en kon de foutklasse daardoor per definitie niet ontdekken. Nu wordt
+  uitsluitend `fetchReversalIndexResult()` vervangen, en `buildReversalIndex`,
+  `reversalOf` en `correctionOf` zijn de echte functies. Drie toestanden zijn
+  los injecteerbaar:
+
+    { rijen: [], error: null }        geslaagd en leeg  -> betrouwbaar leeg
+    { rijen: [storno], error: null }  geslaagd met rij  -> markering zichtbaar
+    { rijen: [], error: {...} }       mislukt           -> niets bewezen
+*/
+vi.mock("@/lib/reversal", async (importOriginal) => {
+  const echt = await importOriginal<typeof import("@/lib/reversal")>();
+  return {
+    ...echt,
+    fetchReversalIndexResult: async () => {
+      const bron = state.reversals;
+      if (bron.error) return { index: echt.emptyReversalIndex(), error: bron.error };
+      return { index: echt.buildReversalIndex(bron.rijen), error: null };
+    },
+  };
+});
 
 vi.mock("@/components/ActionForm", () => ({
   default: ({ children }: { children: React.ReactNode }) => <form>{children}</form>,
@@ -192,6 +249,7 @@ beforeEach(() => {
   state.rol = "manager";
   state.tabellen = standaardTabellen();
   state.bevraagd = [];
+  state.reversals = { rijen: [], error: null };
 });
 
 afterEach(() => {
@@ -511,5 +569,268 @@ describe("FF — fail-closed financiële weergave", () => {
     expect(screen.queryByTestId("balance-error")).toBeNull();
     // En de aanmaakworkflow staat er nog: zijn eigen bronnen zijn gezond.
     expect(screen.getByTestId("workflow")).toBeTruthy();
+  });
+});
+
+// ── P1: storno- en boekjaarstatus worden fail-closed gelezen ───────────────
+
+/**
+ * Een mislukte storno- of journaalquery mag NOOIT worden vertaald naar "geen
+ * storno" of "open boekjaar".
+ *
+ * Het verschil is niet cosmetisch. Een gestorneerde betaling die als actief
+ * verschijnt telt in het hoofd van de gebruiker gewoon mee; een correctie die
+ * haar relatie met het origineel verliest ziet eruit als een dubbele betaling;
+ * en een stornoknop bij een rij uit een gesloten boekjaar suggereert een recht
+ * dat `fn_reversal_authorize` weigert.
+ */
+describe("SR — stornostatus en boekjaarstatus", () => {
+  const STUK = { message: "relation \"v_financial_reversals\" does not exist" };
+
+  /** De actieknop van PaymentReversalActions; het component zelf is gemockt. */
+  const actieknoppen = () => screen.queryAllByTestId("payment-reversal");
+
+  beforeEach(() => {
+    state.tabellen.payments = { data: [betaling()], error: null };
+    state.tabellen.journal_entries = { data: [journaal("open")], error: null };
+  });
+
+  it("SR1 — een fout op de reversal-view presenteert geen betaling als bewezen actief", async () => {
+    state.reversals = { rijen: [], error: STUK };
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+
+    // De melding staat er ...
+    expect(screen.getByTestId("reversals-error")).toBeTruthy();
+    expect(screen.getByTestId("reversals-error").getAttribute("role")).toBe("alert");
+    expect(tekst).toContain("reversal.errors.statusUnavailable");
+
+    // ... en de betaling wordt NIET als gezonde, ongestorneerde rij getoond.
+    // De referentie is uniek voor de rij; de eigenaarsnaam komt ook elders
+    // op de pagina voor en zou hier niets bewijzen.
+    expect(tekst).not.toContain("VIR-2026-001");
+    expect(tekst).not.toMatch(/\+300/);
+    // Ook geen lege toestand: leeg zou net zo goed een bewering zijn.
+    expect(tekst).not.toContain("Aucun paiement.");
+    // En geen enkele storno- of correctieknop.
+    expect(actieknoppen()).toHaveLength(0);
+  });
+
+  it("SR2 — een GESLAAGDE lege reversal-query laat de betaling gewoon staan", async () => {
+    state.reversals = { rijen: [], error: null };
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+
+    expect(screen.queryByTestId("reversals-error")).toBeNull();
+    expect(tekst).toContain("VIR-2026-001");
+    expect(tekst).toMatch(/\+300/);
+    // Schrijfrol, open boekjaar: de actie hoort er te zijn.
+    expect(actieknoppen()).toHaveLength(1);
+  });
+
+  it("SR3 — een GESLAAGDE reversal-query met een storno markeert de betaling", async () => {
+    state.reversals = { rijen: [storno()], error: null };
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+
+    expect(screen.queryByTestId("reversals-error")).toBeNull();
+    expect(tekst).toContain("VIR-2026-001");
+    expect(tekst).toContain("reversal.reversed");
+    expect(tekst).toContain("Dubbel geboekt door de syndic.");
+    // Een al gestorneerde betaling krijgt geen tweede stornoknop.
+    expect(actieknoppen()).toHaveLength(0);
+  });
+
+  it("SR4 — een correctie houdt haar relatie met het origineel", async () => {
+    state.tabellen.payments = {
+      data: [betaling(), betaling({ id: "pay-2", amount: 250, reference: "VIR-2026-002" })],
+      error: null,
+    };
+    state.reversals = {
+      rijen: [storno({ correction_source_id: "pay-2", is_correctie: true })],
+      error: null,
+    };
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+
+    expect(tekst).toContain("reversal.corrected");
+    expect(tekst).toContain("reversal.correctionOf");
+  });
+
+  it("SR5 — een fout op journal_entries haalt de actieknoppen weg en meldt dat", async () => {
+    state.tabellen.journal_entries = { data: null, error: { message: "boom" } };
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+
+    expect(screen.getByTestId("action-status-error")).toBeTruthy();
+    expect(screen.getByTestId("action-status-error").getAttribute("role")).toBe("alert");
+    expect(tekst).toContain("reversal.errors.actionStatusUnavailable");
+    expect(actieknoppen()).toHaveLength(0);
+
+    // De rij zelf blijft wél staan: bedrag en stornostatus zijn betrouwbaar.
+    expect(tekst).toContain("VIR-2026-001");
+    expect(tekst).toMatch(/\+300/);
+  });
+
+  it("SR6 — een GESLAAGDE journal-query met een OPEN boekjaar laat de actie staan", async () => {
+    state.tabellen.journal_entries = { data: [journaal("open")], error: null };
+    await toonPagina();
+    expect(screen.queryByTestId("action-status-error")).toBeNull();
+    expect(actieknoppen()).toHaveLength(1);
+  });
+
+  it("SR7 — een GESLAAGDE lege journal-query is geldig en geen fout", async () => {
+    // Een betaling zonder journaalpost: dan is `closedPayments` terecht leeg.
+    state.tabellen.journal_entries = { data: [], error: null };
+    await toonPagina();
+    expect(screen.queryByTestId("action-status-error")).toBeNull();
+    expect(actieknoppen()).toHaveLength(1);
+  });
+
+  it("SR8 — bij een GESLOTEN oorspronkelijk boekjaar blijft de rolsemantiek intact", async () => {
+    // `canReverse`: gesloten boekjaar -> owner/admin; anders volstaat schrijfrecht.
+    state.tabellen.journal_entries = { data: [journaal("closed")], error: null };
+
+    for (const rol of ["owner", "admin"]) {
+      cleanup();
+      state.rol = rol;
+      state.tabellen = standaardTabellen();
+      state.tabellen.payments = { data: [betaling()], error: null };
+      state.tabellen.journal_entries = { data: [journaal("closed")], error: null };
+      state.reversals = { rijen: [], error: null };
+      await toonPagina();
+      expect(actieknoppen(), rol).toHaveLength(1);
+    }
+
+    for (const rol of ["manager", "accountant", "viewer"]) {
+      cleanup();
+      state.rol = rol;
+      state.tabellen = standaardTabellen();
+      state.tabellen.payments = { data: [betaling()], error: null };
+      state.tabellen.journal_entries = { data: [journaal("closed")], error: null };
+      state.reversals = { rijen: [], error: null };
+      await toonPagina();
+      expect(actieknoppen(), rol).toHaveLength(0);
+    }
+  });
+
+  it("SR9 — de meldingen zijn ook voor een viewer en op een gesloten boekjaar zichtbaar", async () => {
+    // Fail-closed staat los van schrijfrecht: wie alleen leest, leest juist deze rijen.
+    state.rol = "viewer";
+    state.reversals = { rijen: [], error: STUK };
+    await toonPagina();
+    expect(screen.getByTestId("reversals-error")).toBeTruthy();
+
+    cleanup();
+    state.rol = "manager";
+    state.tabellen = standaardTabellen();
+    state.tabellen.payments = { data: [betaling()], error: null };
+    state.tabellen.fiscal_years = {
+      data: { id: FY, building_id: BLD, year: 2026, status: "closed", start_date: "2026-01-01", end_date: "2026-12-31" },
+      error: null,
+    };
+    state.tabellen.journal_entries = { data: null, error: { message: "boom" } };
+    state.reversals = { rijen: [], error: null };
+    await toonPagina();
+    expect(screen.getByTestId("action-status-error")).toBeTruthy();
+  });
+
+  it("SR10 — nooit de databasetekst of de technische viewnaam in beeld", async () => {
+    state.reversals = { rijen: [], error: STUK };
+    state.tabellen.journal_entries = { data: null, error: { message: "permission denied for table journal_entries" } };
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+
+    expect(tekst).not.toContain("v_financial_reversals");
+    expect(tekst).not.toContain("journal_entries");
+    expect(tekst).not.toContain("does not exist");
+    expect(tekst).not.toContain("permission denied");
+  });
+});
+
+// ── C: het formulier voor een nieuwe betaling ──────────────────────────────
+
+/**
+ * Boeken zonder betrouwbare betalingenlijst is dubbel boeken; boeken zonder
+ * betrouwbare openstaande positie is boeken in het duister. In beide gevallen
+ * verdwijnt het formulier en blijft de foutmelding van de stukke bron staan.
+ */
+describe("NB — formulier nieuwe betaling", () => {
+  const STUK = { data: null, error: { message: "boom" } };
+
+  /** Het formulier herken je aan zijn eigen velden, niet aan zijn opmaak. */
+  const formulier = (container: HTMLElement) => container.querySelector("#owner_id");
+
+  beforeEach(() => {
+    state.tabellen.payments = { data: [betaling()], error: null };
+    state.tabellen.journal_entries = { data: [journaal("open")], error: null };
+  });
+
+  it("NB1 — met gezonde bronnen en een open boekjaar staat het formulier er", async () => {
+    const { container } = await toonPagina();
+    expect(formulier(container)).toBeTruthy();
+    expect(container.querySelector("#pay_amount")).toBeTruthy();
+  });
+
+  it("NB2 — een fout op payments: geen lijst, geen lege toestand, geen formulier", async () => {
+    state.tabellen.payments = STUK;
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+
+    expect(screen.getByTestId("payments-error")).toBeTruthy();
+    expect(tekst).not.toContain("Aucun paiement.");
+    expect(tekst).not.toContain("VIR-2026-001");
+    expect(formulier(container)).toBeNull();
+    expect(container.querySelector("#pay_amount")).toBeNull();
+  });
+
+  it("NB3 — een fout op charge_calls haalt het formulier weg", async () => {
+    state.tabellen.charge_calls = STUK;
+    const { container } = await toonPagina();
+    expect(screen.getByTestId("calls-error")).toBeTruthy();
+    expect(formulier(container)).toBeNull();
+  });
+
+  it("NB4 — een fout op charge_allocations haalt het formulier weg", async () => {
+    state.tabellen.charge_calls = { data: [oproep()], error: null };
+    state.tabellen.charge_allocations = STUK;
+    const { container } = await toonPagina();
+    expect(screen.getByTestId("balance-error")).toBeTruthy();
+    expect(formulier(container)).toBeNull();
+  });
+
+  it("NB5 — een fout op de eigenaarsbron haalt het formulier weg", async () => {
+    state.tabellen.ownership = STUK;
+    const { container } = await toonPagina();
+    expect(formulier(container)).toBeNull();
+  });
+
+  it("NB6 — een gesloten boekjaar toont geen formulier", async () => {
+    state.tabellen.fiscal_years = {
+      data: { id: FY, building_id: BLD, year: 2026, status: "closed", start_date: "2026-01-01", end_date: "2026-12-31" },
+      error: null,
+    };
+    const { container } = await toonPagina();
+    expect(formulier(container)).toBeNull();
+  });
+
+  it("NB7 — GESLAAGDE lege queries geven geen valse foutmelding", async () => {
+    // Alles leeg maar gezond: geen enkele alert, en geen formulier alleen omdat
+    // er nog geen eigenaar is vastgelegd.
+    state.tabellen.payments = { data: [], error: null };
+    state.tabellen.charge_calls = { data: [], error: null };
+    state.tabellen.charge_call_lines = { data: [], error: null };
+    state.reversals = { rijen: [], error: null };
+    const { container } = await toonPagina();
+
+    expect(screen.queryByTestId("payments-error")).toBeNull();
+    expect(screen.queryByTestId("calls-error")).toBeNull();
+    expect(screen.queryByTestId("lines-error")).toBeNull();
+    expect(screen.queryByTestId("balance-error")).toBeNull();
+    expect(screen.queryByTestId("reversals-error")).toBeNull();
+    expect(screen.queryByTestId("action-status-error")).toBeNull();
+    expect(container.textContent ?? "").toContain("Aucun paiement.");
+    // De eigenaar komt uit ownership en die is gezond, dus het formulier staat er.
+    expect(formulier(container)).toBeTruthy();
   });
 });

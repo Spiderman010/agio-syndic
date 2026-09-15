@@ -7,7 +7,7 @@ import ActionForm from "@/components/ActionForm";
 import PaymentReversalActions from "@/components/PaymentReversalActions";
 import ChargeCallWorkflow from "./ChargeCallWorkflow";
 import { canReverse, canWrite } from "@/lib/roles";
-import { correctionOf, fetchReversalIndex, reversalOf } from "@/lib/reversal";
+import { correctionOf, fetchReversalIndexResult, reversalOf } from "@/lib/reversal";
 import { formatMoney } from "@/lib/money";
 import type { AllocationRuleRow, RuleUnitRow, RuleWeightRow } from "@/lib/charges";
 import type { OwnershipRow } from "@/lib/ownership";
@@ -188,6 +188,11 @@ export default async function FiscalYearDetail({
    *   paymentsOk   de betalingenlijst;
    *   workflowOk   de bronnen waarop de controle vóór aanmaken steunt.
    *
+   * Verderop komen daar de twee poorten van de reversal-engine bij:
+   *
+   *   reversalsOk     de stornostatus per betaling (`v_financial_reversals`);
+   *   actionStatusOk  het boekjaar van de journaalpost achter die betaling.
+   *
    * Een fout in een workflowbron verbergt dus geen betrouwbare oproepen meer,
    * en een fout in de oproepen blokkeert niet stilzwijgend alleen het
    * aanmaakformulier.
@@ -279,18 +284,35 @@ export default async function FiscalYearDetail({
   // saldo per eigenaar verderop is klasse B en corrigeert zichzelf al, omdat het
   // uit `amount - settled_amount` volgt en de storno settled_amount herstelt.
   const payIds = pays.map((p) => p.id);
-  const reversals = await fetchReversalIndex(supabase, "payment", payIds);
+
+  // FAIL-CLOSED op de stornostatus. Een mislukte leesquery mag hier nooit als
+  // "niets gestorneerd" doorgaan: dan verschijnt een gestorneerde betaling als
+  // actief, verliest een correctie haar relatie met het origineel, en komt er
+  // een stornoknop bij een rij die de database zeker weigert. Nul betalingen is
+  // GEEN fout: dan valt er niets op te halen en is de lege index juist.
+  const { index: reversals, error: reversalError } = await fetchReversalIndexResult(
+    supabase,
+    "payment",
+    payIds,
+  );
+  const reversalsOk = !reversalError;
 
   // In welk boekjaar staat de ORIGINELE journaalpost van elke betaling? Dat
   // bepaalt of storneren een owner/admin-ingreep is. fn_reversal_authorize
   // beslist definitief; dit voorkomt alleen een knop die zeker faalt.
+  //
+  // Ook hier telt de foutstatus: een stil lege `closedPayments` laat een
+  // betaling uit een GESLOTEN boekjaar eruitzien alsof de gewone
+  // reversalrechten gelden, en toont dus een actie die zeker wordt geweigerd.
   const closedPayments = new Set<string>();
+  let journalError: unknown = null;
   if (payIds.length > 0) {
-    const { data: entryData } = await supabase
+    const { data: entryData, error: entryError } = await supabase
       .from("journal_entries")
       .select("source_id, fiscal_years(status)")
       .eq("source", "payment")
       .in("source_id", payIds);
+    journalError = entryError;
 
     for (const row of entryData ?? []) {
       const rawFy = row.fiscal_years as { status: string } | { status: string }[] | null;
@@ -298,6 +320,16 @@ export default async function FiscalYearDetail({
       if (entryFy?.status === "closed") closedPayments.add(row.source_id as string);
     }
   }
+  /** Is de boekjaarstatus achter de storno-/correctieknoppen betrouwbaar? */
+  const actionStatusOk = !journalError;
+
+  /**
+   * Een betalingsregel mag alleen zichtbaar zijn wanneer BEIDE dingen kloppen:
+   * haar bedrag (payments) en haar stornostatus (v_financial_reversals). Een
+   * rij zonder stornomarkering is een bewering dat er niet gestorneerd is, en
+   * die bewering kunnen we bij een leesfout niet waarmaken.
+   */
+  const paymentRowsOk = paymentsOk && reversalsOk;
 
   const callIds = calls.map((c) => c.id);
   let saldoRows: {
@@ -341,6 +373,19 @@ export default async function FiscalYearDetail({
   }
 
   const saldoOk = callsOk && !allocError;
+
+  /**
+   * Het formulier voor een NIEUWE betaling.
+   *
+   * Boeken zonder betrouwbare lijst betekent dubbel boeken; boeken zonder
+   * betrouwbare openstaande positie betekent boeken in het duister. Beide
+   * gevolgen zijn onomkeerbaar genoeg om het formulier dan gewoon niet te
+   * tonen. De reeds zichtbare foutmelding van de stukke bron blijft staan en
+   * zegt waarom.
+   */
+  const ownersOk = !ownershipRes.error;
+  const paymentFormOk =
+    fy.status === "open" && ownersOk && paymentsOk && callsOk && saldoOk;
   const totalOpgeroepen = calls.reduce((s, c) => s + Number(c.total_amount), 0);
 
   return (
@@ -579,20 +624,59 @@ export default async function FiscalYearDetail({
                 </div>
               )}
 
-              {paymentsOk && pays.length === 0 && (
+              {/*
+                FAIL-CLOSED op de STORNOSTATUS. Een rij zonder stornomarkering
+                beweert dat er niet gestorneerd is. Kon de reversal-view niet
+                worden gelezen, dan is dat een bewering die we niet kunnen
+                waarmaken - dus geen rijen, geen lege toestand, en nooit de
+                naam van de view of de databasetekst in beeld.
+              */}
+              {paymentsOk && !reversalsOk && (
+                <div
+                  className="card"
+                  style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                  role="alert"
+                  data-testid="reversals-error"
+                >
+                  {tr("errors.statusUnavailable")}
+                </div>
+              )}
+
+              {paymentRowsOk && pays.length === 0 && (
                 <div className="card muted" style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}>
                   Aucun paiement.
                 </div>
               )}
 
+              {/*
+                De boekjaarstatus achter de storno-/correctieknoppen. De rijen
+                zelf blijven staan - hun bedrag en stornostatus zijn betrouwbaar
+                - maar er verschijnt geen actie waarvan we niet weten of de
+                database hem toestaat.
+              */}
+              {paymentRowsOk && !actionStatusOk && pays.length > 0 && (
+                <div
+                  className="card"
+                  style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                  role="alert"
+                  data-testid="action-status-error"
+                >
+                  {tr("errors.actionStatusUnavailable")}
+                </div>
+              )}
+
               <div style={{ display: "grid", gap: "0.55rem" }}>
-                {(paymentsOk ? pays : []).map((p) => {
+                {(paymentRowsOk ? pays : []).map((p) => {
                   // `reversal` = deze betaling is gestorneerd.
                   // `correction` = deze betaling IS de vervangende rij.
                   const reversal = reversalOf(reversals, p.id);
                   const correction = correctionOf(reversals, p.id);
                   const isClosed = closedPayments.has(p.id);
-                  const mayReverse = reversal === null && canReverse(role, isClosed);
+                  // Zonder betrouwbare boekjaarstatus geen actieknop: `isClosed`
+                  // zou dan stil `false` zijn en de knop zou owner/admin-recht
+                  // suggereren waar de database het weigert.
+                  const mayReverse =
+                    reversal === null && actionStatusOk && canReverse(role, isClosed);
 
                   return (
                   <div key={p.id} className="card" style={{ padding: "0.75rem 0.9rem" }}>
@@ -669,7 +753,7 @@ export default async function FiscalYearDetail({
                 })}
               </div>
 
-              {fy.status === "open" && eigenaars.length > 0 && (
+              {paymentFormOk && eigenaars.length > 0 && (
                 <ActionForm action={createPayment} className="card" style={{ padding: "1rem 1.1rem", marginTop: "0.7rem" }}>
                   <input type="hidden" name="building_id" value={buildingId} />
                   <input type="hidden" name="fiscal_year_id" value={fyId} />

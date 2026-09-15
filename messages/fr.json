@@ -330,6 +330,8 @@
     "netHint": "Total net : les opérations contrepassées sont exclues. Toutes les opérations restent visibles ci-dessous.",
     "errors": {
       "notAuthenticated": "Vous devez être connecté pour effectuer cette action.",
+      "statusUnavailable": "Le statut d'extourne n'a pas pu être vérifié. Les paiements ne sont pas affichés tant qu'il n'est pas établi lesquels ont été extournés.",
+      "actionStatusUnavailable": "L'exercice d'origine de ces paiements n'a pas pu être vérifié. L'extourne et la correction ne sont donc pas proposées.",
       "alreadyReversed": "Cette opération a déjà été contrepassée. Actualisez la page pour voir l'état à jour.",
       "notFound": "Opération introuvable.",
       "forbidden": "Vous n'avez pas les droits nécessaires pour cette action.",

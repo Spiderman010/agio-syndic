@@ -151,21 +151,38 @@ export function grossTotal(rows: readonly { amount: number | string }[]): number
   return Math.round(total * 100) / 100;
 }
 
+/** Uitkomst van het ophalen, met de foutstatus expliciet erbij. */
+export type ReversalIndexResult = {
+  index: ReversalIndex;
+  /**
+   * `null` betekent: de query is GESLAAGD. Een geslaagde query met nul rijen
+   * levert dus `{ index: <leeg>, error: null }` en is een geldige, betrouwbare
+   * lege index. Is dit veld gevuld, dan is `index` betekenisloos en mag er
+   * niets over de stornostatus worden beweerd.
+   */
+  error: unknown;
+};
+
 /**
- * Haalt de storno's op die bij een verzameling brontransacties horen.
+ * Haalt de storno's op en geeft de FOUTSTATUS mee terug.
  *
- * Retourneert bij een leesfout een LEGE index in plaats van te werpen. Dat is
- * bewust: het gevolg is dan dat totalen bruto worden getoond en markeringen
- * ontbreken — zichtbaar en conservatief — in plaats van een pagina die
- * helemaal niet laadt. De autorisatie zit in RLS; een lid ziet alleen de eigen
- * organisatie.
+ * Dit is de strikte variant en de enige die op een financieel scherm hoort.
+ * Het verschil tussen "niets gestorneerd" en "we weten het niet" is hier geen
+ * detail: wie een mislukte query als lege index leest, toont een gestorneerde
+ * betaling als actief en zet er een stornoknop bij die de database zeker
+ * weigert.
+ *
+ * Nul bron-id's is GEEN fout: er valt dan niets op te halen en de lege index
+ * is dan de juiste, betrouwbare uitkomst.
+ *
+ * De autorisatie zit in RLS; een lid ziet alleen de eigen organisatie.
  */
-export async function fetchReversalIndex(
+export async function fetchReversalIndexResult(
   supabase: SupabaseClient,
   sourceType: ReversalSourceType,
   sourceIds: readonly string[],
-): Promise<ReversalIndex> {
-  if (sourceIds.length === 0) return emptyReversalIndex();
+): Promise<ReversalIndexResult> {
+  if (sourceIds.length === 0) return { index: emptyReversalIndex(), error: null };
 
   const { data, error } = await supabase
     .from("v_financial_reversals")
@@ -177,6 +194,30 @@ export async function fetchReversalIndex(
       `source_id.in.(${sourceIds.join(",")}),correction_source_id.in.(${sourceIds.join(",")})`,
     );
 
-  if (error || !data) return emptyReversalIndex();
-  return buildReversalIndex(data as unknown as ReversalViewRow[]);
+  // `data === null` zonder error komt bij PostgREST niet voor op een lijstquery,
+  // maar als het gebeurt weten we evenmin iets - dan is het ook een fout.
+  if (error) return { index: emptyReversalIndex(), error };
+  if (!data) return { index: emptyReversalIndex(), error: new Error("REVERSAL_NO_DATA") };
+
+  return { index: buildReversalIndex(data as unknown as ReversalViewRow[]), error: null };
+}
+
+/**
+ * Fail-open variant: bij een leesfout een LEGE index in plaats van een fout.
+ *
+ * LET OP - dit verzwijgt het verschil tussen "niets gestorneerd" en "de query
+ * faalde". Op een scherm waar de stornostatus een bewering over geld is, of
+ * waar er een storno- of correctieknop uit volgt, is dat onjuist; gebruik daar
+ * `fetchReversalIndexResult()`.
+ *
+ * Nog in gebruik op het uitgavenscherm, waar de fout dezelfde klasse heeft en
+ * apart wordt aangepakt. Nieuwe aanroepers horen de strikte variant te nemen.
+ */
+export async function fetchReversalIndex(
+  supabase: SupabaseClient,
+  sourceType: ReversalSourceType,
+  sourceIds: readonly string[],
+): Promise<ReversalIndex> {
+  const { index } = await fetchReversalIndexResult(supabase, sourceType, sourceIds);
+  return index;
 }

@@ -330,6 +330,8 @@
     "netHint": "Nettototaal: gestorneerde transacties tellen niet mee. Alle transacties blijven hieronder zichtbaar.",
     "errors": {
       "notAuthenticated": "Je moet ingelogd zijn voor deze actie.",
+      "statusUnavailable": "De stornostatus kon niet worden gecontroleerd. De betalingen worden niet getoond zolang niet vaststaat welke zijn gestorneerd.",
+      "actionStatusUnavailable": "Het oorspronkelijke boekjaar van deze betalingen kon niet worden gecontroleerd. Storneren en corrigeren worden daarom niet aangeboden.",
       "alreadyReversed": "Deze transactie is al gestorneerd. Ververs de pagina voor de actuele stand.",
       "notFound": "Transactie niet gevonden.",
       "forbidden": "Je hebt niet de juiste rechten voor deze actie.",

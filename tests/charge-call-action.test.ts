@@ -361,6 +361,28 @@ describe("UI — de aanmaakactie is achter schrijfrecht gezet", () => {
     expect(bronnen).not.toContain("allocError");
   });
 
+  test("UI4 — de pagina leest de stornostatus met de STRIKTE helper", () => {
+    // `fetchReversalIndex()` is de fail-open variant en vertaalt een leesfout
+    // naar een lege index. Op dit scherm hangt daar een storno-/correctieknop
+    // aan; hier hoort uitsluitend de variant die de foutstatus meegeeft.
+    expect(pagina).toContain("fetchReversalIndexResult");
+    expect(pagina).not.toMatch(/\bfetchReversalIndex\b(?!Result)/);
+
+    // En de foutstatus wordt ook werkelijk gebruikt, niet alleen uitgepakt.
+    expect(pagina).toMatch(/const reversalsOk = !reversalError;/);
+    expect(pagina).toMatch(/const actionStatusOk = !journalError;/);
+  });
+
+  test("UI5 — het formulier voor een nieuwe betaling hangt aan alle financiële bronnen", () => {
+    const poort = /const paymentFormOk =([\s\S]*?);/.exec(pagina);
+    expect(poort).not.toBeNull();
+    const bronnen = poort![1];
+    for (const bron of ["ownersOk", "paymentsOk", "callsOk", "saldoOk"]) {
+      expect(bronnen, bron).toContain(bron);
+    }
+    expect(bronnen).toContain('fy.status === "open"');
+  });
+
   test("UI3 — de oude, hardgecodeerde Franse labels zijn weg", () => {
     expect(pagina).not.toContain("parts égales");
     expect(pagina).not.toContain("tout le bâtiment");
