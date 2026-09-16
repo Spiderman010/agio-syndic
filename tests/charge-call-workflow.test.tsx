@@ -110,7 +110,7 @@ function toon(
     <ChargeCallWorkflow
       buildingId={BLD}
       fiscalYearId="fy-1"
-      fiscalYear={{ year: 2026, status: "open" }}
+      fiscalYear={{ year: 2026, status: "open", startDate: "2026-01-01", endDate: "2026-12-31" }}
       declaredTantiemes={100}
       rules={[REGEL_STANDAARD]}
       units={[unit(U1, "A1", 60), unit(U2, "A2", 40)]}
@@ -578,5 +578,64 @@ describe("HS — handmatige som in het scherm", () => {
       fireEvent.click(screen.getByTestId("run-check"));
     });
     expect(screen.getByTestId("clear")).toBeTruthy();
+  });
+});
+
+
+// ── BJ: oproepdatum buiten het boekjaar, in het scherm ─────────────────────
+
+describe("BD — oproepdatum buiten het boekjaar", () => {
+  const PERIODE = {
+    year: 2026,
+    status: "open" as const,
+    startDate: "2026-04-01",
+    endDate: "2026-09-30",
+  };
+
+  function metDatum(datum: string) {
+    const r = toon({ fiscalYear: PERIODE, today: "2026-06-15" });
+    act(() => {
+      fireEvent.change(r.container.querySelector("#cc-call-date")!, { target: { value: datum } });
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-check"));
+    });
+    return r;
+  }
+
+  it("BD1 — een datum binnen het boekjaar blijft groen", () => {
+    metDatum("2026-06-15");
+    expect(screen.getByTestId("clear")).toBeTruthy();
+    expect(screen.getByTestId("final-submit")).toBeTruthy();
+  });
+
+  it("BD2 — een datum vóór de startdatum is rood en geeft geen aanmaakknop", () => {
+    metDatum("2026-03-31");
+    expect(screen.queryByTestId("clear")).toBeNull();
+    expect(screen.getByTestId("blockers").textContent).toContain("charges.errors.callDateOutsideFy");
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+  });
+
+  it("BD3 — een datum na de einddatum is rood en geeft geen aanmaakknop", () => {
+    metDatum("2026-10-01");
+    expect(screen.queryByTestId("clear")).toBeNull();
+    expect(screen.getByTestId("blockers").textContent).toContain("charges.errors.callDateOutsideFy");
+    expect(screen.queryByTestId("final-submit")).toBeNull();
+  });
+
+  it("BD4 — de grenzen zelf zijn toegestaan", () => {
+    for (const datum of ["2026-04-01", "2026-09-30"]) {
+      cleanup();
+      metDatum(datum);
+      expect(screen.getByTestId("clear"), datum).toBeTruthy();
+    }
+  });
+
+  it("BD5 — de melding toont geen technische foutcode of tabelnaam", () => {
+    metDatum("1999-01-01");
+    const tekst = screen.getByTestId("blockers").textContent ?? "";
+    expect(tekst).not.toContain("ALLOC_CALL_DATE_OUTSIDE_FY");
+    expect(tekst).not.toContain("charge_calls");
+    expect(tekst).not.toContain("trig_01");
   });
 });

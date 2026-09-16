@@ -266,6 +266,16 @@ export type ReadinessBlocker =
       code: "FORM_CALL_DATE_INVALID";
     }
   | {
+      /**
+       * De oproepdatum valt buiten de periode van het boekjaar. Sinds m31
+       * weigert de database dit met `ALLOC_CALL_DATE_OUTSIDE_FY`; deze
+       * blokkade spiegelt die regel, meer niet.
+       */
+      code: "FORM_CALL_DATE_OUTSIDE_FY";
+      startDate: string;
+      endDate: string;
+    }
+  | {
       /** Wel ingevuld, maar geen geldige datum volgens `isoDate`. */
       code: "FORM_DUE_DATE_INVALID";
     }
@@ -314,7 +324,13 @@ export type ReadinessInput = {
   /** `buildings.total_tantiemes`, de verklaarde controlewaarde. */
   declaredTantiemes: number | string | null;
   /** Het boekjaar waarin de oproep valt. */
-  fiscalYear: { year: number; status: "open" | "closed" };
+  fiscalYear: {
+    year: number;
+    status: "open" | "closed";
+    /** Inclusieve periodegrenzen; sinds m31 een database-invariant. */
+    startDate: string;
+    endDate: string;
+  };
   /** De oproepdatum uit het formulier, `YYYY-MM-DD`. */
   callDate: string;
   units: readonly ChargeUnitRow[];
@@ -402,8 +418,34 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
   // zinloze vraag. Zonder deze poort zou de vergelijking met de vervaldatum
   // stilletjes slagen (`"2026-06-29" < ""` is false) en zou elk lot ten
   // onrechte als "geen eigenaar" worden gemeld.
-  const datumGeldig = isValidIsoDate(callDate);
-  if (!datumGeldig) blockers.push({ code: "FORM_CALL_DATE_INVALID" });
+  const datumFormaatGeldig = isValidIsoDate(callDate);
+  if (!datumFormaatGeldig) blockers.push({ code: "FORM_CALL_DATE_INVALID" });
+
+  // m31 maakt `start_date <= call_date <= end_date` een database-invariant,
+  // inclusief aan beide kanten. Een datum daarbuiten wordt door de trigger
+  // `trig_01_cc_date_in_fy` geweigerd met ALLOC_CALL_DATE_OUTSIDE_FY, dus een
+  // groene controle zou hier een belofte zijn die de database meteen breekt.
+  //
+  // Tekstueel vergelijken is hier correct: alle drie de waarden zijn
+  // `YYYY-MM-DD`, en dat formaat sorteert lexicografisch gelijk aan
+  // chronologisch. De database blijft autoritatief; dit is alleen de spiegel.
+  const binnenBoekjaar =
+    datumFormaatGeldig &&
+    callDate >= fiscalYear.startDate &&
+    callDate <= fiscalYear.endDate;
+
+  if (datumFormaatGeldig && !binnenBoekjaar) {
+    blockers.push({
+      code: "FORM_CALL_DATE_OUTSIDE_FY",
+      startDate: fiscalYear.startDate,
+      endDate: fiscalYear.endDate,
+    });
+  }
+
+  // Vanaf hier telt een datum alleen als bruikbaar wanneer hij ZOWEL een
+  // geldig formaat heeft ALS binnen het boekjaar valt. De eigendomscontrole
+  // mag niet draaien op een datum waarvan al vaststaat dat hij wordt geweigerd.
+  const datumGeldig = binnenBoekjaar;
 
   const vervalIngevuld = dueDate.trim() !== "";
   const vervalGeldig = !vervalIngevuld || isValidIsoDate(dueDate);
@@ -411,7 +453,7 @@ export function chargeCallReadiness(input: ReadinessInput): ChargeCallReadiness 
 
   // Pas vergelijken als BEIDE datums geldig zijn; anders vergelijk je tekst
   // waarvan de betekenis niet vaststaat.
-  if (datumGeldig && vervalIngevuld && vervalGeldig && dueDate < callDate) {
+  if (datumFormaatGeldig && vervalIngevuld && vervalGeldig && dueDate < callDate) {
     blockers.push({ code: "FORM_DUE_BEFORE_CALL" });
   }
 
@@ -609,6 +651,7 @@ const CHARGE_ERROR_KEYS: Record<string, string> = {
   ALLOC_FORBIDDEN: "forbidden",
   ALLOC_FY_NOT_FOUND: "fiscalYearNotFound",
   ALLOC_FY_CLOSED: "fiscalYearClosed",
+  ALLOC_CALL_DATE_OUTSIDE_FY: "callDateOutsideFy",
 
   // Verdeelregel
   ALLOC_NO_DEFAULT_RULE: "noDefaultRule",
@@ -670,6 +713,7 @@ const CHARGE_ERROR_KEYS: Record<string, string> = {
 const FORM_BLOCKER_KEYS: Record<string, string> = {
   FORM_AMOUNT_INVALID: "amountInvalid",
   FORM_CALL_DATE_INVALID: "callDateInvalid",
+  FORM_CALL_DATE_OUTSIDE_FY: "callDateOutsideFy",
   FORM_DUE_DATE_INVALID: "dueDateInvalid",
   FORM_DUE_BEFORE_CALL: "dueBeforeCall",
   FORM_MANUAL_INVALID: "manualInvalidNumber",

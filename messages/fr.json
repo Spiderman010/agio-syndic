@@ -224,6 +224,7 @@
       "blockMove": "Un bloc ne peut pas être déplacé vers un autre bâtiment.",
       "dueBeforeCall": "La date d'échéance ne peut pas précéder la date d'appel.",
       "callDateInvalid": "Indiquez une date d'appel valide.",
+      "callDateOutsideFy": "La date d'appel doit se situer dans la période de l'exercice, du {start} au {end} inclus.",
       "dueDateInvalid": "Indiquez une date d'échéance valide.",
       "callsUnavailable": "Les appels de charges n'ont pas pu être chargés. Les montants ne sont pas affichés tant que les données ne sont pas fiables.",
       "paymentsUnavailable": "Les paiements n'ont pas pu être chargés. La liste n'est pas affichée tant que les données ne sont pas fiables.",

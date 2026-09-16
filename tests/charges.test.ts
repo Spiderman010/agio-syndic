@@ -82,7 +82,7 @@ function invoer(over: Partial<ReadinessInput> = {}): ReadinessInput {
     rule: regel(),
     buildingId: BLD,
     declaredTantiemes: 100,
-    fiscalYear: { year: 2026, status: "open" },
+    fiscalYear: { year: 2026, status: "open", startDate: "2026-01-01", endDate: "2026-12-31" },
     callDate: "2026-06-30",
     units: [unit(U1, "A1", 60), unit(U2, "A2", 40)],
     ruleUnits: [],
@@ -369,6 +369,122 @@ describe("GW — gewichten binnen de regelscope", () => {
     );
     expect(uit.blockers).toEqual([]);
     expect(uit.clear).toBe(true);
+  });
+});
+
+// ── Oproepdatum binnen het boekjaar (m31) ───────────────────────────────────
+
+/**
+ * BJ — de app spiegelt de m31-invariant.
+ *
+ * m31 maakt `start_date <= call_date <= end_date` een database-invariant met
+ * INCLUSIEVE grenzen, afgedwongen door `trig_01_cc_date_in_fy`. Een groene
+ * controle op een datum daarbuiten zou een belofte zijn die de database op
+ * datzelfde moment al breekt.
+ */
+describe("BJ — oproepdatum binnen de periode van het boekjaar", () => {
+  /** Boekjaar met een niet-kalenderperiode, zodat het jaartal niets verraadt. */
+  const PERIODE = { year: 2026, status: "open" as const, startDate: "2026-04-01", endDate: "2026-09-30" };
+
+  function metPeriode(over: Partial<ReadinessInput> = {}) {
+    return invoer({ fiscalYear: PERIODE, ...over });
+  }
+
+  it("BJ1 — een datum midden in het boekjaar is groen", () => {
+    const uit = chargeCallReadiness(metPeriode({ callDate: "2026-06-15" }));
+    expect(codes(uit)).not.toContain("FORM_CALL_DATE_OUTSIDE_FY");
+    expect(uit.clear).toBe(true);
+  });
+
+  it("BJ2 — exact op start_date is toegestaan, de ondergrens is inclusief", () => {
+    const uit = chargeCallReadiness(metPeriode({ callDate: "2026-04-01" }));
+    expect(codes(uit)).not.toContain("FORM_CALL_DATE_OUTSIDE_FY");
+    expect(uit.clear).toBe(true);
+  });
+
+  it("BJ3 — exact op end_date is toegestaan, de bovengrens is inclusief", () => {
+    const uit = chargeCallReadiness(metPeriode({ callDate: "2026-09-30" }));
+    expect(codes(uit)).not.toContain("FORM_CALL_DATE_OUTSIDE_FY");
+    expect(uit.clear).toBe(true);
+  });
+
+  it("BJ4 — een dag vóór start_date blokkeert", () => {
+    const uit = chargeCallReadiness(metPeriode({ callDate: "2026-03-31" }));
+    expect(codes(uit)).toContain("FORM_CALL_DATE_OUTSIDE_FY");
+    expect(uit.clear).toBe(false);
+  });
+
+  it("BJ5 — een dag ná end_date blokkeert", () => {
+    const uit = chargeCallReadiness(metPeriode({ callDate: "2026-10-01" }));
+    expect(codes(uit)).toContain("FORM_CALL_DATE_OUTSIDE_FY");
+    expect(uit.clear).toBe(false);
+  });
+
+  it("BJ6 — extreem oude en extreem toekomstige datums blokkeren", () => {
+    for (const datum of ["1999-01-01", "2099-12-31"]) {
+      const uit = chargeCallReadiness(metPeriode({ callDate: datum }));
+      expect(codes(uit), datum).toContain("FORM_CALL_DATE_OUTSIDE_FY");
+    }
+  });
+
+  it("BJ7 — de eigendomscontrole draait NIET op een datum buiten het boekjaar", () => {
+    // Zonder deze poort zou elk lot als eigenaarloos worden gemeld, want geen
+    // enkele eigendomsperiode dekt 1999. Dat is de verkeerde oorzaak tonen.
+    const uit = chargeCallReadiness(metPeriode({ callDate: "1999-01-01" }));
+    expect(codes(uit)).toContain("FORM_CALL_DATE_OUTSIDE_FY");
+    expect(codes(uit)).not.toContain("ALLOC_NO_OWNER");
+    expect(codes(uit)).not.toContain("ALLOC_AMBIGUOUS_OWNER");
+  });
+
+  it("BJ8 — de melding draagt de grenzen, niet de technische code", () => {
+    const uit = chargeCallReadiness(metPeriode({ callDate: "2026-10-01" }));
+    const blok = uit.blockers.find((b) => b.code === "FORM_CALL_DATE_OUTSIDE_FY");
+    expect(blok && "startDate" in blok ? blok.startDate : null).toBe("2026-04-01");
+    expect(blok && "endDate" in blok ? blok.endDate : null).toBe("2026-09-30");
+    expect(blockerKey(blok!)).toBe("callDateOutsideFy");
+  });
+
+  it("BJ9 — een ONGELDIG datumformaat meldt dat, niet de boekjaargrens", () => {
+    // Twee verschillende oorzaken mogen niet op één hoop; de gebruiker moet
+    // weten of de datum onleesbaar is of gewoon buiten de periode valt.
+    for (const datum of ["", "2026-99-99", "31-03-2026"]) {
+      const uit = chargeCallReadiness(metPeriode({ callDate: datum }));
+      expect(codes(uit), datum).toContain("FORM_CALL_DATE_INVALID");
+      expect(codes(uit), datum).not.toContain("FORM_CALL_DATE_OUTSIDE_FY");
+      expect(codes(uit), datum).not.toContain("ALLOC_NO_OWNER");
+    }
+  });
+
+  it("BJ10 — de databasecode ALLOC_CALL_DATE_OUTSIDE_FY krijgt dezelfde melding", () => {
+    // Een race of een omzeiling levert de trigger-exceptie op; die moet bij de
+    // gebruiker als dezelfde begrijpelijke tekst landen, niet als "generic".
+    expect(
+      chargeErrorKey("ALLOC_CALL_DATE_OUTSIDE_FY: oproepdatum valt buiten de periode van het boekjaar"),
+    ).toBe("callDateOutsideFy");
+    expect(chargeErrorCode("ALLOC_CALL_DATE_OUTSIDE_FY: x")).toBe("ALLOC_CALL_DATE_OUTSIDE_FY");
+    expect(mappedChargeErrorCodes()).toContain("ALLOC_CALL_DATE_OUTSIDE_FY");
+  });
+
+  it("BJ11 — de vervaldatumvolgorde blijft los van de boekjaargrens werken", () => {
+    // Een oproepdatum buiten het boekjaar mag de volgordefout niet verbergen.
+    const uit = chargeCallReadiness(
+      metPeriode({ callDate: "2026-10-01", dueDate: "2026-09-01" }),
+    );
+    expect(codes(uit)).toContain("FORM_CALL_DATE_OUTSIDE_FY");
+    expect(codes(uit)).toContain("FORM_DUE_BEFORE_CALL");
+  });
+
+  it("BJ12 — de melding bestaat in FR, NL en AR en noemt geen tabel of code", () => {
+    for (const [naam, berichten] of Object.entries({ fr, nl, ar })) {
+      const tekst = (berichten as { charges: { errors: Record<string, string> } })
+        .charges.errors.callDateOutsideFy;
+      expect(tekst, `${naam} mist callDateOutsideFy`).toBeTruthy();
+      expect(tekst, naam).toContain("{start}");
+      expect(tekst, naam).toContain("{end}");
+      expect(tekst, naam).not.toContain("ALLOC_");
+      expect(tekst, naam).not.toContain("charge_calls");
+      expect(tekst, naam).not.toContain("fiscal_years");
+    }
   });
 });
 
@@ -854,7 +970,7 @@ describe("CT — controletotaal (F09)", () => {
       invoer({
         rule: regel({ partial_denominator_until_year: 2026 }),
         declaredTantiemes: 120,
-        fiscalYear: { year: 2026, status: "open" },
+        fiscalYear: { year: 2026, status: "open", startDate: "2026-01-01", endDate: "2026-12-31" },
       }),
     );
     expect(codes(uit)).not.toContain("ALLOC_CONTROL_TOTAL");
@@ -867,7 +983,7 @@ describe("CT — controletotaal (F09)", () => {
       invoer({
         rule: regel({ partial_denominator_until_year: 2025 }),
         declaredTantiemes: 120,
-        fiscalYear: { year: 2026, status: "open" },
+        fiscalYear: { year: 2026, status: "open", startDate: "2026-01-01", endDate: "2026-12-31" },
       }),
     );
     expect(codes(uit)).toContain("ALLOC_CONTROL_TOTAL");
@@ -938,7 +1054,7 @@ describe("CR — controle vóór aanmaken, samengesteld", () => {
   });
 
   it("CR4 — een gesloten boekjaar blokkeert", () => {
-    const uit = chargeCallReadiness(invoer({ fiscalYear: { year: 2026, status: "closed" } }));
+    const uit = chargeCallReadiness(invoer({ fiscalYear: { year: 2026, status: "closed", startDate: "2026-01-01", endDate: "2026-12-31" } }));
     expect(codes(uit)).toContain("ALLOC_FY_CLOSED");
   });
 
@@ -1100,7 +1216,8 @@ describe("GV — geen verdeling in de applicatielaag", () => {
     // dus dat levert tussen 00:00 en 01:00 lokaal de dag ERVOOR - en op die
     // datum wordt de eigendom beoordeeld.
     expect(bron).not.toContain('toISOString().slice(0, 10)');
-    expect(bron).toContain("todayInTimezone");
+    // Sinds m31 klemt de default bovendien binnen de periode van het boekjaar.
+    expect(bron).toContain("defaultCallDate");
   });
 });
 
@@ -1149,7 +1266,7 @@ describe("FE — foutcodes naar vertaalsleutels", () => {
 
   it("FE5 — elke blokkade uit de controle heeft een vertaalsleutel", () => {
     const uit = chargeCallReadiness(
-      invoer({ ownership: [], declaredTantiemes: 999, fiscalYear: { year: 2026, status: "closed" } }),
+      invoer({ ownership: [], declaredTantiemes: 999, fiscalYear: { year: 2026, status: "closed", startDate: "2026-01-01", endDate: "2026-12-31" } }),
     );
     expect(uit.blockers.length).toBeGreaterThan(0);
     for (const b of uit.blockers) {

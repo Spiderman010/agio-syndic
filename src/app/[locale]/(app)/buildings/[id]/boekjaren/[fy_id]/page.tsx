@@ -9,7 +9,7 @@ import ChargeCallWorkflow from "./ChargeCallWorkflow";
 import { canReverse, canWrite } from "@/lib/roles";
 import { correctionOf, fetchReversalIndexResult, reversalOf } from "@/lib/reversal";
 import { formatMoney } from "@/lib/money";
-import { BUILDING_TIMEZONE, todayInTimezone } from "@/lib/today";
+import { BUILDING_TIMEZONE, defaultCallDate } from "@/lib/today";
 import type { AllocationRuleRow, RuleUnitRow, RuleWeightRow } from "@/lib/charges";
 import type { OwnershipRow } from "@/lib/ownership";
 import type { Building, FiscalYear } from "@/lib/types";
@@ -105,10 +105,17 @@ export default async function FiscalYearDetail({
   const ts = await getTranslations("saldo");
   const tcom = await getTranslations("common");
   const mayWrite = canWrite(role);
-  // De voorgevulde oproepdatum, in de tijdzone van het gebouw. `toISOString()`
-  // zou hier de UTC-dag geven en tussen 00:00 en 01:00 lokale tijd dus de dag
-  // ERVOOR - precies de datum waarop de eigendom wordt beoordeeld.
-  const vandaag = todayInTimezone(BUILDING_TIMEZONE);
+  // De voorgevulde oproepdatum. Twee dingen tegelijk:
+  //
+  //   1. de dag komt uit de tijdzone van het GEBOUW, niet uit UTC. Tussen
+  //      00:00 en 01:00 lokale tijd zou `toISOString()` de dag ervoor geven -
+  //      precies de datum waarop de eigendom wordt beoordeeld;
+  //   2. de waarde wordt geklemd binnen de periode van DIT boekjaar, want m31
+  //      maakt `start_date <= call_date <= end_date` een database-invariant.
+  //      Een default daarbuiten zou een formulier opleveren dat de database op
+  //      datzelfde moment al weigert.
+  //
+  // De klemming heeft `fy` nodig en staat daarom pas hier, na de lookup.
 
   const [{ data: bData }, { data: fyData }] = await Promise.all([
     supabase.from("buildings").select("*").eq("id", buildingId).maybeSingle(),
@@ -126,6 +133,10 @@ export default async function FiscalYearDetail({
 
   const b = bData as Building;
   const fy = fyData as FiscalYear;
+
+  /** De periode van DIT boekjaar, inclusief aan beide kanten (m31). */
+  const boekjaarPeriode = { startDate: fy.start_date, endDate: fy.end_date };
+  const vandaag = defaultCallDate(boekjaarPeriode, BUILDING_TIMEZONE);
 
   /*
    * ELKE EMBED DRAAGT ZIJN FOREIGN KEY BIJ NAAM.
@@ -644,7 +655,11 @@ export default async function FiscalYearDetail({
                 <ChargeCallWorkflow
                   buildingId={buildingId}
                   fiscalYearId={fyId}
-                  fiscalYear={{ year: fy.year, status: fy.status }}
+                  fiscalYear={{
+                    year: fy.year,
+                    status: fy.status,
+                    ...boekjaarPeriode,
+                  }}
                   declaredTantiemes={b.total_tantiemes}
                   rules={rules}
                   units={lots}

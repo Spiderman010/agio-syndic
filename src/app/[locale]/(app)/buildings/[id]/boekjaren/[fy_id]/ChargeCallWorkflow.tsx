@@ -49,7 +49,13 @@ import { createChargeCall } from "../actions";
 type Props = {
   buildingId: string;
   fiscalYearId: string;
-  fiscalYear: { year: number; status: "open" | "closed" };
+  fiscalYear: {
+    year: number;
+    status: "open" | "closed";
+    /** Inclusieve periodegrenzen; sinds m31 een database-invariant. */
+    startDate: string;
+    endDate: string;
+  };
   declaredTantiemes: number | string | null;
   rules: readonly AllocationRuleRow[];
   units: readonly ChargeUnitRow[];

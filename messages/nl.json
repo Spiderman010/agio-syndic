@@ -224,6 +224,7 @@
       "blockMove": "Een blok kan niet naar een ander gebouw worden verplaatst.",
       "dueBeforeCall": "De vervaldatum mag niet vóór de oproepdatum liggen.",
       "callDateInvalid": "Vul een geldige oproepdatum in.",
+      "callDateOutsideFy": "De oproepdatum moet binnen de periode van het boekjaar vallen, van {start} tot en met {end}.",
       "dueDateInvalid": "Vul een geldige vervaldatum in.",
       "callsUnavailable": "De lastenoproepen konden niet worden geladen. Er worden geen bedragen getoond zolang de gegevens niet betrouwbaar zijn.",
       "paymentsUnavailable": "De betalingen konden niet worden geladen. De lijst wordt niet getoond zolang de gegevens niet betrouwbaar zijn.",

@@ -42,3 +42,38 @@ export function todayInTimezone(
     day: "2-digit",
   }).format(now);
 }
+
+/**
+ * De voorgevulde oproepdatum voor EEN bepaald boekjaar.
+ *
+ * m31 maakt de regel een database-invariant:
+ *
+ *     fiscal_year.start_date <= charge_call.call_date <= fiscal_year.end_date
+ *
+ * Beide grenzen zijn inclusief. Deze functie spiegelt die regel voor de
+ * VOORGEVULDE waarde: vandaag in de tijdzone van het gebouw, geklemd binnen de
+ * periode. Zo staat er nooit een default in het formulier waarvan de database
+ * op datzelfde moment al weet dat hij hem weigert.
+ *
+ * Vijf situaties, en alle vijf leveren een datum BINNEN het boekjaar:
+ *
+ *   vandaag vóór start_date        -> start_date
+ *   vandaag exact op start_date    -> start_date (die dag valt erbinnen)
+ *   vandaag binnen de periode      -> vandaag
+ *   vandaag exact op end_date      -> end_date   (die dag valt erbinnen)
+ *   vandaag na end_date            -> end_date
+ *
+ * Zuiver tekstueel vergelijken mag hier: `YYYY-MM-DD` sorteert lexicografisch
+ * gelijk aan chronologisch, en alle drie de waarden komen in dat formaat
+ * binnen. Er wordt dus geen tweede datumrekenkunde geïntroduceerd.
+ */
+export function defaultCallDate(
+  fiscalYear: { startDate: string; endDate: string },
+  timeZone: string = BUILDING_TIMEZONE,
+  now: Date = new Date(),
+): string {
+  const vandaag = todayInTimezone(timeZone, now);
+  if (vandaag < fiscalYear.startDate) return fiscalYear.startDate;
+  if (vandaag > fiscalYear.endDate) return fiscalYear.endDate;
+  return vandaag;
+}
