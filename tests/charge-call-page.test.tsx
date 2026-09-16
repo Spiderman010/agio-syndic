@@ -586,7 +586,7 @@ describe("FF — fail-closed financiële weergave", () => {
     const tekst = container.textContent ?? "";
     expect(screen.getByTestId("balance-error")).toBeTruthy();
     expect(tekst).toContain("charges.errors.balanceUnavailable");
-    expect(tekst).not.toContain("Aucun appel ou propriétaire lié.");
+    expect(tekst).not.toContain("saldo.noData");
     expect(tekst).not.toContain("boom");
   });
 
@@ -596,7 +596,7 @@ describe("FF — fail-closed financiële weergave", () => {
     state.tabellen.charge_calls = STUK;
     const { container } = await toonPagina();
     expect(screen.getByTestId("balance-error")).toBeTruthy();
-    expect(container.textContent ?? "").not.toContain("Aucun appel ou propriétaire lié.");
+    expect(container.textContent ?? "").not.toContain("saldo.noData");
   });
 
   it("FF9 — een fout op payments toont geen 'Aucun paiement'", async () => {
@@ -605,7 +605,7 @@ describe("FF — fail-closed financiële weergave", () => {
     const tekst = container.textContent ?? "";
     expect(screen.getByTestId("payments-error")).toBeTruthy();
     expect(tekst).toContain("charges.errors.paymentsUnavailable");
-    expect(tekst).not.toContain("Aucun paiement.");
+    expect(tekst).not.toContain("payments.noPayments");
     expect(tekst).not.toContain("boom");
   });
 
@@ -671,7 +671,7 @@ describe("SR — stornostatus en boekjaarstatus", () => {
     expect(tekst).not.toContain("VIR-2026-001");
     expect(tekst).not.toMatch(/\+300/);
     // Ook geen lege toestand: leeg zou net zo goed een bewering zijn.
-    expect(tekst).not.toContain("Aucun paiement.");
+    expect(tekst).not.toContain("payments.noPayments");
     // En geen enkele storno- of correctieknop.
     expect(actieknoppen()).toHaveLength(0);
   });
@@ -838,7 +838,7 @@ describe("NB — formulier nieuwe betaling", () => {
     const tekst = container.textContent ?? "";
 
     expect(screen.getByTestId("payments-error")).toBeTruthy();
-    expect(tekst).not.toContain("Aucun paiement.");
+    expect(tekst).not.toContain("payments.noPayments");
     expect(tekst).not.toContain("VIR-2026-001");
     expect(formulier(container)).toBeNull();
     expect(container.querySelector("#pay_amount")).toBeNull();
@@ -889,7 +889,7 @@ describe("NB — formulier nieuwe betaling", () => {
     expect(screen.queryByTestId("balance-error")).toBeNull();
     expect(screen.queryByTestId("reversals-error")).toBeNull();
     expect(screen.queryByTestId("action-status-error")).toBeNull();
-    expect(container.textContent ?? "").toContain("Aucun paiement.");
+    expect(container.textContent ?? "").toContain("payments.noPayments");
     // De eigenaar komt uit ownership en die is gezond, dus het formulier staat er.
     expect(formulier(container)).toBeTruthy();
   });

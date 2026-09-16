@@ -8,7 +8,9 @@
     "optional": "optioneel",
     "paid": "betaald",
     "open": "open",
-    "late": "te laat"
+    "late": "te laat",
+    "partial": "gedeeltelijk",
+    "pending": "openstaand"
   },
   "lang": {
     "fr": "FR",
@@ -100,7 +102,8 @@
   "fy": {
     "crumb": "Boekjaar",
     "title": "Boekjaar",
-    "closed": "Gesloten"
+    "closed": "Gesloten",
+    "heading": "Boekjaar {year}"
   },
   "charges": {
     "title": "Lastenoproepen",
@@ -226,7 +229,8 @@
       "paymentsUnavailable": "De betalingen konden niet worden geladen. De lijst wordt niet getoond zolang de gegevens niet betrouwbaar zijn.",
       "balanceUnavailable": "De saldi konden niet worden geladen."
     },
-    "noActiveRule": "Geen actieve verdeelregel voor dit gebouw. Er kan geen lastenoproep worden aangemaakt zolang er geen regel actief is."
+    "noActiveRule": "Geen actieve verdeelregel voor dit gebouw. Er kan geen lastenoproep worden aangemaakt zolang er geen regel actief is.",
+    "callLabel": "Oproep {period}"
   },
   "payments": {
     "title": "Betalingen",
@@ -240,10 +244,10 @@
     "referencePlaceholder": "VIR-2026-001",
     "registerBtn": "Betaling registreren",
     "methods": {
-      "virement": "Virement",
-      "especes": "Espèces",
-      "cheque": "Chèque",
-      "carte": "Carte"
+      "virement": "Overboeking",
+      "especes": "Contant",
+      "cheque": "Cheque",
+      "carte": "Kaart"
     }
   },
   "expenses": {

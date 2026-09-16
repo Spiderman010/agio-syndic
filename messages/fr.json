@@ -8,7 +8,9 @@
     "optional": "optionnel",
     "paid": "payé",
     "open": "ouvert",
-    "late": "en retard"
+    "late": "en retard",
+    "partial": "partiel",
+    "pending": "en attente"
   },
   "lang": {
     "fr": "FR",
@@ -100,7 +102,8 @@
   "fy": {
     "crumb": "Exercice",
     "title": "Exercice",
-    "closed": "Clôturé"
+    "closed": "Clôturé",
+    "heading": "Exercice {year}"
   },
   "charges": {
     "title": "Appels de charges",
@@ -226,7 +229,8 @@
       "paymentsUnavailable": "Les paiements n'ont pas pu être chargés. La liste n'est pas affichée tant que les données ne sont pas fiables.",
       "balanceUnavailable": "Les soldes n'ont pas pu être chargés."
     },
-    "noActiveRule": "Aucune clé de répartition active pour ce bâtiment. Un appel de charges ne peut pas être créé tant qu'aucune règle n'est active."
+    "noActiveRule": "Aucune clé de répartition active pour ce bâtiment. Un appel de charges ne peut pas être créé tant qu'aucune règle n'est active.",
+    "callLabel": "Appel {period}"
   },
   "payments": {
     "title": "Paiements",

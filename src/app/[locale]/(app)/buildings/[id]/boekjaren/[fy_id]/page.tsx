@@ -75,11 +75,18 @@ function fmt(n: number) {
   return n.toLocaleString("fr-MA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function allocBadge(settled: number, amount: number, dueDate: string | null) {
-  if (settled >= amount - 0.005) return <span className="badge badge-betaald">payé</span>;
-  if (dueDate && new Date(dueDate) < new Date()) return <span className="badge badge-telaat">en retard</span>;
-  if (settled > 0) return <span className="badge badge-deels">partiel</span>;
-  return <span className="badge badge-openstaand">en attente</span>;
+/** De statusbadge per allocatie. De labels komen uit `common`, niet uit code. */
+function allocBadge(
+  settled: number,
+  amount: number,
+  dueDate: string | null,
+  tcom: (sleutel: string) => string,
+) {
+  if (settled >= amount - 0.005) return <span className="badge badge-betaald">{tcom("paid")}</span>;
+  if (dueDate && new Date(dueDate) < new Date())
+    return <span className="badge badge-telaat">{tcom("late")}</span>;
+  if (settled > 0) return <span className="badge badge-deels">{tcom("partial")}</span>;
+  return <span className="badge badge-openstaand">{tcom("pending")}</span>;
 }
 
 export default async function FiscalYearDetail({
@@ -92,6 +99,11 @@ export default async function FiscalYearDetail({
   const supabase = await createClient();
   const tr = await getTranslations("reversal");
   const tc = await getTranslations("charges");
+  const tfy = await getTranslations("fy");
+  const tbj = await getTranslations("boekjaren");
+  const tp = await getTranslations("payments");
+  const ts = await getTranslations("saldo");
+  const tcom = await getTranslations("common");
   const mayWrite = canWrite(role);
   // De voorgevulde oproepdatum, in de tijdzone van het gebouw. `toISOString()`
   // zou hier de UTC-dag geven en tussen 00:00 en 01:00 lokale tijd dus de dag
@@ -427,7 +439,7 @@ export default async function FiscalYearDetail({
 
         <div className="card" style={{ padding: "1.1rem 1.4rem", margin: "0.7rem 0 1.4rem", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <div>
-            <h1 style={{ margin: "0 0 0.15rem", fontSize: "1.4rem" }}>Exercice {fy.year}</h1>
+            <h1 style={{ margin: "0 0 0.15rem", fontSize: "1.4rem" }}>{tfy("heading", { year: fy.year })}</h1>
             <div className="muted" style={{ fontSize: "0.83rem" }}>
               {b.name} · {fy.start_date} → {fy.end_date}
             </div>
@@ -435,10 +447,10 @@ export default async function FiscalYearDetail({
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             {/* Geen bedrag zolang de oproepen niet betrouwbaar zijn geladen. */}
             {callsOk && totalOpgeroepen > 0 && (
-              <span style={{ fontWeight: 600, fontSize: "1.05rem" }}>{fmt(totalOpgeroepen)} MAD appelés</span>
+              <span style={{ fontWeight: 600, fontSize: "1.05rem" }}>{fmt(totalOpgeroepen)} {tbj("called")}</span>
             )}
             <span className={`badge ${fy.status === "open" ? "badge-klein" : "badge-midden"}`}>
-              {fy.status === "open" ? "Ouvert" : "Clôturé"}
+              {fy.status === "open" ? tbj("status.open") : tbj("status.closed")}
             </span>
           </div>
         </div>
@@ -486,16 +498,16 @@ export default async function FiscalYearDetail({
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                         <div>
                           <div style={{ fontWeight: 600, fontSize: "0.97rem" }}>
-                            {cc.label ?? (cc.period ? `Appel ${cc.period}` : `Appel ${cc.call_date}`)}
+                            {cc.label ?? tc("callLabel", { period: cc.period ?? cc.call_date })}
                           </div>
                           <div className="muted" style={{ fontSize: "0.78rem", marginTop: 2 }}>
-                            {cc.type === "exceptionnel" ? "Exceptionnel" : "Régulier"}
+                            {cc.type === "exceptionnel" ? tc("types.exceptionnel") : tc("types.regulier")}
                             {cc.period && ` · ${cc.period}`}
-                            {" · "}Date : {cc.call_date}
-                            {cc.due_date && ` · Échéance : `}
+                            {" · "}{tc("date")} : {cc.call_date}
+                            {cc.due_date && ` · ${tc("dueLabel")} : `}
                             {cc.due_date && (
                               <span style={{ color: telaat ? "var(--crit)" : undefined }}>
-                                {cc.due_date}{telaat ? " ⚠ en retard" : ""}
+                                {cc.due_date}{telaat ? ` ${tc("late")}` : ""}
                               </span>
                             )}
                           </div>
@@ -507,7 +519,7 @@ export default async function FiscalYearDetail({
 
                       {cc.charge_allocations.length > 0 && (
                         <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--line)", paddingTop: "0.6rem" }}>
-                          <div className="label" style={{ marginBottom: "0.35rem" }}>Répartition par lot</div>
+                          <div className="label" style={{ marginBottom: "0.35rem" }}>{tc("verdeling")}</div>
                           <div style={{ display: "grid", gap: "0.3rem" }}>
                             {cc.charge_allocations.map((ca) => {
                               return (
@@ -518,7 +530,7 @@ export default async function FiscalYearDetail({
                                   </span>
                                   <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                     <span style={{ fontWeight: 600 }}>{fmt(Number(ca.amount))} MAD</span>
-                                    {allocBadge(Number(ca.settled_amount), Number(ca.amount), cc.due_date)}
+                                    {allocBadge(Number(ca.settled_amount), Number(ca.amount), cc.due_date, tcom)}
                                   </span>
                                 </div>
                               );
@@ -651,7 +663,7 @@ export default async function FiscalYearDetail({
 
           <div style={{ display: "grid", gap: "1.4rem" }}>
             <section id="betalingen">
-              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>Paiements</h2>
+              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>{tp("title")}</h2>
 
               {!paymentsOk && (
                 <div
@@ -684,7 +696,7 @@ export default async function FiscalYearDetail({
 
               {paymentRowsOk && pays.length === 0 && (
                 <div className="card muted" style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}>
-                  Aucun paiement.
+                  {tp("noPayments")}
                 </div>
               )}
 
@@ -797,10 +809,10 @@ export default async function FiscalYearDetail({
                 <ActionForm action={createPayment} className="card" style={{ padding: "1rem 1.1rem", marginTop: "0.7rem" }}>
                   <input type="hidden" name="building_id" value={buildingId} />
                   <input type="hidden" name="fiscal_year_id" value={fyId} />
-                  <h3 style={{ fontSize: "0.88rem", margin: "0 0 0.75rem" }}>Enregistrer un paiement</h3>
+                  <h3 style={{ fontSize: "0.88rem", margin: "0 0 0.75rem" }}>{tp("registerPayment")}</h3>
 
                   <div style={{ marginBottom: "0.6rem" }}>
-                    <label className="label" htmlFor="owner_id">Propriétaire</label>
+                    <label className="label" htmlFor="owner_id">{tp("owner")}</label>
                     <select className="input" id="owner_id" name="owner_id" required>
                       {eigenaars.map((o) => (
                         <option key={o.id} value={o.id}>{o.full_name}</option>
@@ -810,38 +822,38 @@ export default async function FiscalYearDetail({
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.6rem", marginBottom: "0.6rem" }}>
                     <div>
-                      <label className="label" htmlFor="pay_amount">Montant (MAD)</label>
+                      <label className="label" htmlFor="pay_amount">{tp("amount")}</label>
                       <input className="input" id="pay_amount" name="amount" type="text" placeholder="300.00" required />
                     </div>
                     <div>
-                      <label className="label" htmlFor="value_date">Date</label>
+                      <label className="label" htmlFor="value_date">{tp("date")}</label>
                       <input className="input" id="value_date" name="value_date" type="date" required />
                     </div>
                   </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.6rem", marginBottom: "0.75rem" }}>
                     <div>
-                      <label className="label" htmlFor="method">Mode</label>
+                      <label className="label" htmlFor="method">{tp("method")}</label>
                       <select className="input" id="method" name="method" defaultValue="virement">
-                        <option value="virement">Virement</option>
-                        <option value="especes">Espèces</option>
-                        <option value="cheque">Chèque</option>
-                        <option value="carte">Carte</option>
+                        <option value="virement">{tp("methods.virement")}</option>
+                        <option value="especes">{tp("methods.especes")}</option>
+                        <option value="cheque">{tp("methods.cheque")}</option>
+                        <option value="carte">{tp("methods.carte")}</option>
                       </select>
                     </div>
                     <div>
-                      <label className="label" htmlFor="reference">Référence</label>
-                      <input className="input" id="reference" name="reference" placeholder="VIR-2026-001" />
+                      <label className="label" htmlFor="reference">{tp("reference")}</label>
+                      <input className="input" id="reference" name="reference" placeholder={tp("referencePlaceholder")} />
                     </div>
                   </div>
 
-                  <button className="btn btn-primary" style={{ width: "100%" }}>Enregistrer</button>
+                  <button className="btn btn-primary" style={{ width: "100%" }}>{tp("registerBtn")}</button>
                 </ActionForm>
               )}
             </section>
 
             <section>
-              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>Solde par propriétaire</h2>
+              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>{ts("title")}</h2>
 
               {!saldoOk && (
                 <div
@@ -856,7 +868,7 @@ export default async function FiscalYearDetail({
 
               {saldoOk && saldoRows.length === 0 && (
                 <div className="card muted" style={{ padding: "0.8rem 1rem", fontSize: "0.85rem" }}>
-                  Aucun appel ou propriétaire lié.
+                  {ts("noData")}
                 </div>
               )}
 
@@ -865,10 +877,10 @@ export default async function FiscalYearDetail({
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.83rem" }}>
                     <thead>
                       <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--line)" }}>
-                        <th style={{ textAlign: "left", padding: "0.55rem 0.8rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>Propriétaire</th>
-                        <th style={{ textAlign: "right", padding: "0.55rem 0.6rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>Appelé</th>
-                        <th style={{ textAlign: "right", padding: "0.55rem 0.6rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>Payé</th>
-                        <th style={{ textAlign: "right", padding: "0.55rem 0.8rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>Solde</th>
+                        <th style={{ textAlign: "left", padding: "0.55rem 0.8rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>{ts("owner")}</th>
+                        <th style={{ textAlign: "right", padding: "0.55rem 0.6rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>{ts("called")}</th>
+                        <th style={{ textAlign: "right", padding: "0.55rem 0.6rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>{ts("paid")}</th>
+                        <th style={{ textAlign: "right", padding: "0.55rem 0.8rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>{ts("open")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -881,7 +893,7 @@ export default async function FiscalYearDetail({
                               <div style={{ fontWeight: 500 }}>{row.naam}</div>
                               {row.teLaat > 0 && (
                                 <div style={{ color: "var(--crit)", fontSize: "0.72rem", fontWeight: 600 }}>
-                                  {fmt(row.teLaat)} MAD en retard
+                                  {fmt(row.teLaat)} {ts("lateSuffix")}
                                 </div>
                               )}
                             </td>
@@ -898,7 +910,7 @@ export default async function FiscalYearDetail({
                     </tbody>
                     <tfoot>
                       <tr style={{ borderTop: "2px solid var(--line)", background: "var(--surface-2)" }}>
-                        <td style={{ padding: "0.6rem 0.8rem", fontWeight: 700, fontSize: "0.85rem" }}>Total</td>
+                        <td style={{ padding: "0.6rem 0.8rem", fontWeight: 700, fontSize: "0.85rem" }}>{ts("total")}</td>
                         <td style={{ textAlign: "right", padding: "0.6rem 0.6rem", fontWeight: 700 }}>{fmt(saldoRows.reduce((s, r) => s + r.opgeroepen, 0))}</td>
                         <td style={{ textAlign: "right", padding: "0.6rem 0.6rem", fontWeight: 700, color: "var(--good)" }}>{fmt(saldoRows.reduce((s, r) => s + r.voldaan, 0))}</td>
                         <td style={{ textAlign: "right", padding: "0.6rem 0.8rem", fontWeight: 700 }}>{fmt(saldoRows.reduce((s, r) => s + (r.opgeroepen - r.voldaan), 0))}</td>
