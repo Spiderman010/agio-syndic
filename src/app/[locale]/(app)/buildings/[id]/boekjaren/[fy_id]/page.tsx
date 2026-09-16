@@ -115,16 +115,35 @@ export default async function FiscalYearDetail({
   const b = bData as Building;
   const fy = fyData as FiscalYear;
 
+  /*
+   * ELKE EMBED DRAAGT ZIJN FOREIGN KEY BIJ NAAM.
+   *
+   * Dit schema heeft tussen meerdere tabelparen MEER DAN EEN foreign key, en
+   * PostgREST weigert dan te raden: het antwoordt met PGRST201 ("more than one
+   * relationship was found") en de hele query faalt. Dat is geen randgeval maar
+   * de regel hier, want m8 zette overal een samengestelde tenantsleutel NAAST
+   * de bestaande enkelvoudige FK - m30 zegt dat met zoveel woorden over
+   * `ownership`: "Het ON DELETE-gedrag blijft bij de bestaande enkelvoudige FK
+   * op `owner_id`, precies zoals m8 sectie 7 het doet."
+   *
+   * Tussen `charge_allocations` en `charge_calls` staan er zelfs drie:
+   * `ca_call_building_fk` en `ca_call_params_fk` (m13) en
+   * `charge_allocations_cc_org_fk` (m8, opnieuw gezet in m18).
+   *
+   * De `!<constraint>`-hint maakt de keuze expliciet. Gekozen wordt steeds de
+   * tenantbewakende sleutel: dezelfde ouderrij, maar met de organisatie- of
+   * gebouwkolom erin, zodat de join niet buiten de scope kan wijzen.
+   */
   const { data: callsData, error: callsError } = await supabase
     .from("charge_calls")
     .select(`
       id, type, period, label, total_amount, call_date, due_date,
       alloc_method, alloc_scope, alloc_rule_label, alloc_unit_count,
       alloc_partial_denominator,
-      charge_allocations(
+      charge_allocations!ca_call_building_fk(
         id, amount, amount_cents, settled_amount, owner_id,
-        units(label),
-        owners(full_name)
+        units!ca_unit_building_fk(label),
+        owners!ca_owner_org_fk(full_name)
       )
     `)
     .eq("fiscal_year_id", fyId)
@@ -171,7 +190,7 @@ export default async function FiscalYearDetail({
       supabase
         .from("ownership")
         .select(
-          "id, unit_id, owner_id, share, start_date, end_date, is_primary_debtor, owners(id, full_name)",
+          "id, unit_id, owner_id, share, start_date, end_date, is_primary_debtor, owners!ownership_owner_org_fk(id, full_name)",
         )
         .in("unit_id", unitIds),
     ]);
@@ -272,13 +291,13 @@ export default async function FiscalYearDetail({
     .from("payments")
     .select(`
       id, amount, method, value_date, reference,
-      owners(full_name),
-      payment_allocations(
+      owners!payments_owner_org_fk(full_name),
+      payment_allocations!payment_allocations_payment_org_fk(
         amount,
-        charge_allocations(
+        charge_allocations!payment_allocations_ca_org_fk(
           amount, settled_amount,
-          charge_calls(period, label, due_date),
-          units(label)
+          charge_calls!ca_call_building_fk(period, label, due_date),
+          units!ca_unit_building_fk(label)
         )
       )
     `)
@@ -322,7 +341,7 @@ export default async function FiscalYearDetail({
   if (payIds.length > 0) {
     const { data: entryData, error: entryError } = await supabase
       .from("journal_entries")
-      .select("source_id, fiscal_years(status)")
+      .select("source_id, fiscal_years!journal_entries_fy_org_fk(status)")
       .eq("source", "payment")
       .in("source_id", payIds);
     journalError = entryError;
@@ -360,7 +379,9 @@ export default async function FiscalYearDetail({
   if (callIds.length > 0) {
     const { data: allocData, error: allocErr } = await supabase
       .from("charge_allocations")
-      .select("amount, settled_amount, owner_id, owners(id, full_name), charge_calls(due_date)")
+      .select(
+        "amount, settled_amount, owner_id, owners!ca_owner_org_fk(id, full_name), charge_calls!ca_call_building_fk(due_date)",
+      )
       .in("charge_call_id", callIds)
       .not("owner_id", "is", null);
     allocError = allocErr;
