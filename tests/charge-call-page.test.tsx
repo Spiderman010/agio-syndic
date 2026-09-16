@@ -31,6 +31,23 @@ const state: {
   reversals: { rijen: ReversalRij[]; error: unknown };
 } = { rol: "manager", tabellen: {}, bevraagd: [], reversals: { rijen: [], error: null } };
 
+/**
+ * Eén rij uit `charge_allocations`: de definitieve uitkomst van de
+ * centverdeling voor één lot, zoals `fn_alloc_distribute` hem vastlegde.
+ */
+function allocatie(label: string, amountCents: number, over: Record<string, unknown> = {}) {
+  return {
+    id: `ca-${label}`,
+    amount: amountCents / 100,
+    amount_cents: amountCents,
+    settled_amount: 0,
+    owner_id: "o1",
+    units: { label },
+    owners: { full_name: "Youssef El Amrani" },
+    ...over,
+  };
+}
+
 /** Eén betaling zoals de pagina hem uit de database krijgt. */
 function betaling(over: Record<string, unknown> = {}) {
   return {
@@ -398,55 +415,79 @@ describe("SC — het boekjaar moet bij het gebouw uit de URL horen", () => {
 });
 
 describe("DV — definitieve verdeling", () => {
-  it("DV1 — bedragen komen uit charge_call_lines, niet uit een herberekening", async () => {
+  it("DV1 — bedragen komen uit charge_allocations, niet uit een herberekening", async () => {
+    // 666,67 + 333,33 is de verdeling MET de restcent, precies zoals
+    // `fn_alloc_distribute` hem heeft vastgelegd. Het scherm rekent niets na.
     state.tabellen.charge_calls = {
       data: [
-        {
-          id: "cc-1",
-          type: "regulier",
-          period: "T2 2026",
-          label: "Entretien",
+        oproep({
           total_amount: 1000,
-          call_date: "2026-06-30",
-          due_date: "2026-07-31",
-          alloc_method: "tantieme",
-          alloc_scope: "whole_building",
-          alloc_rule_label: "Charges générales",
           alloc_unit_count: 2,
-          alloc_partial_denominator: false,
-          charge_allocations: [],
-        },
-      ],
-      error: null,
-    };
-    state.tabellen.charge_call_lines = {
-      data: [
-        { charge_call_id: "cc-1", unit_id: "u1", amount_cents: 66667, units: { label: "A1" } },
-        { charge_call_id: "cc-1", unit_id: "u2", amount_cents: 33333, units: { label: "A2" } },
+          charge_allocations: [allocatie("A1", 66667), allocatie("A2", 33333)],
+        }),
       ],
       error: null,
     };
 
     const { container } = await toonPagina();
     const tekst = container.textContent ?? "";
-    // 666,67 en 333,33 — exact de opgeslagen centen, inclusief de restcent.
     expect(tekst).toMatch(/666[.,]67/);
     expect(tekst).toMatch(/333[.,]33/);
     expect(tekst).toContain("charges.result.source");
+    expect(tekst).not.toContain("charges.result.noLines");
+  });
+
+  it("DV2 — een tantième-oproep ZONDER charge_call_lines toont gewoon zijn verdeling", async () => {
+    // De kern van de reviewbevinding: m20 vult `charge_call_lines` alleen bij
+    // `method = 'manual'`. Een tantième-, equal- of percentageoproep heeft daar
+    // dus NUL rijen, terwijl de verdeling wel degelijk bestaat. Voorheen
+    // meldde dit scherm daarom "geen vastgelegde regels" voor precies de
+    // methoden die het meest worden gebruikt.
+    state.tabellen.charge_call_lines = { data: [], error: null };
+    state.tabellen.charge_calls = {
+      data: [
+        oproep({
+          alloc_method: "tantieme",
+          alloc_unit_count: 2,
+          charge_allocations: [allocatie("A1", 60000), allocatie("A2", 40000)],
+        }),
+      ],
+      error: null,
+    };
+
+    const { container } = await toonPagina();
+    const tekst = container.textContent ?? "";
+    expect(tekst).not.toContain("charges.result.noLines");
+    expect(screen.queryByTestId("lines-error")).toBeNull();
+    expect(tekst).toMatch(/600[.,]00/);
+    expect(tekst).toMatch(/400[.,]00/);
+  });
+
+  it("DV3 — een onvolledige verdeling is GEEN definitief resultaat", async () => {
+    // De engine bediende 3 lots (`alloc_unit_count`), we hebben er 2. Een
+    // gedeeltelijke lijst tonen alsof hij definitief is, is precies het soort
+    // stille financiële onwaarheid dat deze pagina moet uitsluiten.
+    state.tabellen.charge_calls = {
+      data: [
+        oproep({
+          alloc_unit_count: 3,
+          charge_allocations: [allocatie("A1", 60000), allocatie("A2", 40000)],
+        }),
+      ],
+      error: null,
+    };
+
+    const { container } = await toonPagina();
+    const melding = screen.getByTestId("lines-error");
+    expect(melding.getAttribute("role")).toBe("alert");
+    expect(melding.textContent).toContain("charges.result.unavailable");
+    const tekst = container.textContent ?? "";
+    expect(tekst).not.toContain("charges.result.noLines");
+    // En geen halve tabel met een bronvermelding erbij.
+    expect(tekst).not.toContain("charges.result.source");
   });
 });
 
-// ── BLOKKER 1: de financiële weergave is fail-closed ────────────────────────
-
-/**
- * Een mislukte financiële query mag NOOIT als een betrouwbaar nulbedrag of een
- * lege lijst worden getoond. "0 MAD appelés" en "geen oproepen" zijn beweringen
- * over geld; als de query faalde, kunnen we die niet waarmaken.
- *
- * Deze suite eist per financiële bron: een zichtbare foutmelding, GEEN nul,
- * GEEN aantal en GEEN lege-lijstmelding — en dat los van rol en boekjaarstatus,
- * want een leesrol en een gesloten boekjaar lezen dezelfde cijfers.
- */
 describe("FF — fail-closed financiële weergave", () => {
   const STUK = { data: null, error: { message: "boom" } };
 
@@ -502,9 +543,14 @@ describe("FF — fail-closed financiële weergave", () => {
     expect(tekst).toMatch(/charges\.title \(0\)/);
   });
 
-  it("FF5 — een fout op charge_call_lines zegt niet 'geen regels'", async () => {
-    state.tabellen.charge_calls = { data: [oproep()], error: null };
-    state.tabellen.charge_call_lines = STUK;
+  it("FF5 — een onvolledige verdeling zegt niet 'geen regels'", async () => {
+    // De verdeling komt uit `charge_allocations`, dus uit dezelfde query als de
+    // oproep zelf. Wat hier faalbaar blijft is de VOLLEDIGHEID ervan, en die
+    // mag nooit als "geen regels" worden gepresenteerd.
+    state.tabellen.charge_calls = {
+      data: [oproep({ alloc_unit_count: 2, charge_allocations: [allocatie("A1", 100000)] })],
+      error: null,
+    };
 
     const { container } = await toonPagina();
     const tekst = container.textContent ?? "";
@@ -517,13 +563,19 @@ describe("FF — fail-closed financiële weergave", () => {
     expect(screen.queryByTestId("calls-error")).toBeNull();
   });
 
-  it("FF6 — een GESLAAGDE lege regelquery blijft 'geen regels'", async () => {
-    state.tabellen.charge_calls = { data: [oproep()], error: null };
-    state.tabellen.charge_call_lines = { data: [], error: null };
+  it("FF6 — een volledige verdeling toont de tabel zonder foutmelding", async () => {
+    state.tabellen.charge_calls = {
+      data: [
+        oproep({
+          alloc_unit_count: 2,
+          charge_allocations: [allocatie("A1", 60000), allocatie("A2", 40000)],
+        }),
+      ],
+      error: null,
+    };
     const { container } = await toonPagina();
-    const tekst = container.textContent ?? "";
     expect(screen.queryByTestId("lines-error")).toBeNull();
-    expect(tekst).toContain("charges.result.noLines");
+    expect(container.textContent ?? "").toContain("charges.result.source");
   });
 
   it("FF7 — een fout op charge_allocations toont geen saldo van nul", async () => {
@@ -560,7 +612,15 @@ describe("FF — fail-closed financiële weergave", () => {
   it("FF10 — elke financiële bron heeft zijn EIGEN melding", async () => {
     // Eén stukke bron mag de andere niet meeslepen: dat zou de gebruiker naar
     // de verkeerde oorzaak sturen.
-    state.tabellen.charge_calls = { data: [oproep()], error: null };
+    state.tabellen.charge_calls = {
+      data: [
+        oproep({
+          alloc_unit_count: 2,
+          charge_allocations: [allocatie("A1", 60000), allocatie("A2", 40000)],
+        }),
+      ],
+      error: null,
+    };
     state.tabellen.payments = STUK;
     await toonPagina();
     expect(screen.getByTestId("payments-error")).toBeTruthy();

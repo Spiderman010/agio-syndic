@@ -1050,7 +1050,7 @@ describe("GV — geen verdeling in de applicatielaag", () => {
     expect(code).not.toMatch(/amount_cents/);
   });
 
-  it("GV4 — de pagina toont definitieve bedragen uit charge_call_lines", () => {
+  it("GV4 — de pagina toont definitieve bedragen uit charge_allocations", () => {
     const bron = readFileSync(
       join(
         REPO,
@@ -1066,8 +1066,41 @@ describe("GV — geen verdeling in de applicatielaag", () => {
       ),
       "utf8",
     );
-    expect(bron).toContain('.from("charge_call_lines")');
-    expect(bron).toContain("linesPerCall");
+    // De autoritatieve uitkomst van de centverdeling staat in
+    // `charge_allocations.amount_cents`. `charge_call_lines` wordt door m20
+    // ALLEEN bij `method = 'manual'` gevuld (regel 307), dus die tabel als
+    // bron zou voor tantieme, equal en percentage nul rijen opleveren.
+    expect(bron).toContain("amount_cents");
+    expect(bron).toContain("verdelingVan");
+    expect(bron).not.toContain('.from("charge_call_lines")');
+
+    // En er wordt nog steeds niets herberekend: het scherm deelt de
+    // opgeslagen centen alleen door 100 om ze te tonen.
+    expect(bron).not.toMatch(/remainder/i);
+    expect(bron).not.toMatch(/Math\.(round|floor)\(/);
+  });
+
+  it("GV5 — de voorgevulde oproepdatum komt niet uit een UTC-slice", () => {
+    const bron = readFileSync(
+      join(
+        REPO,
+        "src",
+        "app",
+        "[locale]",
+        "(app)",
+        "buildings",
+        "[id]",
+        "boekjaren",
+        "[fy_id]",
+        "page.tsx",
+      ),
+      "utf8",
+    );
+    // `toISOString().slice(0, 10)` geeft de UTC-dag. Marokko loopt op UTC+1,
+    // dus dat levert tussen 00:00 en 01:00 lokaal de dag ERVOOR - en op die
+    // datum wordt de eigendom beoordeeld.
+    expect(bron).not.toContain('toISOString().slice(0, 10)');
+    expect(bron).toContain("todayInTimezone");
   });
 });
 

@@ -9,6 +9,7 @@ import ChargeCallWorkflow from "./ChargeCallWorkflow";
 import { canReverse, canWrite } from "@/lib/roles";
 import { correctionOf, fetchReversalIndexResult, reversalOf } from "@/lib/reversal";
 import { formatMoney } from "@/lib/money";
+import { BUILDING_TIMEZONE, todayInTimezone } from "@/lib/today";
 import type { AllocationRuleRow, RuleUnitRow, RuleWeightRow } from "@/lib/charges";
 import type { OwnershipRow } from "@/lib/ownership";
 import type { Building, FiscalYear } from "@/lib/types";
@@ -23,6 +24,12 @@ import type { Building, FiscalYear } from "@/lib/types";
 type AllocRow = {
   id: string;
   amount: number;
+  /**
+   * De definitieve uitkomst van de centverdeling, zoals `fn_alloc_distribute`
+   * hem heeft vastgelegd. NOT NULL in m13, en de database bewaakt zelf dat
+   * `amount = amount_cents / 100` (`ca_money_ck`).
+   */
+  amount_cents: number | string;
   settled_amount: number;
   owner_id: string | null;
   units: { label: string } | null;
@@ -86,7 +93,10 @@ export default async function FiscalYearDetail({
   const tr = await getTranslations("reversal");
   const tc = await getTranslations("charges");
   const mayWrite = canWrite(role);
-  const vandaag = new Date().toISOString().slice(0, 10);
+  // De voorgevulde oproepdatum, in de tijdzone van het gebouw. `toISOString()`
+  // zou hier de UTC-dag geven en tussen 00:00 en 01:00 lokale tijd dus de dag
+  // ERVOOR - precies de datum waarop de eigendom wordt beoordeeld.
+  const vandaag = todayInTimezone(BUILDING_TIMEZONE);
 
   const [{ data: bData }, { data: fyData }] = await Promise.all([
     supabase.from("buildings").select("*").eq("id", buildingId).maybeSingle(),
@@ -112,7 +122,7 @@ export default async function FiscalYearDetail({
       alloc_method, alloc_scope, alloc_rule_label, alloc_unit_count,
       alloc_partial_denominator,
       charge_allocations(
-        id, amount, settled_amount, owner_id,
+        id, amount, amount_cents, settled_amount, owner_id,
         units(label),
         owners(full_name)
       )
@@ -139,7 +149,7 @@ export default async function FiscalYearDetail({
 
   const unitIds = (unitsRes.data ?? []).map((u) => u.id as string);
 
-  const [rulesRes, ruleUnitsRes, ruleWeightsRes, ownershipRes, linesRes] =
+  const [rulesRes, ruleUnitsRes, ruleWeightsRes, ownershipRes] =
     await Promise.all([
       supabase
         .from("allocation_rules")
@@ -164,10 +174,6 @@ export default async function FiscalYearDetail({
           "id, unit_id, owner_id, share, start_date, end_date, is_primary_debtor, owners(id, full_name)",
         )
         .in("unit_id", unitIds),
-      supabase
-        .from("charge_call_lines")
-        .select("charge_call_id, unit_id, amount_cents, units(label)")
-        .eq("building_id", buildingId),
     ]);
 
   /*
@@ -182,8 +188,9 @@ export default async function FiscalYearDetail({
    *
    * De poorten zijn nu gescheiden naar wat ze werkelijk beschermen:
    *
-   *   callsOk      de oproepen zelf: totaal, aantal, lijst en lege toestand;
-   *   linesOk      de definitieve verdeling per oproep;
+   *   callsOk      de oproepen zelf: totaal, aantal, lijst, lege toestand EN
+   *                de definitieve verdeling per oproep, want die komt uit
+   *                `charge_allocations` en dus uit diezelfde query;
    *   saldoOk      het saldo per eigenaar;
    *   paymentsOk   de betalingenlijst;
    *   workflowOk   de bronnen waarop de controle vóór aanmaken steunt.
@@ -198,7 +205,6 @@ export default async function FiscalYearDetail({
    * aanmaakformulier.
    */
   const callsOk = !callsError;
-  const linesOk = !linesRes.error;
   const workflowOk =
     !unitsRes.error &&
     !rulesRes.error &&
@@ -222,23 +228,30 @@ export default async function FiscalYearDetail({
     owners: { id: string; full_name: string } | { id: string; full_name: string }[] | null;
   })[];
 
-  // De definitieve verdeling, per oproep. Uitsluitend uit `charge_call_lines`:
-  // dat is de door de database vastgelegde uitkomst van de centverdeling.
-  const linesPerCall = new Map<string, { label: string; amountCents: number }[]>();
-  for (const rij of (linesRes.data ?? []) as unknown as {
-    charge_call_id: string;
-    unit_id: string;
-    amount_cents: number | string;
-    units: { label: string } | { label: string }[] | null;
-  }[]) {
-    const rawUnit = rij.units;
-    const unit = Array.isArray(rawUnit) ? (rawUnit[0] ?? null) : rawUnit;
-    const lijst = linesPerCall.get(rij.charge_call_id) ?? [];
-    lijst.push({ label: unit?.label ?? "—", amountCents: Number(rij.amount_cents) });
-    linesPerCall.set(rij.charge_call_id, lijst);
-  }
-  for (const lijst of linesPerCall.values()) {
-    lijst.sort((a, b) => a.label.localeCompare(b.label));
+  /**
+   * De definitieve verdeling van EEN oproep, uit `charge_allocations`.
+   *
+   * Dit is de door `fn_alloc_distribute` vastgelegde uitkomst, inclusief de
+   * restcenten; hier wordt niets herberekend. Bewust NIET uit
+   * `charge_call_lines`: m20 vult die tabel alleen bij `method = 'manual'`
+   * (regel 307, "handmatige brondocumentregels"), zodat een verdeling over
+   * tantiemes, gelijke delen of percentages daar per definitie nul rijen
+   * heeft. Die tabel als bron gebruiken meldde dus "geen vastgelegde regels"
+   * voor precies de methoden die het meest worden gebruikt.
+   *
+   * `alloc_unit_count` is de snapshotkop van de engine: het aantal lots dat
+   * bij het aanmaken werkelijk is bediend. Komt het aantal opgehaalde rijen
+   * daar niet mee overeen, dan is de lijst aantoonbaar onvolledig en tonen we
+   * hem niet als definitief resultaat.
+   */
+  function verdelingVan(cc: CallRow) {
+    const regels = (cc.charge_allocations ?? [])
+      .map((ca) => ({
+        label: ca.units?.label ?? "—",
+        amountCents: Number(ca.amount_cents),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return { regels, volledig: regels.length === cc.alloc_unit_count };
   }
 
 
@@ -446,6 +459,7 @@ export default async function FiscalYearDetail({
               <div style={{ display: "grid", gap: "0.7rem" }}>
                 {(callsOk ? calls : []).map((cc) => {
                   const telaat = cc.due_date && new Date(cc.due_date) < new Date();
+                  const verdeling = verdelingVan(cc);
                   return (
                     <div key={cc.id} className="card" style={{ padding: "0.9rem 1rem" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -494,7 +508,7 @@ export default async function FiscalYearDetail({
 
                       {/*
                         De DEFINITIEVE verdeling, letterlijk uit
-                        `charge_call_lines`. Dat is de door de database
+                        `charge_allocations`. Dat is de door de database
                         vastgelegde uitkomst van de centverdeling, inclusief de
                         restcenten; hier wordt niets herberekend. De snapshotkop
                         erboven vertelt welke regel er werkelijk is toegepast.
@@ -524,8 +538,13 @@ export default async function FiscalYearDetail({
                             )}
                           </dl>
 
-                          {!linesOk ? (
-                            /* Niet "geen regels": we weten het simpelweg niet. */
+                          {!verdeling.volledig ? (
+                            /*
+                              Niet "geen regels": de engine bediende
+                              `alloc_unit_count` lots, en zoveel rijen hebben we
+                              niet. Dan is dit geen definitief resultaat maar
+                              een onvolledige lijst, en die tonen we niet.
+                            */
                             <p
                               className="text-crit m-0 text-[0.78rem]"
                               role="alert"
@@ -533,7 +552,7 @@ export default async function FiscalYearDetail({
                             >
                               {tc("result.unavailable")}
                             </p>
-                          ) : (linesPerCall.get(cc.id) ?? []).length === 0 ? (
+                          ) : verdeling.regels.length === 0 ? (
                             <p className="text-ink-soft m-0 text-[0.78rem]">
                               {tc("result.noLines")}
                             </p>
@@ -554,7 +573,7 @@ export default async function FiscalYearDetail({
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {(linesPerCall.get(cc.id) ?? []).map((regel) => (
+                                  {verdeling.regels.map((regel) => (
                                     <tr key={`${cc.id}-${regel.label}`}>
                                       <td className="text-start">{regel.label}</td>
                                       <td className="text-end">

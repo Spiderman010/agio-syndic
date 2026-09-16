@@ -36,7 +36,7 @@ import { createChargeCall } from "../actions";
  * tantièmes voor de controlewaarde, en beoordeelt eigendom op de oproepdatum.
  * De verdeling zelf — welk lot welk bedrag krijgt, inclusief de restcenten —
  * bestaat uitsluitend in `create_charge_call`. Wat na afloop wordt getoond
- * komt uit `charge_call_lines`, dus uit de database.
+ * komt uit `charge_allocations`, dus uit de database.
  *
  * ── DRIE ZICHTBARE STAPPEN ─────────────────────────────────────────────────
  *
