@@ -43,8 +43,47 @@
 -- Vandaar precies twee triggers: een op de kindkant (elke schrijfactie op een
 -- oproep) en een op de ouderkant (elke periodewijziging van een boekjaar).
 -- Samen sluiten ze de invariant in beide richtingen, ongeacht welke rol of
--- welk pad de schrijfactie doet. Racegevoelig is dit niet: beide draaien
--- BEFORE, in dezelfde transactie als de schrijfactie zelf.
+-- welk pad de schrijfactie doet.
+--
+-- ── WAAROM EEN RIJVERGRENDELING NODIG IS ───────────────────────────────────
+--
+-- Twee BEFORE-triggers in dezelfde transactie zijn NIET vanzelf racevrij. Dat
+-- is atomiciteit, geen serialisatie. Onder READ COMMITTED leest een gewone
+-- SELECT uit de andere tabel alleen wat op dat moment ZICHTBAAR is, en dat
+-- laat klassieke write skew toe:
+--
+--   T1  INSERT oproep 2026-06-15   -> kindtrigger leest periode 04-01..09-30,
+--                                     keurt goed, transactie blijft open
+--   T2  UPDATE boekjaar start=07-01 -> oudertrigger telt oproepen buiten de
+--                                     nieuwe periode; T1 is nog niet gecommit
+--                                     en dus ONZICHTBAAR, telling 0, goedgekeurd
+--   beide COMMIT                    -> een oproep van 15 juni in een boekjaar
+--                                     dat op 1 juli begint
+--
+-- Dit is geen theoretisch scenario: de concurrentiesuite reproduceerde het
+-- vijf van de vijf keer, in beide volgordes, met een aantoonbaar geschonden
+-- invariant achteraf.
+--
+-- De oplossing is EEN CONSISTENTE LOCKVOLGORDE per `fiscal_year_id`: elk pad
+-- vergrendelt eerst de boekjaarrij, en pas daarna wordt er geteld of
+-- geschreven.
+--
+--   kindkant   `SELECT ... FOR SHARE` op de boekjaarrij;
+--   ouderkant  `SELECT ... FOR NO KEY UPDATE` op de eigen rij, EXPLICIET in de
+--              trigger, want een BEFORE UPDATE-trigger draait vóórdat de
+--              UPDATE zelf de rij vergrendelt. Zonder die expliciete lock telt
+--              de oudertrigger nog steeds tegen een oude snapshot.
+--
+-- FOR SHARE is de zwakste modus die met FOR NO KEY UPDATE conflicteert; FOR
+-- KEY SHARE zou te zwak zijn. Twee gelijktijdige oproepen op hetzelfde
+-- boekjaar houden elkaar dus NIET op (FOR SHARE conflicteert niet met zichzelf),
+-- en verschillende boekjaren raken elkaar helemaal niet: de lock is per rij,
+-- niet per tabel.
+--
+-- Na het wachten krijgt het volgende statement in de triggerfunctie een VERSE
+-- snapshot, zodat de zojuist gecommitte tegenpartij wel degelijk wordt gezien.
+-- De lockvolgorde is overal dezelfde (eerst `fiscal_years`, dan
+-- `charge_calls`), dus er ontstaat geen deadlock door tegengestelde volgorde.
 --
 -- ── WAT DEZE MIGRATIE UITDRUKKELIJK NIET DOET ──────────────────────────────
 --
@@ -66,10 +105,21 @@ DO $preflight$
 DECLARE
   v_aantal bigint;
 BEGIN
+  -- LEFT JOIN en expliciete NULL-takken, want NULL is hier geen "onbekend maar
+  -- waarschijnlijk goed": `NULL < date` is NULL, en een IF op NULL wordt niet
+  -- genomen. Zonder deze takken zou een rij zonder datum of zonder leesbaar
+  -- boekjaar stil door de preflight glippen en daarna nooit meer worden
+  -- getoetst. In dit schema hoort geen van deze gevallen voor te komen; dat is
+  -- juist de reden om ze te tellen in plaats van te negeren.
   SELECT count(*) INTO v_aantal
     FROM public.charge_calls cc
-    JOIN public.fiscal_years fy ON fy.id = cc.fiscal_year_id
-   WHERE cc.call_date < fy.start_date
+    LEFT JOIN public.fiscal_years fy ON fy.id = cc.fiscal_year_id
+   WHERE cc.fiscal_year_id IS NULL
+      OR fy.id             IS NULL
+      OR cc.call_date      IS NULL
+      OR fy.start_date     IS NULL
+      OR fy.end_date       IS NULL
+      OR cc.call_date < fy.start_date
       OR cc.call_date > fy.end_date;
 
   IF v_aantal > 0 THEN
@@ -96,16 +146,32 @@ DECLARE
   v_start date;
   v_einde date;
 BEGIN
+  -- FOR SHARE vergrendelt de boekjaarrij. Twee dingen tegelijk: een
+  -- gelijktijdige periodewijziging moet wachten tot deze transactie klaar is,
+  -- en als die wijziging er al was, volgt deze SELECT de update-keten en leest
+  -- hij de NIEUWE grenzen in plaats van de verouderde.
   SELECT fy.start_date, fy.end_date
     INTO v_start, v_einde
     FROM public.fiscal_years fy
-   WHERE fy.id = NEW.fiscal_year_id;
+   WHERE fy.id = NEW.fiscal_year_id
+     FOR SHARE;
 
   -- Geen boekjaar gevonden betekent dat we de grenzen niet kennen. De FK
   -- hoort dat al onmogelijk te maken; komt het toch voor, dan weigeren we.
   IF NOT FOUND THEN
     RAISE EXCEPTION
       'ALLOC_CALL_DATE_OUTSIDE_FY: boekjaar van de lastenoproep is niet leesbaar'
+      USING ERRCODE = '23514';
+  END IF;
+
+  -- NULL is hier geen geldige toestand. `NULL < date` levert NULL op, en een
+  -- IF op NULL wordt NIET genomen: zonder deze tak zou een oproep zonder datum
+  -- of een boekjaar zonder grenzen de invariant stil passeren. Geen van de drie
+  -- kolommen hoort NULL te zijn, maar de keten legt dat nergens vast (m1-m5
+  -- zijn lege plaatshouders), dus wordt het hier fail-closed afgehandeld.
+  IF NEW.call_date IS NULL OR v_start IS NULL OR v_einde IS NULL THEN
+    RAISE EXCEPTION
+      'ALLOC_CALL_DATE_OUTSIDE_FY: oproepdatum of boekjaarperiode ontbreekt'
       USING ERRCODE = '23514';
   END IF;
 
@@ -152,10 +218,29 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- EXPLICIETE rijvergrendeling, vóór de telling. Een BEFORE UPDATE-trigger
+  -- draait voordat de UPDATE zelf de rij vergrendelt; zonder deze regel telt
+  -- de trigger tegen een snapshot van vóór een gelijktijdige INSERT en glipt
+  -- die er alsnog doorheen. FOR NO KEY UPDATE is dezelfde modus die de UPDATE
+  -- straks toch neemt, dus dit is geen zwaardere lock - alleen een eerdere.
+  PERFORM 1 FROM public.fiscal_years fy WHERE fy.id = OLD.id FOR NO KEY UPDATE;
+
+  -- Dit statement krijgt een VERSE snapshot, dus een tegenpartij die tijdens
+  -- het wachten commit, telt hier wel mee.
+  IF NEW.start_date IS NULL OR NEW.end_date IS NULL THEN
+    RAISE EXCEPTION
+      'ALLOC_CALL_DATE_OUTSIDE_FY: een boekjaar zonder begin- of einddatum kan geen lastenoproepen omvatten'
+      USING ERRCODE = '23514';
+  END IF;
+
+  -- Ook hier telt een ontbrekende datum als schending; zie de toelichting in
+  -- de preflight.
   SELECT count(*) INTO v_aantal
     FROM public.charge_calls cc
    WHERE cc.fiscal_year_id = OLD.id
-     AND (cc.call_date < NEW.start_date OR cc.call_date > NEW.end_date);
+     AND (cc.call_date IS NULL
+          OR cc.call_date < NEW.start_date
+          OR cc.call_date > NEW.end_date);
 
   IF v_aantal > 0 THEN
     RAISE EXCEPTION
@@ -185,9 +270,42 @@ COMMENT ON FUNCTION public.fn_guard_fy_period_covers_calls() IS
 -- invariant actief. Een stil half toegepaste migratie is hier het gevaar.
 DO $postcheck$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trig_01_cc_date_in_fy')
-  OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trig_01_fy_period_covers_calls') THEN
-    RAISE EXCEPTION 'M31_POSTCHECK_FAILED: niet beide triggers zijn aangemaakt'
+  -- Niet alleen de NAAM: een trigger met de juiste naam op de verkeerde tabel,
+  -- of met een ontbrekende functie erachter, zou de invariant niet afdwingen.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_proc p  ON p.oid = t.tgfoid
+     WHERE t.tgname = 'trig_01_cc_date_in_fy'
+       AND c.oid = 'public.charge_calls'::regclass
+       AND p.proname = 'fn_guard_cc_date_in_fy'
+       AND NOT t.tgisinternal
+  ) THEN
+    RAISE EXCEPTION 'M31_POSTCHECK_FAILED: kindtrigger ontbreekt of staat op de verkeerde tabel'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_proc p  ON p.oid = t.tgfoid
+     WHERE t.tgname = 'trig_01_fy_period_covers_calls'
+       AND c.oid = 'public.fiscal_years'::regclass
+       AND p.proname = 'fn_guard_fy_period_covers_calls'
+       AND NOT t.tgisinternal
+  ) THEN
+    RAISE EXCEPTION 'M31_POSTCHECK_FAILED: oudertrigger ontbreekt of staat op de verkeerde tabel'
+      USING ERRCODE = '23514';
+  END IF;
+
+  -- En de REVOKE moet werkelijk effect hebben gehad. Een triggerfunctie die
+  -- rechtstreeks aanroepbaar is voor `anon` of `authenticated` zou een
+  -- zelfstandig privilegepad zijn naast de trigger.
+  IF has_function_privilege('anon',          'public.fn_guard_cc_date_in_fy()', 'EXECUTE')
+  OR has_function_privilege('authenticated', 'public.fn_guard_cc_date_in_fy()', 'EXECUTE')
+  OR has_function_privilege('anon',          'public.fn_guard_fy_period_covers_calls()', 'EXECUTE')
+  OR has_function_privilege('authenticated', 'public.fn_guard_fy_period_covers_calls()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'M31_POSTCHECK_FAILED: een triggerfunctie is rechtstreeks aanroepbaar'
       USING ERRCODE = '23514';
   END IF;
 END

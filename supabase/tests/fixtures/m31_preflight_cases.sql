@@ -58,3 +58,23 @@ BEGIN
   PERFORM public.m31_oproep('55555555-0000-0000-0000-0000000000f4', '2026-09-30'); -- exact op de bovengrens
   PERFORM public.m31_oproep('55555555-0000-0000-0000-0000000000f5', '2026-06-15'); -- ertussenin
 END $$;
+
+-- GEVAL 3 — bestaande rij ZONDER oproepdatum. m31 MOET afbreken.
+-- `NULL < date` is NULL, dus een preflight zonder expliciete NULL-tak zou deze
+-- rij niet tellen en hem daarna nooit meer toetsen.
+CREATE OR REPLACE FUNCTION public.m31_preflight_case_3_null_datum()
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM public.m31_preflight_basis();
+  PERFORM public.m31_oproep('55555555-0000-0000-0000-0000000000f6', '2026-06-15'); -- geldig
+  ALTER TABLE public.charge_calls ALTER COLUMN call_date DROP NOT NULL;
+  INSERT INTO public.charge_calls
+    (id, organization_id, building_id, fiscal_year_id, type, total_amount, call_date,
+     alloc_method, alloc_scope, alloc_weight_source, alloc_total_cents,
+     alloc_denominator, alloc_unit_count, alloc_remainder_cents, alloc_tie_breaker, alloc_algo_version)
+  VALUES ('55555555-0000-0000-0000-0000000000f7', '22222222-0000-0000-0000-0000000000f1',
+          '33333333-0000-0000-0000-0000000000f1', '44444444-0000-0000-0000-0000000000f1',
+          'regulier', 1200.00, NULL,
+          'tantieme', 'whole_building', 'unit_tantiemes', 120000, 100, 2, 0,
+          'remainder_desc_unit_id_asc', 1);
+END $$;

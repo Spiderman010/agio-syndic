@@ -53,6 +53,8 @@ export const VERWACHTE_LABELS = Object.freeze([
   'R1', 'R2', 'R3', 'R4',
   'S1', 'S2', 'S3',
   'G1', 'G2',
+  'N1', 'N2',
+  'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7',
 ]);
 
 /**
@@ -212,6 +214,24 @@ SELECT
       }
     }
 
+    // ── preflight negatief: ontbrekende datum ──────────────────────────────
+    {
+      const db = verseDb('m31_pf3', { metCases: true });
+      let r = psql(db, 'SELECT public.m31_preflight_case_3_null_datum();');
+      if (r.code !== 0) {
+        noteer('preflight 3: bestaande oproep zonder datum', false, 'fixture kon niet worden geladen');
+      } else {
+        r = psql(db, `BEGIN;\n${lees(PAD.migratie)}\nCOMMIT;`);
+        const brakAf = r.code !== 0;
+        const juisteReden = /M31_PREFLIGHT_FAILED/.test(r.uit);
+        const resten = tel(db, M31_RESTEN);
+        const ok = brakAf && juisteReden && resten === 0;
+        noteer('preflight 3: bestaande oproep zonder datum', ok,
+          ok ? 'NULL telt als schending, migratie geweigerd, 0 m31-objecten'
+             : `afgebroken=${brakAf} reden=${juisteReden} resten=${resten}`);
+      }
+    }
+
     // ── preflight positief ─────────────────────────────────────────────────
     {
       const db = verseDb('m31_pf2', { metCases: true });
@@ -235,7 +255,7 @@ SELECT
     console.error(`\nGEBLOKKEERD: ${e.message}`);
     exitcode = 2;
   } finally {
-    for (const db of ['m31_main', 'm31_pf1', 'm31_pf2']) {
+    for (const db of ['m31_main', 'm31_pf1', 'm31_pf2', 'm31_pf3']) {
       psql('postgres', `DROP DATABASE IF EXISTS ${db};`, { stopOnError: false });
     }
     const gefaald = resultaten.filter((r) => !r.ok).length;

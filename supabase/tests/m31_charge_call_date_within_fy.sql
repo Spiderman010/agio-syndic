@@ -199,6 +199,81 @@ SELECT pg_temp.noteer('G2',
        NOT has_function_privilege('anon', 'public.fn_guard_fy_period_covers_calls()', 'EXECUTE'),
        'anon mag de boekjaartriggerfunctie niet uitvoeren');
 
+-- ════════════════════════════════════ NULL-semantiek (fail-closed) ═════════
+-- De keten legt nergens vast dat call_date NOT NULL is (m1-m5 zijn lege
+-- plaatshouders), dus de trigger moet NULL zelf afhandelen. `NULL < date` is
+-- NULL en een IF daarop wordt niet genomen: zonder expliciete tak zou zo'n rij
+-- de invariant stil passeren.
+ALTER TABLE public.charge_calls ALTER COLUMN call_date DROP NOT NULL;
+SELECT pg_temp.noteer('N1', pg_temp.probeer(
+         $$INSERT INTO public.charge_calls
+             (id, organization_id, building_id, fiscal_year_id, type, total_amount, call_date,
+              alloc_method, alloc_scope, alloc_weight_source, alloc_total_cents,
+              alloc_denominator, alloc_unit_count, alloc_remainder_cents, alloc_tie_breaker, alloc_algo_version)
+           VALUES ('55555555-0000-0000-0000-00000000000f', '22222222-0000-0000-0000-000000000001',
+                   '33333333-0000-0000-0000-000000000001', '44444444-0000-0000-0000-000000000001',
+                   'regulier', 1200.00, NULL,
+                   'tantieme', 'whole_building', 'unit_tantiemes', 120000, 100, 2, 0,
+                   'remainder_desc_unit_id_asc', 1)$$) = 'ALLOC_CALL_DATE_OUTSIDE_FY',
+       'een oproep zonder datum wordt geweigerd in plaats van stil toegelaten');
+ALTER TABLE public.charge_calls ALTER COLUMN call_date SET NOT NULL;
+
+ALTER TABLE public.fiscal_years ALTER COLUMN end_date DROP NOT NULL;
+SELECT pg_temp.noteer('N2', pg_temp.probeer(
+         $$UPDATE public.fiscal_years SET end_date = NULL
+            WHERE id = '44444444-0000-0000-0000-000000000001'$$) = 'ALLOC_CALL_DATE_OUTSIDE_FY',
+       'een boekjaar zonder einddatum kan geen oproepen omvatten');
+ALTER TABLE public.fiscal_years ALTER COLUMN end_date SET NOT NULL;
+
+-- ══════════════════════════════════════ security van de constructie ════════
+SELECT pg_temp.noteer('D1',
+       (SELECT count(*) = 2 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public'
+           AND p.proname IN ('fn_guard_cc_date_in_fy','fn_guard_fy_period_covers_calls')
+           AND p.proconfig::text LIKE '%search_path%'),
+       'beide functies hebben een vastgezette search_path');
+
+SELECT pg_temp.noteer('D2',
+       (SELECT bool_and(pg_get_functiondef(p.oid) NOT LIKE '%EXECUTE %'
+                    AND pg_get_functiondef(p.oid) NOT LIKE '%format(%'
+                    AND p.pronargs = 0)
+          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public'
+           AND p.proname IN ('fn_guard_cc_date_in_fy','fn_guard_fy_period_covers_calls')),
+       'geen dynamische SQL en geen door de gebruiker aanstuurbare objectnaam');
+
+SELECT pg_temp.noteer('D3',
+       NOT has_function_privilege('service_role', 'public.fn_guard_cc_date_in_fy()', 'EXECUTE')
+   AND NOT has_function_privilege('service_role', 'public.fn_guard_fy_period_covers_calls()', 'EXECUTE'),
+       'ook service_role heeft geen rechtstreeks aanroeppad');
+
+-- De triggers werken ONDANKS die revoke: S2/S3 hierboven bewijzen dat al onder
+-- service_role. Deze test pint de volgorde vast tegenover de trig_00_*-triggers.
+SELECT pg_temp.noteer('D4',
+       (SELECT array_agg(tgname ORDER BY tgname) =
+               ARRAY['trig_00_cc_closed_fy','trig_00_cc_immutable','trig_01_cc_date_in_fy']::name[]
+          FROM pg_trigger WHERE tgrelid = 'public.charge_calls'::regclass AND NOT tgisinternal),
+       'de nieuwe trigger vuurt NA de bestaande trig_00_-poorten');
+
+SELECT pg_temp.noteer('D5',
+       (SELECT count(*) = 3 FROM pg_policies
+         WHERE schemaname = 'public' AND tablename = 'charge_calls')
+   AND (SELECT qual = 'false' FROM pg_policies
+         WHERE schemaname = 'public' AND tablename = 'charge_calls' AND policyname = 'charge_calls_update'),
+       'RLS en de bestaande DML-poorten zijn niet verruimd');
+
+-- Een boekjaar verwijderen cascadeert naar zijn oproepen; de nieuwe triggers
+-- staan op INSERT/UPDATE en mogen daar geen nieuwe blokkade introduceren.
+SELECT pg_temp.noteer('D6', pg_temp.probeer(
+         $$DELETE FROM public.fiscal_years WHERE id = '44444444-0000-0000-0000-000000000004'$$) = 'OK',
+       'een boekjaar verwijderen blijft mogelijk, m31 voegt daar niets toe');
+
+SELECT pg_temp.noteer('D7',
+       (SELECT count(*) = 0 FROM public.charge_calls cc
+          LEFT JOIN public.fiscal_years fy ON fy.id = cc.fiscal_year_id
+         WHERE fy.id IS NULL OR cc.call_date < fy.start_date OR cc.call_date > fy.end_date),
+       'na alle bewerkingen ligt geen enkele oproep buiten zijn boekjaar');
+
 -- ═══════════════════════════════════════════════ rapport ═══════════════════
 DO $rapport$
 DECLARE

@@ -389,3 +389,56 @@ describe("UI — de aanmaakactie is achter schrijfrecht gezet", () => {
     expect(pagina).not.toContain("Nouvel appel de charges");
   });
 });
+
+
+// ── m31: de databasecode bereikt de gebruiker als begrijpelijke tekst ───────
+
+describe("M31 — ALLOC_CALL_DATE_OUTSIDE_FY door de foutvertaling", () => {
+  /**
+   * Een REALISTISCH Supabase/PostgREST-foutobject voor een RAISE EXCEPTION uit
+   * een RPC. De app-check is UX; als een race of een omzeiling de trigger toch
+   * laat aanslaan, moet de gebruiker dezelfde begrijpelijke melding krijgen en
+   * niet de ruwe code.
+   */
+  beforeEach(() => {
+    zetBoekjaar();
+    zetRegel();
+  });
+
+  const POSTGREST_FOUT = {
+    message:
+      "ALLOC_CALL_DATE_OUTSIDE_FY: oproepdatum valt buiten de periode van het boekjaar",
+    code: "23514",
+  };
+
+  test("M31a — het foutobject van de RPC mapt op de vertaalsleutel", async () => {
+    state.rpcResult = { error: POSTGREST_FOUT };
+    const uit = await createChargeCall(geldig());
+    expect(uit?.error).toBe("callDateOutsideFy");
+    // Nooit de ruwe code of de databasetekst.
+    expect(uit?.error).not.toContain("ALLOC_");
+    expect(uit?.error).not.toContain("23514");
+  });
+
+  test("M31b — de NULL-variant van dezelfde code krijgt dezelfde melding", async () => {
+    // m31 kent twee meldingen onder één code; beide moeten landen op dezelfde
+    // sleutel, want de gebruiker hoeft dat onderscheid niet te kennen.
+    state.rpcResult = {
+      error: { ...POSTGREST_FOUT, message: "ALLOC_CALL_DATE_OUTSIDE_FY: oproepdatum of boekjaarperiode ontbreekt" },
+    };
+    const uit = await createChargeCall(geldig());
+    expect(uit?.error).toBe("callDateOutsideFy");
+  });
+
+  test("M31c — de oudertrigger-melding met een aantal valt op dezelfde sleutel", async () => {
+    state.rpcResult = {
+      error: {
+        ...POSTGREST_FOUT,
+        message:
+          "ALLOC_CALL_DATE_OUTSIDE_FY: de nieuwe periode laat 2 vastgelegde lastenoproep(en) buiten het boekjaar vallen",
+      },
+    };
+    const uit = await createChargeCall(geldig());
+    expect(uit?.error).toBe("callDateOutsideFy");
+  });
+});
