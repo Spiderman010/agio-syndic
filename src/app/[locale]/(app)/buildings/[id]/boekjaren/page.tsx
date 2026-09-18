@@ -1,3 +1,4 @@
+import { ArrowRight } from "lucide-react";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Link } from "@/navigation";
@@ -58,24 +59,40 @@ export default async function BoekjarenPage({
             {fiscalYears.map((fy) => {
               const totaal = callSums[fy.id] ?? 0;
               return (
-                <Link key={fy.id} href={`/buildings/${id}/boekjaren/${fy.id}`} style={{ textDecoration: "none" }}>
-                  <div className="card" style={{ padding: "1rem 1.2rem", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
-                    <div>
-                      <strong style={{ fontSize: "1.05rem" }}>{t("title")} {fy.year}</strong>
-                      <div className="muted" style={{ fontSize: "0.8rem", marginTop: 2 }}>
+                <Link key={fy.id} href={`/buildings/${id}/boekjaren/${fy.id}`} className="block no-underline">
+                  {/* `flex-wrap` met `justify-between`: op 360px past jaar +
+                      periode + bedrag + status + pijl niet op één regel, en
+                      zonder wrap schoof de rechterhelft de pagina uit. Nu zakt
+                      die helft naar een tweede regel — hetzelfde patroon als in
+                      `components/ui/Card.tsx`. `min-w-0` laat de linkerhelft
+                      krimpen in plaats van te duwen. */}
+                  <div className="card flex cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-4 sm:px-5">
+                    <div className="min-w-0">
+                      <strong className="text-[1.05rem]">{t("title")} {fy.year}</strong>
+                      {/* De periode is een bereik van twee ISO-datums. In een
+                          RTL-alinea zijn dat twee losse cijferreeksen die het
+                          bidi-algoritme van rechts naar links ordent: begin en
+                          einde wisselen dan van plaats. `dir="ltr"` houdt het
+                          bereik leesbaar; `text-start` laat het blok zelf wel
+                          met de leesrichting meelopen. */}
+                      <div className="muted mt-0.5 text-[0.8rem] text-start" dir="ltr">
                         {fy.start_date} → {fy.end_date}
                       </div>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
                       {totaal > 0 && (
-                        <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>
+                        <span className="text-[0.9rem] font-semibold">
                           {totaal.toLocaleString("fr-MA", { minimumFractionDigits: 2 })} {t("called")}
                         </span>
                       )}
                       <span className={`badge ${fy.status === "open" ? "badge-klein" : "badge-midden"}`}>
                         {fy.status === "open" ? t("status.open") : t("status.closed")}
                       </span>
-                      <span className="muted" style={{ fontSize: "0.85rem" }}>→</span>
+                      {/* Dezelfde detailpijl als in de broodkruimels en op het
+                          dashboard: een logisch icoon dat in RTL meedraait. De
+                          losse "→" deed dat niet en wees in het Arabisch de
+                          verkeerde kant op. */}
+                      <ArrowRight className="size-4 shrink-0 text-ink-faint rtl:rotate-180" aria-hidden="true" />
                     </div>
                   </div>
                 </Link>

@@ -38,12 +38,18 @@ export default function BoekjaarForm({
   const jaarStr = isNaN(jaar) ? String(huidigJaar) : String(jaar);
 
   return (
-    <form action={formAction} className="card" style={{ padding: "1.2rem 1.4rem", marginTop: "1.2rem" }}>
+    <form action={formAction} className="card mt-5 px-4 py-5 sm:px-6">
       <input type="hidden" name="building_id" value={buildingId} />
-      <h2 style={{ fontSize: "1rem", margin: "0 0 1rem" }}>{t("newBoekjaar")}</h2>
+      <h2 className="m-0 mb-4 text-base font-semibold">{t("newBoekjaar")}</h2>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.8rem" }}>
-        <div>
+      {/* Eén kolom op mobiel, pas vanaf `sm` drie. Wat hier telt is de nul in
+          Tailwinds `grid-cols-3` (`repeat(3, minmax(0,1fr))`): het kale
+          `1fr` van hiervoor gaf elke track de MIN-CONTENT-breedte van een
+          datumveld als ondergrens, en drie van die ondergrenzen samen zijn
+          breder dan 360px — daar kwam de horizontale overflow vandaan.
+          `min-w-0` per veld houdt diezelfde regel binnen de kolom staan. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="min-w-0">
           <label className="label" htmlFor="year">{t("year")}</label>
           <input
             className="input"
@@ -65,7 +71,7 @@ export default function BoekjaarForm({
             </div>
           )}
         </div>
-        <div>
+        <div className="min-w-0">
           <label className="label" htmlFor="start_date">{t("startDate")}</label>
           <input
             key={`start-${jaarStr}`}
@@ -77,7 +83,7 @@ export default function BoekjaarForm({
             required
           />
         </div>
-        <div>
+        <div className="min-w-0">
           <label className="label" htmlFor="end_date">{t("endDate")}</label>
           <input
             key={`end-${jaarStr}`}
@@ -92,8 +98,7 @@ export default function BoekjaarForm({
       </div>
 
       <button
-        className="btn btn-primary"
-        style={{ marginTop: "1rem" }}
+        className="btn btn-primary mt-4"
         disabled={pending || jaarAlBestaat}
       >
         {pending ? "…" : t("createBtn")}
