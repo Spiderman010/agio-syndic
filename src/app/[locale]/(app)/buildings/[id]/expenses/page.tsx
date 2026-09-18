@@ -7,7 +7,7 @@ import ReceiptLink from "@/components/ReceiptLink";
 import ActionForm from "@/components/ActionForm";
 import ExpenseReversalActions from "@/components/ExpenseReversalActions";
 import { canReverse } from "@/lib/roles";
-import { correctionOf, fetchReversalIndex, netTotal, reversalOf } from "@/lib/reversal";
+import { correctionOf, fetchReversalIndexResult, netTotal, reversalOf } from "@/lib/reversal";
 import type { Building, FiscalYear } from "@/lib/types";
 
 type CategoryRow = { id: string; name: string; default_account_id: string | null };
@@ -74,11 +74,24 @@ export default async function ExpensesPage({
   // ---- Financial Reversal Engine -------------------------------------------
   // De storno's die bij deze uitgaven horen. Hiermee wordt de LIJST gemarkeerd
   // (klasse A: alles blijft zichtbaar) en het TOTAAL genet (klasse B).
-  const reversals = await fetchReversalIndex(
+  //
+  // FAIL-CLOSED. Dit scherm gebruikt bewust de STRIKTE variant. De fail-open
+  // variant gaf bij een leesfout een lege index terug, en een lege index is
+  // hier niet onschuldig: `netTotal()` telt dan niets af en levert precies het
+  // BRUTO bedrag op, terwijl het label en de hint dat getal als NETTO
+  // presenteren. Een correctie van 1200 naar 900 werd zo als 2100 getoond op de
+  // plek die zegt "dit is de stand". Tegelijk verdween de storno-markering uit
+  // de lijst en verscheen er een stornoknop bij een rij die de database zeker
+  // weigert.
+  //
+  // Nul uitgaven is GEEN fout: er valt dan niets op te halen en de lege index
+  // is de juiste, betrouwbare uitkomst.
+  const { index: reversals, error: reversalError } = await fetchReversalIndexResult(
     supabase,
     "expense",
     expenses.map((e) => e.id),
   );
+  const reversalsOk = !reversalError;
 
   // Welke boekjaren zijn afgesloten? Bepaalt of storneren een owner/admin-
   // ingreep is; de database beslist definitief in fn_reversal_authorize.
@@ -93,8 +106,17 @@ export default async function ExpensesPage({
   // NETTO totaal: een gestorneerde uitgave telt niet mee, de vervangende wel.
   // Een correctie van 1200 naar 900 levert dus 900 en niet 2100. De lijst
   // hieronder toont nog steeds alle rijen.
-  const totalAmount = netTotal(expenses, reversals);
-  const heeftStorno = expenses.some((e) => reversals.bySource.has(e.id));
+  //
+  // Beide grootheden worden alleen berekend wanneer de stornostatus vaststaat.
+  // Is dat niet zo, dan wordt er geen bedrag getoond: liever geen getal dan een
+  // bruto bedrag onder een netto label.
+  const totalAmount = reversalsOk ? netTotal(expenses, reversals) : null;
+  const heeftStorno = reversalsOk && expenses.some((e) => reversals.bySource.has(e.id));
+
+  // De lijst draagt de stornomarkering en de stornoknop. Zonder betrouwbare
+  // index zou een gestorneerde uitgave als actief verschijnen, dus dan wordt de
+  // lijst onderdrukt in plaats van half correct getoond.
+  const zichtbareUitgaven = reversalsOk ? expenses : [];
 
   return (
     <>
@@ -105,9 +127,11 @@ export default async function ExpensesPage({
             <p className="muted mt-1 mb-0 text-[0.9rem]">{b.name}</p>
           </div>
           {/* Ook tonen bij 0: na een storno IS het nettototaal legitiem nul, en
-              een verdwijnend totaal zou als "niet berekend" worden gelezen. */}
-          {expenses.length > 0 && (
-            <span style={{ fontWeight: 700, fontSize: "1rem" }} title={heeftStorno ? tr("netHint") : undefined}>
+              een verdwijnend totaal zou als "niet berekend" worden gelezen.
+              Bij een onbetrouwbare stornostatus verschijnt er juist GEEN getal;
+              de melding hieronder legt uit waarom. */}
+          {reversalsOk && totalAmount !== null && expenses.length > 0 && (
+            <span style={{ fontWeight: 700, fontSize: "1rem" }} title={heeftStorno ? tr("netHint") : undefined} data-testid="expenses-total">
               {fmt(totalAmount)} MAD {t("title").toLowerCase()}
               {heeftStorno && (
                 <span className="muted" style={{ fontWeight: 500, fontSize: "0.78rem", marginInlineStart: 6 }}>
@@ -122,10 +146,27 @@ export default async function ExpensesPage({
           {/* Expenses list */}
           <div>
             <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>
-              {t("title")} ({expenses.length})
+              {t("title")}
+              {reversalsOk && <> ({expenses.length})</>}
             </h2>
 
-            {expenses.length === 0 && (
+            {/* Eén melding in mensentaal. Nooit de databasefout, de viewnaam of
+                een technische code: die horen in de serverlogs, niet op een
+                financieel scherm. */}
+            {!reversalsOk && (
+              <div
+                className="card"
+                style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                role="alert"
+                data-testid="reversals-error"
+              >
+                {tr("errors.expenseStatusUnavailable")}
+              </div>
+            )}
+
+            {/* De lege toestand is een BEWERING: "er zijn geen uitgaven". Die
+                mag alleen verschijnen wanneer de stornostatus vaststaat. */}
+            {reversalsOk && expenses.length === 0 && (
               <div className="card" style={{ padding: "2rem", textAlign: "center" }}>
                 <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>🧾</div>
                 <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>{t("noExpenses")}</div>
@@ -133,7 +174,7 @@ export default async function ExpensesPage({
             )}
 
             <div style={{ display: "grid", gap: "0.6rem" }}>
-              {expenses.map((e) => {
+              {zichtbareUitgaven.map((e) => {
                 const rawCat = e.expense_categories as { name: string } | { name: string }[] | null;
                 const catName = Array.isArray(rawCat) ? (rawCat[0]?.name ?? null) : rawCat?.name ?? null;
 
@@ -147,6 +188,7 @@ export default async function ExpensesPage({
                 // en gejournaliseerd (een uitgave zonder boekjaar heeft geen
                 // journaalpost en wordt gewoon verwijderd, niet gestorneerd).
                 const mayReverse =
+                  reversalsOk &&
                   reversal === null &&
                   e.fiscal_year_id !== null &&
                   canReverse(role, isClosed);

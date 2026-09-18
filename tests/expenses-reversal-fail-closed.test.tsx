@@ -1,0 +1,303 @@
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { render, screen } from "@testing-library/react";
+
+/**
+ * FAIL-CLOSED op het uitgavenscherm — de reversal-index.
+ *
+ * DE FOUT DIE HIER WORDT AFGEDEKT
+ *
+ * De pagina gebruikte `fetchReversalIndex()`, de fail-open variant: bij een
+ * leesfout kreeg zij een LEGE index in plaats van een fout. Een lege index is
+ * hier niet onschuldig. `netTotal()` telt dan niets af en levert exact het
+ * BRUTO bedrag, terwijl het label en de hint dat getal als NETTO presenteren.
+ * Een correctie van 1200 naar 900 verscheen daardoor als 2100 op precies de
+ * plek die zegt "dit is de stand".
+ *
+ * Tegelijk verdween de storno-markering uit de lijst, zag een gestorneerde
+ * uitgave er actief uit, en kwam er een stornoknop bij een rij die de database
+ * zeker weigert.
+ *
+ * Alle drie de toestanden worden los getoetst:
+ *
+ *   geslaagd en leeg      betrouwbaar leeg  -> lege toestand mag verschijnen
+ *   geslaagd met rijen    markering zichtbaar, totaal netto
+ *   mislukt               niets bewezen     -> geen bedrag, geen rijen, melding
+ */
+
+const BLD = "11111111-1111-1111-1111-111111111111";
+
+type Resultaat = { data: unknown; error: unknown };
+type ReversalRij = import("@/lib/reversal").ReversalViewRow;
+
+const state: {
+  rol: string;
+  tabellen: Record<string, Resultaat>;
+  reversals: { rijen: ReversalRij[]; error: unknown };
+} = { rol: "manager", tabellen: {}, reversals: { rijen: [], error: null } };
+
+/** Eén uitgave zoals de pagina hem uit de database krijgt. */
+function uitgave(id: string, amount: number, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    supplier: "Sté Ménage SARL",
+    description: null,
+    amount,
+    expense_date: "2026-05-12",
+    receipt_path: null,
+    receipt_url: null,
+    fiscal_year_id: "fy-1",
+    category_id: null,
+    expense_categories: null,
+    ...over,
+  };
+}
+
+/** Eén rij uit `v_financial_reversals`: deze uitgave is gecorrigeerd. */
+function correctie(over: Partial<ReversalRij> = {}): ReversalRij {
+  return {
+    reversal_id: "rev-1",
+    source_type: "expense",
+    source_id: "exp-1",
+    correction_source_id: "exp-2",
+    reason: "Verkeerd bedrag overgenomen uit de factuur.",
+    effective_date: "2026-05-20",
+    is_correctie: true,
+    is_correctie_vorig_boekjaar: false,
+    ...over,
+  };
+}
+
+function standaardTabellen(): Record<string, Resultaat> {
+  return {
+    buildings: { data: { id: BLD, name: "Résidence Atlas" }, error: null },
+    expense_categories: { data: [], error: null },
+    expenses: { data: [], error: null },
+    fiscal_years: { data: [{ id: "fy-1", year: 2026, status: "open" }], error: null },
+  };
+}
+
+/** Chainable én awaitable: de pagina gebruikt beide vormen. */
+function keten(resultaat: Resultaat) {
+  const c: Record<string, unknown> = {};
+  const zelf = () => c;
+  Object.assign(c, {
+    select: zelf,
+    eq: zelf,
+    in: zelf,
+    or: zelf,
+    order: zelf,
+    limit: zelf,
+    maybeSingle: async () => resultaat,
+    then: (res: (v: Resultaat) => unknown, rej?: (e: unknown) => unknown) =>
+      Promise.resolve(resultaat).then(res, rej),
+  });
+  return c;
+}
+
+vi.mock("next/navigation", () => ({
+  notFound: () => {
+    throw new Error("NOT_FOUND");
+  },
+}));
+
+vi.mock("@/lib/org", () => ({
+  requireOrg: async () => ({ role: state.rol, org: { id: "org-1", name: "Org" } }),
+}));
+
+vi.mock("next-intl/server", () => ({
+  getTranslations: async (namespace?: string) => (key: string) =>
+    namespace ? `${namespace}.${key}` : key,
+  getLocale: async () => "fr",
+}));
+
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    from: (tabel: string) => keten(state.tabellen[tabel] ?? { data: [], error: null }),
+  }),
+}));
+
+/* De reversal-engine draait ECHT; alleen het ophalen is injecteerbaar. */
+vi.mock("@/lib/reversal", async (importOriginal) => {
+  const echt = await importOriginal<typeof import("@/lib/reversal")>();
+  return {
+    ...echt,
+    fetchReversalIndexResult: async () => {
+      const bron = state.reversals;
+      if (bron.error) return { index: echt.emptyReversalIndex(), error: bron.error };
+      return { index: echt.buildReversalIndex(bron.rijen), error: null };
+    },
+  };
+});
+
+vi.mock("@/components/ActionForm", () => ({
+  default: ({ children }: { children: React.ReactNode }) => <form>{children}</form>,
+}));
+
+vi.mock("@/components/ReceiptLink", () => ({ default: () => <span /> }));
+
+vi.mock("@/components/ExpenseReversalActions", () => ({
+  default: () => <div data-testid="expense-reversal" />,
+}));
+
+vi.mock("@/app/[locale]/(app)/buildings/[id]/expenses/actions", () => ({
+  createExpense: async () => undefined,
+  createExpenseCategory: async () => undefined,
+}));
+
+const { default: ExpensesPage } = await import(
+  "@/app/[locale]/(app)/buildings/[id]/expenses/page"
+);
+
+async function toonPagina() {
+  const element = await ExpensesPage({ params: Promise.resolve({ id: BLD }) });
+  return render(element);
+}
+
+/** Alle zichtbare tekst zonder spaties, zodat cijfergroepering niet stoort. */
+function cijfertekst() {
+  return (document.body.textContent ?? "").replace(/[\s\u00a0\u202f.]/g, "");
+}
+
+/**
+ * Alle zichtbare tekst zonder witruimte, MET de punten. Voor asserties op
+ * vertaalsleutels als `reversal.netLabel`, die zelf een punt bevatten.
+ */
+function platteTekst() {
+  return (document.body.textContent ?? "").replace(/[\s\u00a0\u202f]/g, "");
+}
+
+beforeEach(() => {
+  state.rol = "manager";
+  state.tabellen = standaardTabellen();
+  state.reversals = { rijen: [], error: null };
+  document.body.innerHTML = "";
+});
+
+describe("uitgavenscherm — betrouwbare stornostatus", () => {
+  it("R1 toont de lege toestand bij een geslaagde, lege query", async () => {
+    await toonPagina();
+    expect(screen.getByText("expenses.noExpenses")).toBeTruthy();
+    expect(screen.queryByTestId("reversals-error")).toBeNull();
+  });
+
+  it("R2 telt zonder storno's bruto en netto gelijk op, zonder nettolabel", async () => {
+    state.tabellen.expenses = { data: [uitgave("exp-1", 1200), uitgave("exp-3", 300)], error: null };
+    await toonPagina();
+    expect(screen.getByTestId("expenses-total")).toBeTruthy();
+    expect(cijfertekst()).toContain("1500,00MAD");
+    // Zonder storno's is er niets te netten, dus ook geen nettolabel.
+    expect(platteTekst()).not.toContain("reversal.netLabel");
+    expect(screen.queryByTestId("reversals-error")).toBeNull();
+  });
+
+  it("R3 toont bij een correctie het NETTO totaal en het nettolabel", async () => {
+    state.tabellen.expenses = { data: [uitgave("exp-1", 1200), uitgave("exp-2", 900)], error: null };
+    state.reversals = { rijen: [correctie()], error: null };
+    await toonPagina();
+    // 1200 is gestorneerd, 900 is de vervangende rij: netto 900, niet 2100.
+    expect(cijfertekst()).toContain("900,00MAD");
+    expect(cijfertekst()).not.toContain("2100,00");
+    // Het label staat tussen haakjes in de opmaak, dus op tekstinhoud toetsen.
+    expect(platteTekst()).toContain("reversal.netLabel");
+  });
+
+  it("R4 houdt de volledige lijst zichtbaar met markering (klasse A)", async () => {
+    state.tabellen.expenses = { data: [uitgave("exp-1", 1200), uitgave("exp-2", 900)], error: null };
+    state.reversals = { rijen: [correctie()], error: null };
+    await toonPagina();
+    expect(screen.getByText("reversal.corrected")).toBeTruthy();
+    expect(screen.getByText("reversal.isCorrection")).toBeTruthy();
+  });
+});
+
+describe("uitgavenscherm — de reversal-index faalt", () => {
+  const fout = { code: "42501", message: "permission denied for view v_financial_reversals" };
+
+  beforeEach(() => {
+    state.tabellen.expenses = { data: [uitgave("exp-1", 1200), uitgave("exp-2", 900)], error: null };
+    state.reversals = { rijen: [], error: fout };
+  });
+
+  it("F1 toont GEEN totaalbedrag", async () => {
+    await toonPagina();
+    expect(screen.queryByTestId("expenses-total")).toBeNull();
+  });
+
+  it("F2 toont nergens het brutobedrag als totaal", async () => {
+    await toonPagina();
+    // 1200 + 900 = 2100: precies het getal dat de fail-open variant opleverde.
+    expect(cijfertekst()).not.toContain("2100,00");
+  });
+
+  it("F3 toont een vertaalde melding met role=alert", async () => {
+    await toonPagina();
+    const melding = screen.getByTestId("reversals-error");
+    expect(melding.getAttribute("role")).toBe("alert");
+    expect(melding.textContent).toBe("reversal.errors.expenseStatusUnavailable");
+  });
+
+  it("F4 onderdrukt de uitgaverijen in plaats van ze half correct te tonen", async () => {
+    await toonPagina();
+    expect(screen.queryByText("Sté Ménage SARL")).toBeNull();
+  });
+
+  it("F5 toont GEEN lege toestand — dat zou een onwaarheid zijn", async () => {
+    await toonPagina();
+    expect(screen.queryByText("expenses.noExpenses")).toBeNull();
+  });
+
+  it("F6 biedt geen storno- of correctieactie aan", async () => {
+    await toonPagina();
+    expect(screen.queryByTestId("expense-reversal")).toBeNull();
+  });
+
+  it("F7 lekt geen databasefout, viewnaam of technische code", async () => {
+    await toonPagina();
+    const tekst = document.body.textContent ?? "";
+    for (const verboden of ["42501", "permission denied", "v_financial_reversals", "PGRST"]) {
+      expect(tekst).not.toContain(verboden);
+    }
+  });
+
+  it("F9 toont ook zonder uitgaven geen lege toestand zolang de status onbekend is", async () => {
+    // Productie bereikt dit niet: bij nul bron-id's doet de helper geen query
+    // en levert hij `error: null`. De poort blijft staan als bescherming tegen
+    // een toekomstige wijziging van die vroege terugkeer, en deze test houdt
+    // hem vast — zonder haar is de poort ongetoetst en dus stil te slopen.
+    state.tabellen.expenses = { data: [], error: null };
+    await toonPagina();
+    expect(screen.queryByText("expenses.noExpenses")).toBeNull();
+    expect(screen.getByTestId("reversals-error")).toBeTruthy();
+  });
+
+  it("F8 laat het aanmaakformulier staan — dat hangt niet van de storno's af", async () => {
+    await toonPagina();
+    // Op de knop toetsen: "addExpense" staat ook boven het categorieformulier.
+    expect(screen.getByText("expenses.createBtn")).toBeTruthy();
+  });
+});
+
+describe("uitgavenscherm — bronvereisten (mutatietoets)", () => {
+  const bron = readFileSync(
+    "src/app/[locale]/(app)/buildings/[id]/expenses/page.tsx",
+    "utf8",
+  );
+
+  it("M1 gebruikt de strikte helper en niet de fail-open variant", () => {
+    expect(bron).toContain("fetchReversalIndexResult");
+    // `\b...\b(?!Result)` vangt precies de fail-open naam, niet de strikte.
+    expect(bron).not.toMatch(/\bfetchReversalIndex\b(?!Result)/);
+  });
+
+  it("M2 koppelt totaal, lijst en lege toestand aan de foutstatus", () => {
+    expect(bron).toMatch(/const\s+reversalsOk\s*=\s*!reversalError/);
+    // Het totaal mag niet onvoorwaardelijk worden berekend.
+    expect(bron).toMatch(/reversalsOk\s*\?\s*netTotal\(/);
+  });
+
+  it("M3 toont de melding via een vertaalsleutel, niet als vaste tekst", () => {
+    expect(bron).toContain('tr("errors.expenseStatusUnavailable")');
+  });
+});

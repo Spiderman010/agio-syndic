@@ -210,8 +210,10 @@ export async function fetchReversalIndexResult(
  * waar er een storno- of correctieknop uit volgt, is dat onjuist; gebruik daar
  * `fetchReversalIndexResult()`.
  *
- * Nog in gebruik op het uitgavenscherm, waar de fout dezelfde klasse heeft en
- * apart wordt aangepakt. Nieuwe aanroepers horen de strikte variant te nemen.
+ * Sinds de fail-closed reparatie van het uitgavenscherm heeft deze variant GEEN
+ * aanroeper meer in `src/`. Hij blijft alleen staan omdat verwijderen buiten de
+ * scope van die hotfix viel; nieuwe aanroepers horen zonder uitzondering de
+ * strikte variant te nemen.
  */
 export async function fetchReversalIndex(
   supabase: SupabaseClient,

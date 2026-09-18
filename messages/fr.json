@@ -336,6 +336,7 @@
     "errors": {
       "notAuthenticated": "Vous devez être connecté pour effectuer cette action.",
       "statusUnavailable": "Le statut d'extourne n'a pas pu être vérifié. Les paiements ne sont pas affichés tant qu'il n'est pas établi lesquels ont été extournés.",
+      "expenseStatusUnavailable": "Le statut d’extourne des dépenses n’a pas pu être vérifié. Le total et les dépenses ne sont pas affichés tant qu’il n’est pas établi lesquelles ont été extournées.",
       "actionStatusUnavailable": "L'exercice d'origine de ces paiements n'a pas pu être vérifié. L'extourne et la correction ne sont donc pas proposées.",
       "alreadyReversed": "Cette opération a déjà été contrepassée. Actualisez la page pour voir l'état à jour.",
       "notFound": "Opération introuvable.",
