@@ -274,7 +274,13 @@
     "addCategory": "Ajouter",
     "expensesLink": "Dépenses →",
     "viewReceipt": "Voir le justificatif",
-    "uploadHint": "Image ou PDF, max 10 Mo"
+    "uploadHint": "Image ou PDF, max 10 Mo",
+    "errors": {
+      "listUnavailable": "Les dépenses n’ont pas pu être chargées. Ni le total ni la liste ne sont affichés tant que les données ne sont pas fiables.",
+      "formUnavailable": "Les catégories ou les exercices n’ont pas pu être chargés. Le formulaire de dépense n’est pas proposé tant qu’ils ne sont pas connus.",
+      "categoriesUnavailable": "Les catégories n’ont pas pu être chargées. La liste n’est donc pas affichée.",
+      "fiscalYearStatusUnavailable": "Le statut des exercices n’a pas pu être vérifié. L’extourne et la correction ne sont donc pas proposées."
+    }
   },
   "bank": {
     "title": "Coordonnées bancaires",

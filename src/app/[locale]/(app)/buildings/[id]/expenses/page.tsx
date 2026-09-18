@@ -43,7 +43,11 @@ export default async function ExpensesPage({
   if (!buildingData) notFound();
   const b = buildingData as Building;
 
-  const [{ data: catData }, { data: expData }, { data: fyData }] = await Promise.all([
+  const [
+    { data: catData, error: catError },
+    { data: expData, error: expError },
+    { data: fyData, error: openFyError },
+  ] = await Promise.all([
     supabase
       .from("expense_categories")
       .select("id, name, default_account_id")
@@ -67,9 +71,18 @@ export default async function ExpensesPage({
       .order("year", { ascending: false }),
   ]);
 
+  // FAIL-CLOSED per bron. `data ?? []` maakt van elke mislukte query een lege
+  // lijst, en leeg is hier nooit neutraal: het is een BEWERING. "Geen uitgaven"
+  // is een uitspraak over geld, "geen categorieën" stuurt een formulier dat de
+  // database vervolgens weigert, en "geen afgesloten boekjaren" laat een storno
+  // eruitzien als een gewone ingreep. Elke bron krijgt daarom een eigen poort.
   const categories = (catData ?? []) as CategoryRow[];
   const expenses = (expData ?? []) as unknown as ExpenseRow[];
   const fiscalYears = (fyData ?? []) as Pick<FiscalYear, "id" | "year" | "status">[];
+
+  const expensesOk = !expError;
+  const categoriesOk = !catError;
+  const openFyOk = !openFyError;
 
   // ---- Financial Reversal Engine -------------------------------------------
   // De storno's die bij deze uitgaven horen. Hiermee wordt de LIJST gemarkeerd
@@ -95,13 +108,27 @@ export default async function ExpensesPage({
 
   // Welke boekjaren zijn afgesloten? Bepaalt of storneren een owner/admin-
   // ingreep is; de database beslist definitief in fn_reversal_authorize.
-  const { data: allFyData } = await supabase
+  //
+  // Ook hier telt de foutstatus. Een stil lege `closedFy` laat een uitgave uit
+  // een GESLOTEN boekjaar eruitzien alsof de gewone rolregels volstaan, en
+  // biedt de actie dan aan een manager aan die hem niet mag uitvoeren.
+  const { data: allFyData, error: fyStatusError } = await supabase
     .from("fiscal_years")
     .select("id, status")
     .eq("building_id", buildingId);
+  const fyStatusOk = !fyStatusError;
   const closedFy = new Set(
     (allFyData ?? []).filter((f) => f.status === "closed").map((f) => f.id as string),
   );
+
+  // Het aanmaakformulier steunt op de categorieën EN op de open boekjaren. Valt
+  // de boekjaarquery weg, dan verdwijnt de keuzelijst stilzwijgend en zou er een
+  // uitgave zonder boekjaar kunnen ontstaan — zonder journaalpost, en daarmee
+  // niet storneerbaar. Beide bronnen poorten dus hetzelfde formulier.
+  const formOk = categoriesOk && openFyOk;
+
+  // Totaal, rijen en lege toestand steunen op de uitgaven ÉN op de stornostatus.
+  const listOk = expensesOk && reversalsOk;
 
   // NETTO totaal: een gestorneerde uitgave telt niet mee, de vervangende wel.
   // Een correctie van 1200 naar 900 levert dus 900 en niet 2100. De lijst
@@ -110,13 +137,13 @@ export default async function ExpensesPage({
   // Beide grootheden worden alleen berekend wanneer de stornostatus vaststaat.
   // Is dat niet zo, dan wordt er geen bedrag getoond: liever geen getal dan een
   // bruto bedrag onder een netto label.
-  const totalAmount = reversalsOk ? netTotal(expenses, reversals) : null;
-  const heeftStorno = reversalsOk && expenses.some((e) => reversals.bySource.has(e.id));
+  const totalAmount = listOk ? netTotal(expenses, reversals) : null;
+  const heeftStorno = listOk && expenses.some((e) => reversals.bySource.has(e.id));
 
   // De lijst draagt de stornomarkering en de stornoknop. Zonder betrouwbare
   // index zou een gestorneerde uitgave als actief verschijnen, dus dan wordt de
   // lijst onderdrukt in plaats van half correct getoond.
-  const zichtbareUitgaven = reversalsOk ? expenses : [];
+  const zichtbareUitgaven = listOk ? expenses : [];
 
   return (
     <>
@@ -130,7 +157,7 @@ export default async function ExpensesPage({
               een verdwijnend totaal zou als "niet berekend" worden gelezen.
               Bij een onbetrouwbare stornostatus verschijnt er juist GEEN getal;
               de melding hieronder legt uit waarom. */}
-          {reversalsOk && totalAmount !== null && expenses.length > 0 && (
+          {listOk && totalAmount !== null && expenses.length > 0 && (
             <span style={{ fontWeight: 700, fontSize: "1rem" }} title={heeftStorno ? tr("netHint") : undefined} data-testid="expenses-total">
               {fmt(totalAmount)} MAD {t("title").toLowerCase()}
               {heeftStorno && (
@@ -147,13 +174,24 @@ export default async function ExpensesPage({
           <div>
             <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>
               {t("title")}
-              {reversalsOk && <> ({expenses.length})</>}
+              {listOk && <> ({expenses.length})</>}
             </h2>
 
-            {/* Eén melding in mensentaal. Nooit de databasefout, de viewnaam of
-                een technische code: die horen in de serverlogs, niet op een
-                financieel scherm. */}
-            {!reversalsOk && (
+            {/* Meldingen in mensentaal. Nooit de databasefout, de tabel- of
+                viewnaam of een technische code: die horen in de serverlogs,
+                niet op een financieel scherm. */}
+            {!expensesOk && (
+              <div
+                className="card"
+                style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                role="alert"
+                data-testid="expenses-error"
+              >
+                {t("errors.listUnavailable")}
+              </div>
+            )}
+
+            {expensesOk && !reversalsOk && (
               <div
                 className="card"
                 style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
@@ -166,7 +204,21 @@ export default async function ExpensesPage({
 
             {/* De lege toestand is een BEWERING: "er zijn geen uitgaven". Die
                 mag alleen verschijnen wanneer de stornostatus vaststaat. */}
-            {reversalsOk && expenses.length === 0 && (
+            {/* De boekjaarstatus bepaalt of storneren een owner/admin-ingreep
+                is. Staat die niet vast, dan wordt de actie niet aangeboden en
+                legt deze melding uit waarom. */}
+            {listOk && expenses.length > 0 && !fyStatusOk && (
+              <div
+                className="card"
+                style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                role="alert"
+                data-testid="fy-status-error"
+              >
+                {t("errors.fiscalYearStatusUnavailable")}
+              </div>
+            )}
+
+            {listOk && expenses.length === 0 && (
               <div className="card" style={{ padding: "2rem", textAlign: "center" }}>
                 <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>🧾</div>
                 <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>{t("noExpenses")}</div>
@@ -189,6 +241,7 @@ export default async function ExpensesPage({
                 // journaalpost en wordt gewoon verwijderd, niet gestorneerd).
                 const mayReverse =
                   reversalsOk &&
+                  fyStatusOk &&
                   reversal === null &&
                   e.fiscal_year_id !== null &&
                   canReverse(role, isClosed);
@@ -257,7 +310,22 @@ export default async function ExpensesPage({
               })}
             </div>
 
-            {/* Add expense form */}
+            {/* Add expense form. Zonder betrouwbare categorieën of boekjaren
+                verschijnt er GEEN formulier en dus ook geen aanmaakknop: een
+                formulier dat de database zeker weigert, of dat stilzwijgend een
+                uitgave zonder boekjaar aanmaakt, is erger dan geen formulier. */}
+            {!formOk && (
+              <div
+                className="card"
+                style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginTop: "0.9rem" }}
+                role="alert"
+                data-testid="form-error"
+              >
+                {t("errors.formUnavailable")}
+              </div>
+            )}
+
+            {formOk && (
             <ActionForm action={createExpense} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
               <input type="hidden" name="building_id" value={buildingId} />
               <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.9rem" }}>{t("addExpense")}</h3>
@@ -323,26 +391,40 @@ export default async function ExpensesPage({
 
               <button className="btn btn-primary" style={{ width: "100%" }}>{t("createBtn")}</button>
             </ActionForm>
+            )}
           </div>
 
           {/* Categories */}
           <div>
             <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>{t("categories")}</h2>
 
-            {categories.length === 0 && (
+            {!categoriesOk && (
+              <div
+                className="card"
+                style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                role="alert"
+                data-testid="categories-error"
+              >
+                {t("errors.categoriesUnavailable")}
+              </div>
+            )}
+
+            {/* "Geen categorieën" is een bewering en mag niet gokken. */}
+            {categoriesOk && categories.length === 0 && (
               <div className="card" style={{ padding: "1rem", marginBottom: "0.7rem" }}>
                 <div className="muted" style={{ fontSize: "0.85rem" }}>{t("noCategories")}</div>
               </div>
             )}
 
             <div style={{ display: "grid", gap: "0.4rem", marginBottom: "0.7rem" }}>
-              {categories.map((c) => (
+              {(categoriesOk ? categories : []).map((c) => (
                 <div key={c.id} className="card" style={{ padding: "0.65rem 0.9rem", fontSize: "0.88rem" }}>
                   {c.name}
                 </div>
               ))}
             </div>
 
+            {categoriesOk && (
             <ActionForm action={createExpenseCategory} className="card" style={{ padding: "1rem 1.1rem" }}>
               <input type="hidden" name="building_id" value={buildingId} />
               <h3 style={{ fontSize: "0.88rem", margin: "0 0 0.7rem" }}>{t("addExpense").replace("dépense", "catégorie")}</h3>
@@ -357,6 +439,7 @@ export default async function ExpensesPage({
                 <button className="btn btn-primary" style={{ whiteSpace: "nowrap" }}>{t("addCategory")}</button>
               </div>
             </ActionForm>
+            )}
           </div>
         </div>
     </>
