@@ -274,7 +274,13 @@
     "addCategory": "Toevoegen",
     "expensesLink": "Uitgaven →",
     "viewReceipt": "Bewijsstuk bekijken",
-    "uploadHint": "Afbeelding of PDF, max 10 MB"
+    "uploadHint": "Afbeelding of PDF, max 10 MB",
+    "errors": {
+      "listUnavailable": "De uitgaven konden niet worden geladen. Het totaal en de lijst worden niet getoond zolang de gegevens niet betrouwbaar zijn.",
+      "formUnavailable": "De categorieën of de boekjaren konden niet worden geladen. Het uitgaveformulier wordt niet aangeboden zolang die niet bekend zijn.",
+      "categoriesUnavailable": "De categorieën konden niet worden geladen. De lijst wordt daarom niet getoond.",
+      "fiscalYearStatusUnavailable": "De status van de boekjaren kon niet worden gecontroleerd. Storneren en corrigeren worden daarom niet aangeboden."
+    }
   },
   "bank": {
     "title": "Bankgegevens",
@@ -336,6 +342,7 @@
     "errors": {
       "notAuthenticated": "Je moet ingelogd zijn voor deze actie.",
       "statusUnavailable": "De stornostatus kon niet worden gecontroleerd. De betalingen worden niet getoond zolang niet vaststaat welke zijn gestorneerd.",
+      "expenseStatusUnavailable": "De stornostatus van de uitgaven kon niet worden gecontroleerd. Het totaal en de uitgaven worden niet getoond zolang niet vaststaat welke zijn gestorneerd.",
       "actionStatusUnavailable": "Het oorspronkelijke boekjaar van deze betalingen kon niet worden gecontroleerd. Storneren en corrigeren worden daarom niet aangeboden.",
       "alreadyReversed": "Deze transactie is al gestorneerd. Ververs de pagina voor de actuele stand.",
       "notFound": "Transactie niet gevonden.",

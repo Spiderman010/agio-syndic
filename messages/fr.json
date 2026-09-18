@@ -274,7 +274,13 @@
     "addCategory": "Ajouter",
     "expensesLink": "Dépenses →",
     "viewReceipt": "Voir le justificatif",
-    "uploadHint": "Image ou PDF, max 10 Mo"
+    "uploadHint": "Image ou PDF, max 10 Mo",
+    "errors": {
+      "listUnavailable": "Les dépenses n’ont pas pu être chargées. Ni le total ni la liste ne sont affichés tant que les données ne sont pas fiables.",
+      "formUnavailable": "Les catégories ou les exercices n’ont pas pu être chargés. Le formulaire de dépense n’est pas proposé tant qu’ils ne sont pas connus.",
+      "categoriesUnavailable": "Les catégories n’ont pas pu être chargées. La liste n’est donc pas affichée.",
+      "fiscalYearStatusUnavailable": "Le statut des exercices n’a pas pu être vérifié. L’extourne et la correction ne sont donc pas proposées."
+    }
   },
   "bank": {
     "title": "Coordonnées bancaires",
@@ -336,6 +342,7 @@
     "errors": {
       "notAuthenticated": "Vous devez être connecté pour effectuer cette action.",
       "statusUnavailable": "Le statut d'extourne n'a pas pu être vérifié. Les paiements ne sont pas affichés tant qu'il n'est pas établi lesquels ont été extournés.",
+      "expenseStatusUnavailable": "Le statut d’extourne des dépenses n’a pas pu être vérifié. Le total et les dépenses ne sont pas affichés tant qu’il n’est pas établi lesquelles ont été extournées.",
       "actionStatusUnavailable": "L'exercice d'origine de ces paiements n'a pas pu être vérifié. L'extourne et la correction ne sont donc pas proposées.",
       "alreadyReversed": "Cette opération a déjà été contrepassée. Actualisez la page pour voir l'état à jour.",
       "notFound": "Opération introuvable.",
