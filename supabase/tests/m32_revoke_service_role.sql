@@ -124,6 +124,31 @@ SELECT pg_temp.noteer('P6',
               OR has_function_privilege(r.oid, 'public.fn_guard_fy_period_covers_calls()'::regprocedure, 'EXECUTE'))),
        'geen rolmembership waarlangs service_role het recht alsnog krijgt');
 
+-- ═══════════════════════════ O. de aannames ONDER de REVOKE ════════════════
+-- Een REVOKE zegt niets zolang deze drie niet vaststaan. Zonder O1 is de hele
+-- suite groen te krijgen in een toestand die materieel zwakker is: een rol die
+-- de functie BEZIT leest na de REVOKE weliswaar `false`, maar kan zichzelf het
+-- recht met een enkel GRANT teruggeven. Dat is empirisch nagegaan.
+SELECT pg_temp.noteer('O1',
+       (SELECT bool_and(pg_get_userbyid(p.proowner) <> 'service_role')
+          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public'
+           AND p.proname IN ('fn_guard_cc_date_in_fy','fn_guard_fy_period_covers_calls')),
+       'geen van beide functies is eigendom van service_role');
+
+-- Een superuser leest altijd `true` bij has_function_privilege. Stond die vlag
+-- aan, dan zou P1/P2 falen in plaats van vals groen worden — maar de aanname
+-- hoort expliciet te staan, niet impliciet.
+SELECT pg_temp.noteer('O2',
+       NOT (SELECT rolsuper FROM pg_roles WHERE rolname = 'service_role'),
+       'service_role is NOSUPERUSER, zoals het Supabase-model');
+
+-- BYPASSRLS is dragend voor S1-S3: zonder die vlag zou RLS de insert al tegen-
+-- houden en meet S1 niet meer de TRIGGER maar de policy.
+SELECT pg_temp.noteer('O3',
+       (SELECT rolbypassrls FROM pg_roles WHERE rolname = 'service_role'),
+       'service_role heeft BYPASSRLS, dus S1-S3 meten de trigger en niet RLS');
+
 -- ═══════════════════════════ E/T. de constructie van m31 is ongeschonden ═══
 SELECT pg_temp.noteer('E1',
        (SELECT count(*) = 2 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

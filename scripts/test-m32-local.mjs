@@ -62,6 +62,7 @@ const PAD = {
 /** De exact verwachte labelset — ontbrekend of dubbel wordt zo ook gezien. */
 export const VERWACHTE_LABELS = Object.freeze([
   'P1', 'P2', 'P3', 'P4', 'P5', 'P6',
+  'O1', 'O2', 'O3',
   'E1', 'E2', 'E3',
   'T1', 'T2', 'T3', 'T4',
   'G1', 'G2', 'G3', 'G4',
@@ -216,6 +217,13 @@ async function main() {
       let r = psql(db, lees(PAD.grant));
       if (r.code !== 0) throw new Error(`grantfixture faalde:\n${r.uit}`);
 
+      const eigenaar = (d) => psql(d, `SELECT string_agg(DISTINCT pg_get_userbyid(p.proowner), ',' ORDER BY pg_get_userbyid(p.proowner))
+                                         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                                        WHERE n.nspname = 'public'
+                                          AND p.proname IN ('fn_guard_cc_date_in_fy','fn_guard_fy_period_covers_calls');`,
+        { tuples: true }).uit.trim();
+      const eigenaarVoor = eigenaar(db);
+
       const voor = privilege(db);
       noteer('hoofdsuite: service_role heeft VOOR m32 EXECUTE op beide functies',
         voor.kind === true && voor.ouder === true,
@@ -229,6 +237,13 @@ async function main() {
       const na = privilege(db);
       noteer('hoofdsuite: service_role heeft NA m32 op geen van beide EXECUTE',
         na.kind === false && na.ouder === false, `kind=${na.kind} ouder=${na.ouder}`);
+
+      // Eigenaarschap is een stille achterdeur: een eigenaar leest na de REVOKE
+      // `false` maar kan zichzelf het recht met een enkel GRANT teruggeven.
+      const eigenaarNa = eigenaar(db);
+      noteer('hoofdsuite: de functie-eigenaar is onveranderd en niet service_role',
+        eigenaarVoor === eigenaarNa && eigenaarVoor.length > 0 && eigenaarVoor !== 'service_role',
+        `eigenaar ${eigenaarVoor || '(leeg)'} -> ${eigenaarNa || '(leeg)'}`);
 
       r = psql(db, lees(PAD.suite), { stopOnError: false });
       const c = controleerLabels(r.uit);
