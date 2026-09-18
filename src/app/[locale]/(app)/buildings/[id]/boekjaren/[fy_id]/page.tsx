@@ -2,29 +2,34 @@ import { notFound } from "next/navigation";
 import { requireOrg } from "@/lib/org";
 import { createClient } from "@/lib/supabase/server";
 import { getTranslations } from "next-intl/server";
-import { createChargeCall, createPayment } from "../actions";
+import { createPayment } from "../actions";
 import ActionForm from "@/components/ActionForm";
 import PaymentReversalActions from "@/components/PaymentReversalActions";
-import { canReverse } from "@/lib/roles";
-import { correctionOf, fetchReversalIndex, reversalOf } from "@/lib/reversal";
+import ChargeCallWorkflow from "./ChargeCallWorkflow";
+import { canReverse, canWrite } from "@/lib/roles";
+import { correctionOf, fetchReversalIndexResult, reversalOf } from "@/lib/reversal";
+import { formatMoney } from "@/lib/money";
+import { BUILDING_TIMEZONE, defaultCallDate } from "@/lib/today";
+import type { AllocationRuleRow, RuleUnitRow, RuleWeightRow } from "@/lib/charges";
+import type { OwnershipRow } from "@/lib/ownership";
 import type { Building, FiscalYear } from "@/lib/types";
 
-const METHOD_LABEL: Record<string, string> = {
-  equal: "parts égales",
-  tantieme: "tantièmes",
-  percentage: "pourcentages",
-  manual: "manuel",
-};
-
-const SCOPE_LABEL: Record<string, string> = {
-  whole_building: "tout le bâtiment",
-  block: "un bloc",
-  selected_units: "lots sélectionnés",
-};
+/*
+ * De methode- en reikwijdtelabels stonden hier als hardgecodeerde Franse
+ * constanten. Ze zijn vervangen door `charges.methods.*` en `charges.scopes.*`,
+ * die in FR, NL en AR bestaan: een Marokkaanse syndic die de app in het
+ * Arabisch gebruikt, hoort geen Franse termen in een keuzelijst te lezen.
+ */
 
 type AllocRow = {
   id: string;
   amount: number;
+  /**
+   * De definitieve uitkomst van de centverdeling, zoals `fn_alloc_distribute`
+   * hem heeft vastgelegd. NOT NULL in m13, en de database bewaakt zelf dat
+   * `amount = amount_cents / 100` (`ca_money_ck`).
+   */
+  amount_cents: number | string;
   settled_amount: number;
   owner_id: string | null;
   units: { label: string } | null;
@@ -39,6 +44,12 @@ type CallRow = {
   total_amount: number;
   call_date: string;
   due_date: string | null;
+  /** Snapshotkop: wat de engine bij het aanmaken werkelijk heeft toegepast. */
+  alloc_method: string;
+  alloc_scope: string;
+  alloc_rule_label: string;
+  alloc_unit_count: number;
+  alloc_partial_denominator: boolean;
   charge_allocations: AllocRow[];
 };
 
@@ -64,101 +75,262 @@ function fmt(n: number) {
   return n.toLocaleString("fr-MA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function allocBadge(settled: number, amount: number, dueDate: string | null) {
-  if (settled >= amount - 0.005) return <span className="badge badge-betaald">payé</span>;
-  if (dueDate && new Date(dueDate) < new Date()) return <span className="badge badge-telaat">en retard</span>;
-  if (settled > 0) return <span className="badge badge-deels">partiel</span>;
-  return <span className="badge badge-openstaand">en attente</span>;
+/** De statusbadge per allocatie. De labels komen uit `common`, niet uit code. */
+function allocBadge(
+  settled: number,
+  amount: number,
+  dueDate: string | null,
+  tcom: (sleutel: string) => string,
+) {
+  if (settled >= amount - 0.005) return <span className="badge badge-betaald">{tcom("paid")}</span>;
+  if (dueDate && new Date(dueDate) < new Date())
+    return <span className="badge badge-telaat">{tcom("late")}</span>;
+  if (settled > 0) return <span className="badge badge-deels">{tcom("partial")}</span>;
+  return <span className="badge badge-openstaand">{tcom("pending")}</span>;
 }
 
 export default async function FiscalYearDetail({
   params,
 }: {
-  params: Promise<{ id: string; fy_id: string }>;
+  params: Promise<{ locale: string; id: string; fy_id: string }>;
 }) {
-  const { id: buildingId, fy_id: fyId } = await params;
+  const { locale, id: buildingId, fy_id: fyId } = await params;
   const { role } = await requireOrg();
   const supabase = await createClient();
   const tr = await getTranslations("reversal");
+  const tc = await getTranslations("charges");
+  const tfy = await getTranslations("fy");
+  const tbj = await getTranslations("boekjaren");
+  const tp = await getTranslations("payments");
+  const ts = await getTranslations("saldo");
+  const tcom = await getTranslations("common");
+  const mayWrite = canWrite(role);
+  // De voorgevulde oproepdatum. Twee dingen tegelijk:
+  //
+  //   1. de dag komt uit de tijdzone van het GEBOUW, niet uit UTC. Tussen
+  //      00:00 en 01:00 lokale tijd zou `toISOString()` de dag ervoor geven -
+  //      precies de datum waarop de eigendom wordt beoordeeld;
+  //   2. de waarde wordt geklemd binnen de periode van DIT boekjaar, want m31
+  //      maakt `start_date <= call_date <= end_date` een database-invariant.
+  //      Een default daarbuiten zou een formulier opleveren dat de database op
+  //      datzelfde moment al weigert.
+  //
+  // De klemming heeft `fy` nodig en staat daarom pas hier, na de lookup.
 
   const [{ data: bData }, { data: fyData }] = await Promise.all([
     supabase.from("buildings").select("*").eq("id", buildingId).maybeSingle(),
     supabase.from("fiscal_years").select("*").eq("id", fyId).maybeSingle(),
   ]);
   if (!bData || !fyData) notFound();
+
+  // Het boekjaar moet bij HET GEBOUW UIT DE URL horen. RLS scoopt op
+  // lidmaatschap, niet op gebouw: binnen dezelfde organisatie levert
+  // /buildings/A/boekjaren/<boekjaar van B> anders een pagina op die de naam
+  // en de lots van gebouw A draagt boven de oproepen en betalingen van gebouw
+  // B. Deze controle staat bewust vóór elke financiële query, zodat er bij een
+  // mismatch niets wordt opgehaald en niets wordt gerenderd.
+  if ((fyData as { building_id: string }).building_id !== buildingId) notFound();
+
   const b = bData as Building;
   const fy = fyData as FiscalYear;
 
-  const { data: callsData } = await supabase
+  /** De periode van DIT boekjaar, inclusief aan beide kanten (m31). */
+  const boekjaarPeriode = { startDate: fy.start_date, endDate: fy.end_date };
+  const vandaag = defaultCallDate(boekjaarPeriode, BUILDING_TIMEZONE);
+
+  /*
+   * ELKE EMBED DRAAGT ZIJN FOREIGN KEY BIJ NAAM.
+   *
+   * Dit schema heeft tussen meerdere tabelparen MEER DAN EEN foreign key, en
+   * PostgREST weigert dan te raden: het antwoordt met PGRST201 ("more than one
+   * relationship was found") en de hele query faalt. Dat is geen randgeval maar
+   * de regel hier, want m8 zette overal een samengestelde tenantsleutel NAAST
+   * de bestaande enkelvoudige FK - m30 zegt dat met zoveel woorden over
+   * `ownership`: "Het ON DELETE-gedrag blijft bij de bestaande enkelvoudige FK
+   * op `owner_id`, precies zoals m8 sectie 7 het doet."
+   *
+   * Tussen `charge_allocations` en `charge_calls` staan er zelfs drie:
+   * `ca_call_building_fk` en `ca_call_params_fk` (m13) en
+   * `charge_allocations_cc_org_fk` (m8, opnieuw gezet in m18).
+   *
+   * De `!<constraint>`-hint maakt de keuze expliciet. Gekozen wordt steeds de
+   * tenantbewakende sleutel: dezelfde ouderrij, maar met de organisatie- of
+   * gebouwkolom erin, zodat de join niet buiten de scope kan wijzen.
+   */
+  const { data: callsData, error: callsError } = await supabase
     .from("charge_calls")
     .select(`
       id, type, period, label, total_amount, call_date, due_date,
-      charge_allocations(
-        id, amount, settled_amount, owner_id,
-        units(label),
-        owners(full_name)
+      alloc_method, alloc_scope, alloc_rule_label, alloc_unit_count,
+      alloc_partial_denominator,
+      charge_allocations!ca_call_building_fk(
+        id, amount, amount_cents, settled_amount, owner_id,
+        units!ca_unit_building_fk(label),
+        owners!ca_owner_org_fk(full_name)
       )
     `)
     .eq("fiscal_year_id", fyId)
     .order("call_date", { ascending: false });
   const calls = (callsData ?? []) as unknown as CallRow[];
 
-  const { data: unitIds } = await supabase
+  // ── Bronnen voor de controle vóór aanmaken ───────────────────────────────
+  //
+  // FAIL-CLOSED. Een mislukte query mag hier NOOIT als lege of gezonde data
+  // doorgaan: nul lots zonder eigenaar ziet er precies zo uit als "de query
+  // faalde", en op dat verschil hangt een financiële handeling. Faalt één van
+  // deze bronnen, dan verschijnt het aanmaakformulier helemaal niet.
+  //
+  // `units` gaat vooruit, omdat `ownership` GEEN `building_id` draagt: de keten
+  // loopt daar via `unit_id`. Dat is geen omissie maar het model — m30 gaf
+  // `ownership` wel een `organization_id`, nooit een gebouwkolom.
+  const unitsRes = await supabase
     .from("units")
-    .select("id, label")
+    .select("id, building_id, label, tantiemes, block_id")
     .eq("building_id", buildingId)
     .order("label");
-  const lots = (unitIds ?? []) as { id: string; label: string }[];
 
-  // Actieve verdeelregels van dit gebouw. De standaardregel staat bovenaan;
-  // laat de gebruiker leeg, dan kiest de database die zelf.
-  const { data: rulesData } = await supabase
-    .from("allocation_rules")
-    .select("id, label, method, scope, is_default")
-    .eq("building_id", buildingId)
-    .eq("status", "active")
-    .order("is_default", { ascending: false })
-    .order("label");
-  const rules = (rulesData ?? []) as {
+  const unitIds = (unitsRes.data ?? []).map((u) => u.id as string);
+
+  const [rulesRes, ruleUnitsRes, ruleWeightsRes, ownershipRes] =
+    await Promise.all([
+      supabase
+        .from("allocation_rules")
+        .select(
+          "id, building_id, code, label, method, scope, weight_source, scope_block_id, uncovered_unit_policy, status, is_default, partial_denominator_until_year",
+        )
+        .eq("building_id", buildingId)
+        .eq("status", "active")
+        .order("is_default", { ascending: false })
+        .order("label"),
+      supabase
+        .from("allocation_rule_units")
+        .select("rule_id, unit_id")
+        .eq("building_id", buildingId),
+      supabase
+        .from("allocation_rule_weights")
+        .select("rule_id, unit_id, weight")
+        .eq("building_id", buildingId),
+      supabase
+        .from("ownership")
+        .select(
+          "id, unit_id, owner_id, share, start_date, end_date, is_primary_debtor, owners!ownership_owner_org_fk(id, full_name)",
+        )
+        .in("unit_id", unitIds),
+    ]);
+
+  /*
+   * DRIE GESCHEIDEN POORTEN.
+   *
+   * Eerder hing alles aan één vlag, en die vlag stond bovendien binnen
+   * `mayWrite && open`. Daardoor kon een viewer — of iedereen op een gesloten
+   * boekjaar — bij een mislukte `charge_calls`-query "0 MAD appelés" en "geen
+   * oproepen" te zien krijgen zonder enige foutmelding. Een lege lijst en een
+   * mislukte query zien er identiek uit, en juist op dat verschil hangt hier
+   * geld.
+   *
+   * De poorten zijn nu gescheiden naar wat ze werkelijk beschermen:
+   *
+   *   callsOk      de oproepen zelf: totaal, aantal, lijst, lege toestand EN
+   *                de definitieve verdeling per oproep, want die komt uit
+   *                `charge_allocations` en dus uit diezelfde query;
+   *   saldoOk      het saldo per eigenaar;
+   *   paymentsOk   de betalingenlijst;
+   *   workflowOk   de bronnen waarop de controle vóór aanmaken steunt.
+   *
+   * Verderop komen daar de twee poorten van de reversal-engine bij:
+   *
+   *   reversalsOk     de stornostatus per betaling (`v_financial_reversals`);
+   *   actionStatusOk  het boekjaar van de journaalpost achter die betaling.
+   *
+   * Een fout in een workflowbron verbergt dus geen betrouwbare oproepen meer,
+   * en een fout in de oproepen blokkeert niet stilzwijgend alleen het
+   * aanmaakformulier.
+   */
+  const callsOk = !callsError;
+  const workflowOk =
+    !unitsRes.error &&
+    !rulesRes.error &&
+    !ruleUnitsRes.error &&
+    !ruleWeightsRes.error &&
+    !ownershipRes.error;
+
+  const lots = (unitsRes.data ?? []) as {
     id: string;
+    building_id: string;
     label: string;
-    method: string;
-    scope: string;
-    is_default: boolean;
+    tantiemes: number | string | null;
+    block_id: string | null;
   }[];
-  const heeftHandmatigeRegel = rules.some((r) => r.method === "manual");
 
-  const { data: ownershipData } = await supabase
-    .from("ownership")
-    .select("owners(id, full_name)")
-    .in("unit_id", lots.map((u) => u.id))
-    .is("end_date", null);
+  const rules = (rulesRes.data ?? []) as unknown as AllocationRuleRow[];
+  const ruleUnits = (ruleUnitsRes.data ?? []) as RuleUnitRow[];
+  const ruleWeights = (ruleWeightsRes.data ?? []) as RuleWeightRow[];
 
+  const ownershipRows = (ownershipRes.data ?? []) as unknown as (OwnershipRow & {
+    owners: { id: string; full_name: string } | { id: string; full_name: string }[] | null;
+  })[];
+
+  /**
+   * De definitieve verdeling van EEN oproep, uit `charge_allocations`.
+   *
+   * Dit is de door `fn_alloc_distribute` vastgelegde uitkomst, inclusief de
+   * restcenten; hier wordt niets herberekend. Bewust NIET uit
+   * `charge_call_lines`: m20 vult die tabel alleen bij `method = 'manual'`
+   * (regel 307, "handmatige brondocumentregels"), zodat een verdeling over
+   * tantiemes, gelijke delen of percentages daar per definitie nul rijen
+   * heeft. Die tabel als bron gebruiken meldde dus "geen vastgelegde regels"
+   * voor precies de methoden die het meest worden gebruikt.
+   *
+   * `alloc_unit_count` is de snapshotkop van de engine: het aantal lots dat
+   * bij het aanmaken werkelijk is bediend. Komt het aantal opgehaalde rijen
+   * daar niet mee overeen, dan is de lijst aantoonbaar onvolledig en tonen we
+   * hem niet als definitief resultaat.
+   */
+  function verdelingVan(cc: CallRow) {
+    const regels = (cc.charge_allocations ?? [])
+      .map((ca) => ({
+        label: ca.units?.label ?? "—",
+        amountCents: Number(ca.amount_cents),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return { regels, volledig: regels.length === cc.alloc_unit_count };
+  }
+
+
+  // De eigenaarskeuze van het BETALINGSformulier. Die lijst toont bewust alleen
+  // ACTUELE eigenaars (`end_date IS NULL`), net als voorheen: de bovenstaande
+  // query haalt sinds deze sprint de volledige historie op voor de controle vóór
+  // aanmaken, en zonder dit filter zouden oud-eigenaars in dat formulier komen.
   const eigenaarMap = new Map<string, string>();
-  for (const row of ownershipData ?? []) {
+  for (const row of ownershipRows) {
+    if (row.end_date !== null) continue;
     const rawOwner = row.owners as { id: string; full_name: string }[] | { id: string; full_name: string } | null;
     const o = Array.isArray(rawOwner) ? (rawOwner[0] ?? null) : rawOwner;
     if (o) eigenaarMap.set(o.id, o.full_name);
   }
   const eigenaars = Array.from(eigenaarMap.entries()).map(([id, full_name]) => ({ id, full_name }));
 
-  const { data: paysData } = await supabase
+  const { data: paysData, error: paysError } = await supabase
     .from("payments")
     .select(`
       id, amount, method, value_date, reference,
-      owners(full_name),
-      payment_allocations(
+      owners!payments_owner_org_fk(full_name),
+      payment_allocations!payment_allocations_payment_org_fk(
         amount,
-        charge_allocations(
+        charge_allocations!payment_allocations_ca_org_fk(
           amount, settled_amount,
-          charge_calls(period, label, due_date),
-          units(label)
+          charge_calls!ca_call_building_fk(period, label, due_date),
+          units!ca_unit_building_fk(label)
         )
       )
     `)
     .eq("building_id", buildingId)
     .order("value_date", { ascending: false })
     .limit(20);
+  // Zelfde regel als bij de oproepen: een mislukte betalingenquery mag niet als
+  // "geen betalingen" verschijnen. Dat is geen cosmetisch verschil - wie op die
+  // lege lijst afgaat, boekt een betaling een tweede keer.
+  const paymentsOk = !paysError;
   const pays = (paysData ?? []) as unknown as PayRow[];
 
   // ---- Financial Reversal Engine -------------------------------------------
@@ -167,18 +339,35 @@ export default async function FiscalYearDetail({
   // saldo per eigenaar verderop is klasse B en corrigeert zichzelf al, omdat het
   // uit `amount - settled_amount` volgt en de storno settled_amount herstelt.
   const payIds = pays.map((p) => p.id);
-  const reversals = await fetchReversalIndex(supabase, "payment", payIds);
+
+  // FAIL-CLOSED op de stornostatus. Een mislukte leesquery mag hier nooit als
+  // "niets gestorneerd" doorgaan: dan verschijnt een gestorneerde betaling als
+  // actief, verliest een correctie haar relatie met het origineel, en komt er
+  // een stornoknop bij een rij die de database zeker weigert. Nul betalingen is
+  // GEEN fout: dan valt er niets op te halen en is de lege index juist.
+  const { index: reversals, error: reversalError } = await fetchReversalIndexResult(
+    supabase,
+    "payment",
+    payIds,
+  );
+  const reversalsOk = !reversalError;
 
   // In welk boekjaar staat de ORIGINELE journaalpost van elke betaling? Dat
   // bepaalt of storneren een owner/admin-ingreep is. fn_reversal_authorize
   // beslist definitief; dit voorkomt alleen een knop die zeker faalt.
+  //
+  // Ook hier telt de foutstatus: een stil lege `closedPayments` laat een
+  // betaling uit een GESLOTEN boekjaar eruitzien alsof de gewone
+  // reversalrechten gelden, en toont dus een actie die zeker wordt geweigerd.
   const closedPayments = new Set<string>();
+  let journalError: unknown = null;
   if (payIds.length > 0) {
-    const { data: entryData } = await supabase
+    const { data: entryData, error: entryError } = await supabase
       .from("journal_entries")
-      .select("source_id, fiscal_years(status)")
+      .select("source_id, fiscal_years!journal_entries_fy_org_fk(status)")
       .eq("source", "payment")
       .in("source_id", payIds);
+    journalError = entryError;
 
     for (const row of entryData ?? []) {
       const rawFy = row.fiscal_years as { status: string } | { status: string }[] | null;
@@ -186,6 +375,16 @@ export default async function FiscalYearDetail({
       if (entryFy?.status === "closed") closedPayments.add(row.source_id as string);
     }
   }
+  /** Is de boekjaarstatus achter de storno-/correctieknoppen betrouwbaar? */
+  const actionStatusOk = !journalError;
+
+  /**
+   * Een betalingsregel mag alleen zichtbaar zijn wanneer BEIDE dingen kloppen:
+   * haar bedrag (payments) en haar stornostatus (v_financial_reversals). Een
+   * rij zonder stornomarkering is een bewering dat er niet gestorneerd is, en
+   * die bewering kunnen we bij een leesfout niet waarmaken.
+   */
+  const paymentRowsOk = paymentsOk && reversalsOk;
 
   const callIds = calls.map((c) => c.id);
   let saldoRows: {
@@ -196,12 +395,19 @@ export default async function FiscalYearDetail({
     teLaat: number;
   }[] = [];
 
+  // Ook deze query is financieel dragend: zonder foutafvangst zou een mislukte
+  // allocatiequery als "geen enkele eigenaar heeft een saldo" verschijnen.
+  let allocError: unknown = null;
+
   if (callIds.length > 0) {
-    const { data: allocData } = await supabase
+    const { data: allocData, error: allocErr } = await supabase
       .from("charge_allocations")
-      .select("amount, settled_amount, owner_id, owners(id, full_name), charge_calls(due_date)")
+      .select(
+        "amount, settled_amount, owner_id, owners!ca_owner_org_fk(id, full_name), charge_calls!ca_call_building_fk(due_date)",
+      )
       .in("charge_call_id", callIds)
       .not("owner_id", "is", null);
+    allocError = allocErr;
 
     const saldoMap = new Map<string, { naam: string; opgeroepen: number; voldaan: number; teLaat: number }>();
     for (const row of allocData ?? []) {
@@ -223,6 +429,20 @@ export default async function FiscalYearDetail({
       .sort((a, b) => (b.opgeroepen - b.voldaan) - (a.opgeroepen - a.voldaan));
   }
 
+  const saldoOk = callsOk && !allocError;
+
+  /**
+   * Het formulier voor een NIEUWE betaling.
+   *
+   * Boeken zonder betrouwbare lijst betekent dubbel boeken; boeken zonder
+   * betrouwbare openstaande positie betekent boeken in het duister. Beide
+   * gevolgen zijn onomkeerbaar genoeg om het formulier dan gewoon niet te
+   * tonen. De reeds zichtbare foutmelding van de stukke bron blijft staan en
+   * zegt waarom.
+   */
+  const ownersOk = !ownershipRes.error;
+  const paymentFormOk =
+    fy.status === "open" && ownersOk && paymentsOk && callsOk && saldoOk;
   const totalOpgeroepen = calls.reduce((s, c) => s + Number(c.total_amount), 0);
 
   return (
@@ -230,17 +450,18 @@ export default async function FiscalYearDetail({
 
         <div className="card" style={{ padding: "1.1rem 1.4rem", margin: "0.7rem 0 1.4rem", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <div>
-            <h1 style={{ margin: "0 0 0.15rem", fontSize: "1.4rem" }}>Exercice {fy.year}</h1>
+            <h1 style={{ margin: "0 0 0.15rem", fontSize: "1.4rem" }}>{tfy("heading", { year: fy.year })}</h1>
             <div className="muted" style={{ fontSize: "0.83rem" }}>
               {b.name} · {fy.start_date} → {fy.end_date}
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            {totalOpgeroepen > 0 && (
-              <span style={{ fontWeight: 600, fontSize: "1.05rem" }}>{fmt(totalOpgeroepen)} MAD appelés</span>
+            {/* Geen bedrag zolang de oproepen niet betrouwbaar zijn geladen. */}
+            {callsOk && totalOpgeroepen > 0 && (
+              <span style={{ fontWeight: 600, fontSize: "1.05rem" }}>{fmt(totalOpgeroepen)} {tbj("called")}</span>
             )}
             <span className={`badge ${fy.status === "open" ? "badge-klein" : "badge-midden"}`}>
-              {fy.status === "open" ? "Ouvert" : "Clôturé"}
+              {fy.status === "open" ? tbj("status.open") : tbj("status.closed")}
             </span>
           </div>
         </div>
@@ -249,33 +470,55 @@ export default async function FiscalYearDetail({
           <div>
             <section>
               <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>
-                Appels de charges ({calls.length})
+                {/* Zonder betrouwbare gegevens ook geen aantal: "(0)" zou een
+                    bewering zijn die we niet kunnen waarmaken. */}
+                {tc("title")}
+                {callsOk ? ` (${calls.length})` : null}
               </h2>
 
-              {calls.length === 0 && (
+              {/*
+                FAIL-CLOSED. Deze melding staat bewust BUITEN elke rol- en
+                boekjaarvoorwaarde: een viewer en een gesloten boekjaar hebben
+                net zo goed recht op de waarschuwing dat de cijfers ontbreken.
+                Geen totaal, geen aantal, geen "geen oproepen" — en nooit de
+                databasetekst zelf.
+              */}
+              {!callsOk && (
+                <div
+                  className="card"
+                  style={{ padding: "1rem", fontSize: "0.88rem" }}
+                  role="alert"
+                  data-testid="calls-error"
+                >
+                  {tc("errors.callsUnavailable")}
+                </div>
+              )}
+
+              {callsOk && calls.length === 0 && (
                 <div className="card muted" style={{ padding: "1rem", fontSize: "0.88rem" }}>
-                  Aucun appel de charges.
+                  {tc("noCharges")}
                 </div>
               )}
 
               <div style={{ display: "grid", gap: "0.7rem" }}>
-                {calls.map((cc) => {
+                {(callsOk ? calls : []).map((cc) => {
                   const telaat = cc.due_date && new Date(cc.due_date) < new Date();
+                  const verdeling = verdelingVan(cc);
                   return (
                     <div key={cc.id} className="card" style={{ padding: "0.9rem 1rem" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                         <div>
                           <div style={{ fontWeight: 600, fontSize: "0.97rem" }}>
-                            {cc.label ?? (cc.period ? `Appel ${cc.period}` : `Appel ${cc.call_date}`)}
+                            {cc.label ?? tc("callLabel", { period: cc.period ?? cc.call_date })}
                           </div>
                           <div className="muted" style={{ fontSize: "0.78rem", marginTop: 2 }}>
-                            {cc.type === "exceptionnel" ? "Exceptionnel" : "Régulier"}
+                            {cc.type === "exceptionnel" ? tc("types.exceptionnel") : tc("types.regulier")}
                             {cc.period && ` · ${cc.period}`}
-                            {" · "}Date : {cc.call_date}
-                            {cc.due_date && ` · Échéance : `}
+                            {" · "}{tc("date")} : {cc.call_date}
+                            {cc.due_date && ` · ${tc("dueLabel")} : `}
                             {cc.due_date && (
                               <span style={{ color: telaat ? "var(--crit)" : undefined }}>
-                                {cc.due_date}{telaat ? " ⚠ en retard" : ""}
+                                {cc.due_date}{telaat ? ` ${tc("late")}` : ""}
                               </span>
                             )}
                           </div>
@@ -287,7 +530,7 @@ export default async function FiscalYearDetail({
 
                       {cc.charge_allocations.length > 0 && (
                         <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--line)", paddingTop: "0.6rem" }}>
-                          <div className="label" style={{ marginBottom: "0.35rem" }}>Répartition par lot</div>
+                          <div className="label" style={{ marginBottom: "0.35rem" }}>{tc("verdeling")}</div>
                           <div style={{ display: "grid", gap: "0.3rem" }}>
                             {cc.charge_allocations.map((ca) => {
                               return (
@@ -298,7 +541,7 @@ export default async function FiscalYearDetail({
                                   </span>
                                   <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                     <span style={{ fontWeight: 600 }}>{fmt(Number(ca.amount))} MAD</span>
-                                    {allocBadge(Number(ca.settled_amount), Number(ca.amount), cc.due_date)}
+                                    {allocBadge(Number(ca.settled_amount), Number(ca.amount), cc.due_date, tcom)}
                                   </span>
                                 </div>
                               );
@@ -306,116 +549,201 @@ export default async function FiscalYearDetail({
                           </div>
                         </div>
                       )}
+
+                      {/*
+                        De DEFINITIEVE verdeling, letterlijk uit
+                        `charge_allocations`. Dat is de door de database
+                        vastgelegde uitkomst van de centverdeling, inclusief de
+                        restcenten; hier wordt niets herberekend. De snapshotkop
+                        erboven vertelt welke regel er werkelijk is toegepast.
+                      */}
+                      <details style={{ marginTop: "0.75rem" }}>
+                        <summary className="cursor-pointer text-[0.8rem] font-medium">
+                          {tc("result.title")}
+                        </summary>
+                        <div className="mt-2 flex flex-col gap-2">
+                          <dl className="text-ink-soft m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[0.75rem]">
+                            <dt>{tc("result.rule")}</dt>
+                            <dd className="m-0">{cc.alloc_rule_label}</dd>
+                            <dt>{tc("result.method")}</dt>
+                            <dd className="m-0">
+                              {tc(`methods.${cc.alloc_method}` as never)} /{" "}
+                              {tc(`scopes.${cc.alloc_scope}` as never)}
+                            </dd>
+                            <dt>{tc("result.participants")}</dt>
+                            <dd className="m-0 [font-variant-numeric:tabular-nums]">
+                              {cc.alloc_unit_count}
+                            </dd>
+                            {cc.alloc_partial_denominator && (
+                              <>
+                                <dt>{tc("result.partial")}</dt>
+                                <dd className="text-warn m-0">✓</dd>
+                              </>
+                            )}
+                          </dl>
+
+                          {!verdeling.volledig ? (
+                            /*
+                              Niet "geen regels": de engine bediende
+                              `alloc_unit_count` lots, en zoveel rijen hebben we
+                              niet. Dan is dit geen definitief resultaat maar
+                              een onvolledige lijst, en die tonen we niet.
+                            */
+                            <p
+                              className="text-crit m-0 text-[0.78rem]"
+                              role="alert"
+                              data-testid="lines-error"
+                            >
+                              {tc("result.unavailable")}
+                            </p>
+                          ) : verdeling.regels.length === 0 ? (
+                            <p className="text-ink-soft m-0 text-[0.78rem]">
+                              {tc("result.noLines")}
+                            </p>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-[0.78rem] [font-variant-numeric:tabular-nums]">
+                                <caption className="text-ink-soft text-start text-[0.72rem]">
+                                  {tc("result.source")}
+                                </caption>
+                                <thead>
+                                  <tr>
+                                    <th className="text-ink-soft text-start font-medium">
+                                      {tc("result.unit")}
+                                    </th>
+                                    <th className="text-ink-soft text-end font-medium">
+                                      {tc("result.amount")}
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {verdeling.regels.map((regel) => (
+                                    <tr key={`${cc.id}-${regel.label}`}>
+                                      <td className="text-start">{regel.label}</td>
+                                      <td className="text-end">
+                                        {formatMoney(regel.amountCents / 100, locale)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      </details>
                     </div>
                   );
                 })}
               </div>
             </section>
 
-            {fy.status === "open" && (
-              <ActionForm action={createChargeCall} className="card" style={{ padding: "1.1rem 1.2rem", marginTop: "0.9rem" }}>
-                <input type="hidden" name="building_id" value={buildingId} />
-                <input type="hidden" name="fiscal_year_id" value={fyId} />
-                <h3 style={{ fontSize: "0.92rem", margin: "0 0 0.9rem" }}>Nouvel appel de charges</h3>
+            {/*
+              De workflow vervangt het losse formulier: invoeren, controleren en
+              pas daarna definitief aanmaken. Drie poorten staan ervoor.
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.7rem", marginBottom: "0.7rem" }}>
-                  <div>
-                    <label className="label" htmlFor="cc_type">Type</label>
-                    <select className="input" id="cc_type" name="type" defaultValue="regulier">
-                      <option value="regulier">Régulier</option>
-                      <option value="exceptionnel">Exceptionnel</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="period">Période</label>
-                    <input className="input" id="period" name="period" placeholder="ex. T1 2026" />
-                  </div>
+              1. SCHRIJFRECHT. Een leesrol krijgt het formulier niet te zien.
+                 Dat is geen beveiliging - de RPC toetst `can_write` zelf - maar
+                 het voorkomt een knop waarvan we weten dat hij faalt.
+              2. OPEN BOEKJAAR. Een gesloten boekjaar weigert de database.
+              3. VOLLEDIGE BRONNEN. Faalde een van de queries waarop de controle
+                 steunt, dan verschijnt er GEEN aanmaakknop en geen groene
+                 gereedmelding, maar een foutmelding. Een mislukte query mag
+                 nooit als gezonde data doorgaan.
+            */}
+            {mayWrite && fy.status === "open" && (
+              workflowOk ? (
+                <ChargeCallWorkflow
+                  buildingId={buildingId}
+                  fiscalYearId={fyId}
+                  fiscalYear={{
+                    year: fy.year,
+                    status: fy.status,
+                    ...boekjaarPeriode,
+                  }}
+                  declaredTantiemes={b.total_tantiemes}
+                  rules={rules}
+                  units={lots}
+                  ruleUnits={ruleUnits}
+                  ruleWeights={ruleWeights}
+                  ownership={ownershipRows}
+                  today={vandaag}
+                />
+              ) : (
+                <div className="card mt-4 p-4" role="alert" data-testid="workflow-error">
+                  <p className="m-0 text-[0.85rem] font-medium">{tc("errors.generic")}</p>
                 </div>
-
-                <div style={{ marginBottom: "0.7rem" }}>
-                  <label className="label" htmlFor="cc_label">Libellé (optionnel)</label>
-                  <input className="input" id="cc_label" name="label" placeholder="Entretien ascenseur T2" />
-                </div>
-
-                <div style={{ marginBottom: "0.7rem" }}>
-                  <label className="label" htmlFor="allocation_rule_id">Clé de répartition</label>
-                  <select className="input" id="allocation_rule_id" name="allocation_rule_id" defaultValue="">
-                    <option value="">Règle par défaut du bâtiment</option>
-                    {rules.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.label} — {METHOD_LABEL[r.method] ?? r.method} / {SCOPE_LABEL[r.scope] ?? r.scope}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {heeftHandmatigeRegel && lots.length > 0 && (
-                  <details style={{ marginBottom: "0.9rem" }}>
-                    <summary style={{ cursor: "pointer", fontSize: "0.82rem", color: "var(--muted)" }}>
-                      Montants manuels par lot — uniquement pour une règle « manuel »
-                    </summary>
-                    <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0.5rem 0" }}>
-                      Chaque lot participant doit avoir un montant. Un champ vide compte comme 0,00 MAD.
-                      La somme doit correspondre exactement au montant de l&apos;appel.
-                    </p>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.5rem" }}>
-                      {lots.map((u) => (
-                        <div key={u.id}>
-                          <label className="label" htmlFor={`manual_${u.id}`}>{u.label}</label>
-                          <input
-                            className="input"
-                            id={`manual_${u.id}`}
-                            name={`manual_${u.id}`}
-                            type="text"
-                            inputMode="decimal"
-                            placeholder="0.00"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                )}
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.7rem", marginBottom: "0.9rem" }}>
-                  <div>
-                    <label className="label" htmlFor="total_amount">Montant (MAD)</label>
-                    <input className="input" id="total_amount" name="total_amount" type="text" placeholder="1200.00" required />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="call_date">Date d&apos;appel</label>
-                    <input className="input" id="call_date" name="call_date" type="date" required />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="due_date">Échéance</label>
-                    <input className="input" id="due_date" name="due_date" type="date" />
-                  </div>
-                </div>
-
-                <button className="btn btn-primary" style={{ width: "100%" }}>
-                  Créer l&apos;appel
-                </button>
-              </ActionForm>
+              )
             )}
           </div>
 
           <div style={{ display: "grid", gap: "1.4rem" }}>
             <section id="betalingen">
-              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>Paiements</h2>
+              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>{tp("title")}</h2>
 
-              {pays.length === 0 && (
+              {!paymentsOk && (
+                <div
+                  className="card"
+                  style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                  role="alert"
+                  data-testid="payments-error"
+                >
+                  {tc("errors.paymentsUnavailable")}
+                </div>
+              )}
+
+              {/*
+                FAIL-CLOSED op de STORNOSTATUS. Een rij zonder stornomarkering
+                beweert dat er niet gestorneerd is. Kon de reversal-view niet
+                worden gelezen, dan is dat een bewering die we niet kunnen
+                waarmaken - dus geen rijen, geen lege toestand, en nooit de
+                naam van de view of de databasetekst in beeld.
+              */}
+              {paymentsOk && !reversalsOk && (
+                <div
+                  className="card"
+                  style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                  role="alert"
+                  data-testid="reversals-error"
+                >
+                  {tr("errors.statusUnavailable")}
+                </div>
+              )}
+
+              {paymentRowsOk && pays.length === 0 && (
                 <div className="card muted" style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}>
-                  Aucun paiement.
+                  {tp("noPayments")}
+                </div>
+              )}
+
+              {/*
+                De boekjaarstatus achter de storno-/correctieknoppen. De rijen
+                zelf blijven staan - hun bedrag en stornostatus zijn betrouwbaar
+                - maar er verschijnt geen actie waarvan we niet weten of de
+                database hem toestaat.
+              */}
+              {paymentRowsOk && !actionStatusOk && pays.length > 0 && (
+                <div
+                  className="card"
+                  style={{ padding: "0.8rem 1rem", fontSize: "0.85rem", marginBottom: "0.7rem" }}
+                  role="alert"
+                  data-testid="action-status-error"
+                >
+                  {tr("errors.actionStatusUnavailable")}
                 </div>
               )}
 
               <div style={{ display: "grid", gap: "0.55rem" }}>
-                {pays.map((p) => {
+                {(paymentRowsOk ? pays : []).map((p) => {
                   // `reversal` = deze betaling is gestorneerd.
                   // `correction` = deze betaling IS de vervangende rij.
                   const reversal = reversalOf(reversals, p.id);
                   const correction = correctionOf(reversals, p.id);
                   const isClosed = closedPayments.has(p.id);
-                  const mayReverse = reversal === null && canReverse(role, isClosed);
+                  // Zonder betrouwbare boekjaarstatus geen actieknop: `isClosed`
+                  // zou dan stil `false` zijn en de knop zou owner/admin-recht
+                  // suggereren waar de database het weigert.
+                  const mayReverse =
+                    reversal === null && actionStatusOk && canReverse(role, isClosed);
 
                   return (
                   <div key={p.id} className="card" style={{ padding: "0.75rem 0.9rem" }}>
@@ -492,14 +820,14 @@ export default async function FiscalYearDetail({
                 })}
               </div>
 
-              {fy.status === "open" && eigenaars.length > 0 && (
+              {paymentFormOk && eigenaars.length > 0 && (
                 <ActionForm action={createPayment} className="card" style={{ padding: "1rem 1.1rem", marginTop: "0.7rem" }}>
                   <input type="hidden" name="building_id" value={buildingId} />
                   <input type="hidden" name="fiscal_year_id" value={fyId} />
-                  <h3 style={{ fontSize: "0.88rem", margin: "0 0 0.75rem" }}>Enregistrer un paiement</h3>
+                  <h3 style={{ fontSize: "0.88rem", margin: "0 0 0.75rem" }}>{tp("registerPayment")}</h3>
 
                   <div style={{ marginBottom: "0.6rem" }}>
-                    <label className="label" htmlFor="owner_id">Propriétaire</label>
+                    <label className="label" htmlFor="owner_id">{tp("owner")}</label>
                     <select className="input" id="owner_id" name="owner_id" required>
                       {eigenaars.map((o) => (
                         <option key={o.id} value={o.id}>{o.full_name}</option>
@@ -509,54 +837,65 @@ export default async function FiscalYearDetail({
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.6rem", marginBottom: "0.6rem" }}>
                     <div>
-                      <label className="label" htmlFor="pay_amount">Montant (MAD)</label>
+                      <label className="label" htmlFor="pay_amount">{tp("amount")}</label>
                       <input className="input" id="pay_amount" name="amount" type="text" placeholder="300.00" required />
                     </div>
                     <div>
-                      <label className="label" htmlFor="value_date">Date</label>
+                      <label className="label" htmlFor="value_date">{tp("date")}</label>
                       <input className="input" id="value_date" name="value_date" type="date" required />
                     </div>
                   </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.6rem", marginBottom: "0.75rem" }}>
                     <div>
-                      <label className="label" htmlFor="method">Mode</label>
+                      <label className="label" htmlFor="method">{tp("method")}</label>
                       <select className="input" id="method" name="method" defaultValue="virement">
-                        <option value="virement">Virement</option>
-                        <option value="especes">Espèces</option>
-                        <option value="cheque">Chèque</option>
-                        <option value="carte">Carte</option>
+                        <option value="virement">{tp("methods.virement")}</option>
+                        <option value="especes">{tp("methods.especes")}</option>
+                        <option value="cheque">{tp("methods.cheque")}</option>
+                        <option value="carte">{tp("methods.carte")}</option>
                       </select>
                     </div>
                     <div>
-                      <label className="label" htmlFor="reference">Référence</label>
-                      <input className="input" id="reference" name="reference" placeholder="VIR-2026-001" />
+                      <label className="label" htmlFor="reference">{tp("reference")}</label>
+                      <input className="input" id="reference" name="reference" placeholder={tp("referencePlaceholder")} />
                     </div>
                   </div>
 
-                  <button className="btn btn-primary" style={{ width: "100%" }}>Enregistrer</button>
+                  <button className="btn btn-primary" style={{ width: "100%" }}>{tp("registerBtn")}</button>
                 </ActionForm>
               )}
             </section>
 
             <section>
-              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>Solde par propriétaire</h2>
+              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.7rem" }}>{ts("title")}</h2>
 
-              {saldoRows.length === 0 && (
-                <div className="card muted" style={{ padding: "0.8rem 1rem", fontSize: "0.85rem" }}>
-                  Aucun appel ou propriétaire lié.
+              {!saldoOk && (
+                <div
+                  className="card"
+                  style={{ padding: "0.8rem 1rem", fontSize: "0.85rem" }}
+                  role="alert"
+                  data-testid="balance-error"
+                >
+                  {tc("errors.balanceUnavailable")}
                 </div>
               )}
 
-              {saldoRows.length > 0 && (
+              {saldoOk && saldoRows.length === 0 && (
+                <div className="card muted" style={{ padding: "0.8rem 1rem", fontSize: "0.85rem" }}>
+                  {ts("noData")}
+                </div>
+              )}
+
+              {saldoOk && saldoRows.length > 0 && (
                 <div className="card" style={{ overflow: "hidden" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.83rem" }}>
                     <thead>
                       <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--line)" }}>
-                        <th style={{ textAlign: "left", padding: "0.55rem 0.8rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>Propriétaire</th>
-                        <th style={{ textAlign: "right", padding: "0.55rem 0.6rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>Appelé</th>
-                        <th style={{ textAlign: "right", padding: "0.55rem 0.6rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>Payé</th>
-                        <th style={{ textAlign: "right", padding: "0.55rem 0.8rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>Solde</th>
+                        <th style={{ textAlign: "left", padding: "0.55rem 0.8rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>{ts("owner")}</th>
+                        <th style={{ textAlign: "right", padding: "0.55rem 0.6rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>{ts("called")}</th>
+                        <th style={{ textAlign: "right", padding: "0.55rem 0.6rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>{ts("paid")}</th>
+                        <th style={{ textAlign: "right", padding: "0.55rem 0.8rem", fontWeight: 600, color: "var(--ink-faint)", fontSize: "0.72rem", textTransform: "uppercase" }}>{ts("open")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -569,7 +908,7 @@ export default async function FiscalYearDetail({
                               <div style={{ fontWeight: 500 }}>{row.naam}</div>
                               {row.teLaat > 0 && (
                                 <div style={{ color: "var(--crit)", fontSize: "0.72rem", fontWeight: 600 }}>
-                                  {fmt(row.teLaat)} MAD en retard
+                                  {fmt(row.teLaat)} {ts("lateSuffix")}
                                 </div>
                               )}
                             </td>
@@ -586,7 +925,7 @@ export default async function FiscalYearDetail({
                     </tbody>
                     <tfoot>
                       <tr style={{ borderTop: "2px solid var(--line)", background: "var(--surface-2)" }}>
-                        <td style={{ padding: "0.6rem 0.8rem", fontWeight: 700, fontSize: "0.85rem" }}>Total</td>
+                        <td style={{ padding: "0.6rem 0.8rem", fontWeight: 700, fontSize: "0.85rem" }}>{ts("total")}</td>
                         <td style={{ textAlign: "right", padding: "0.6rem 0.6rem", fontWeight: 700 }}>{fmt(saldoRows.reduce((s, r) => s + r.opgeroepen, 0))}</td>
                         <td style={{ textAlign: "right", padding: "0.6rem 0.6rem", fontWeight: 700, color: "var(--good)" }}>{fmt(saldoRows.reduce((s, r) => s + r.voldaan, 0))}</td>
                         <td style={{ textAlign: "right", padding: "0.6rem 0.8rem", fontWeight: 700 }}>{fmt(saldoRows.reduce((s, r) => s + (r.opgeroepen - r.voldaan), 0))}</td>

@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:db:m30": "node scripts/test-m30-local.mjs"
+    "test:db:m30": "node scripts/test-m30-local.mjs",
+    "test:db:m31": "node scripts/test-m31-local.mjs",
+    "test:db:m31:concurrency": "node scripts/test-m31-concurrency.mjs",
+    "test:db:m32": "node scripts/test-m32-local.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

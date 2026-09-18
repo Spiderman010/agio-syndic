@@ -1,14 +1,20 @@
 import { describe, expect, test } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   buildReversalIndex,
   correctionOf,
   emptyReversalIndex,
+  fetchReversalIndexResult,
   grossTotal,
   isReversed,
   netTotal,
   reversalOf,
   type ReversalViewRow,
 } from "@/lib/reversal";
+
+import fr from "../messages/fr.json";
+import nl from "../messages/nl.json";
+import ar from "../messages/ar.json";
 
 /**
  * R1–R8 — netto rapportage en eigenaarsaldo.
@@ -154,5 +160,125 @@ describe("eigenaarsaldo", () => {
     const fout = 1000 - (1000 + 800);
     expect(fout).toBe(-800);
     expect(ownerBalance([{ amount: 1000, settled_amount: 800 }])).not.toBe(fout);
+  });
+});
+
+
+// ── De foutstatus van het ophalen ──────────────────────────────────────────
+
+/**
+ * `fetchReversalIndexResult()` is de strikte variant: hij geeft de foutstatus
+ * mee terug in plaats van een leesfout te vertalen naar "niets gestorneerd".
+ *
+ * Dat verschil is de hele reden dat deze functie bestaat. Een lege index uit
+ * een mislukte query laat een gestorneerde betaling als actief verschijnen en
+ * zet er een stornoknop bij die `fn_reversal_authorize` weigert.
+ */
+describe("FR — foutstatus van de reversal-index", () => {
+  /** Minimale PostgREST-keten die één vast resultaat teruggeeft. */
+  function client(resultaat: { data: unknown; error: unknown }): SupabaseClient {
+    const keten: Record<string, unknown> = {};
+    const zelf = () => keten;
+    Object.assign(keten, {
+      select: zelf,
+      eq: zelf,
+      or: () => Promise.resolve(resultaat),
+    });
+    return { from: () => keten } as unknown as SupabaseClient;
+  }
+
+  test("FR1 een leesfout komt naar buiten en de index is leeg", async () => {
+    const fout = { message: 'relation "v_financial_reversals" does not exist' };
+    const uit = await fetchReversalIndexResult(client({ data: null, error: fout }), "payment", [
+      "p1",
+    ]);
+    expect(uit.error).toBe(fout);
+    expect(uit.index.bySource.size).toBe(0);
+    expect(uit.index.byCorrection.size).toBe(0);
+  });
+
+  test("FR2 een GESLAAGDE lege query is een geldige, betrouwbare lege index", async () => {
+    const uit = await fetchReversalIndexResult(client({ data: [], error: null }), "payment", [
+      "p1",
+    ]);
+    expect(uit.error).toBeNull();
+    expect(uit.index.bySource.size).toBe(0);
+  });
+
+  test("FR3 nul bron-id's is geen fout: er valt niets op te halen", async () => {
+    // Zou dit als fout gelden, dan kreeg elk scherm zonder betalingen een
+    // foutmelding te zien waar niets mis is.
+    const uit = await fetchReversalIndexResult(
+      client({ data: null, error: { message: "zou niet aangeroepen mogen worden" } }),
+      "payment",
+      [],
+    );
+    expect(uit.error).toBeNull();
+    expect(uit.index.bySource.size).toBe(0);
+  });
+
+  test("FR4 een geslaagde query met rijen levert de echte index", async () => {
+    const rijen = [row({ source_id: "p1", correction_source_id: "p2", is_correctie: true })];
+    const uit = await fetchReversalIndexResult(
+      client({ data: rijen, error: null }),
+      "payment",
+      ["p1", "p2"],
+    );
+    expect(uit.error).toBeNull();
+    expect(reversalOf(uit.index, "p1")?.isCorrection).toBe(true);
+    expect(correctionOf(uit.index, "p2")?.sourceId).toBe("p1");
+  });
+
+  test("FR5 data zonder error telt eveneens als onbekend, niet als leeg", async () => {
+    const uit = await fetchReversalIndexResult(client({ data: null, error: null }), "payment", [
+      "p1",
+    ]);
+    expect(uit.error).toBeTruthy();
+    expect(uit.index.bySource.size).toBe(0);
+  });
+});
+
+// ── Vertalingen van de nieuwe fail-closed meldingen ────────────────────────
+
+describe("VR — vertalingen reversal FR/NL/AR", () => {
+  const talen = { fr, nl, ar } as Record<string, Record<string, unknown>>;
+
+  test("VR1 de fail-closed meldingen bestaan in alle drie de talen", () => {
+    for (const [naam, berichten] of Object.entries(talen)) {
+      const errors = (berichten.reversal as { errors: Record<string, string> }).errors;
+      for (const sleutel of ["statusUnavailable", "actionStatusUnavailable"]) {
+        const tekst = errors[sleutel];
+        expect(tekst, `reversal.errors.${sleutel} ontbreekt in ${naam}`).toBeTruthy();
+        expect(tekst, `${naam}.${sleutel}`).not.toContain("{");
+        // Geen technische viewnaam of tabelnaam in een gebruikerstekst.
+        expect(tekst, `${naam}.${sleutel}`).not.toContain("v_financial_reversals");
+        expect(tekst, `${naam}.${sleutel}`).not.toContain("journal_entries");
+      }
+    }
+  });
+
+  test("VR2 geen taal mist een sleutel die het Frans wel heeft binnen reversal", () => {
+    const leaves = (o: unknown, p = ""): string[] =>
+      o && typeof o === "object"
+        ? Object.entries(o as Record<string, unknown>).flatMap(([k, v]) => leaves(v, `${p}${k}.`))
+        : [p.slice(0, -1)];
+    const frKeys = new Set(leaves((fr as Record<string, unknown>).reversal));
+    for (const [naam, berichten] of Object.entries({ nl, ar })) {
+      const andere = new Set(leaves((berichten as Record<string, unknown>).reversal));
+      const ontbrekend = [...frKeys].filter((k) => !andere.has(k));
+      expect(ontbrekend, `ontbrekend in ${naam}: ${ontbrekend.join(", ")}`).toEqual([]);
+    }
+  });
+
+  test("VR3 de meldingen klinken niet als een geslaagde, lege uitkomst", () => {
+    // "geen storno" en "open boekjaar" zijn precies de beweringen die deze
+    // meldingen NIET mogen doen.
+    const verdacht = /\b(aucune extourne|geen storno|open boekjaar|exercice ouvert)\b/i;
+    for (const [naam, berichten] of Object.entries(talen)) {
+      const errors = (berichten.reversal as { errors: Record<string, string> }).errors;
+      for (const sleutel of ["statusUnavailable", "actionStatusUnavailable"]) {
+        expect(verdacht.test(errors[sleutel]), `${naam}.${sleutel}`).toBe(false);
+      }
+    }
   });
 });
