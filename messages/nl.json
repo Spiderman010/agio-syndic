@@ -580,6 +580,10 @@
     "subtitle": "Alle lots van {building}.",
     "notFound": "Dit gebouw bestaat niet binnen deze organisatie",
     "backToBuildings": "Terug naar gebouwen",
+    "readOnly": {
+      "title": "Alleen-lezen",
+      "body": "Uw rol geeft inzage in deze lots, maar geen recht om ze te wijzigen. Vraag een beheerder van uw organisatie om een lot toe te voegen of aan te passen."
+    },
     "table": {
       "label": "Lot",
       "type": "Type",

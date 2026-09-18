@@ -6,6 +6,7 @@ import { Link } from "@/navigation";
 import Card, { CardHeader } from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Table, { Td, Th } from "@/components/ui/Table";
+import Empty, { EmptyBody, EmptyTitle } from "@/components/ui/Empty";
 import { buttonClasses } from "@/components/ui/Button";
 import { formatDate } from "@/lib/money";
 import {
@@ -90,7 +91,10 @@ export default async function LotsPage({
     .eq("organization_id", org.id)
     .maybeSingle();
 
-  if (buildingRes.error) return <Fout t={t} />;
+  if (buildingRes.error) {
+    logLotsFout("building", [`buildings:${buildingRes.error.code}`]);
+    return <Fout t={t} />;
+  }
   if (!buildingRes.data) {
     return (
       <Card>
@@ -136,7 +140,14 @@ export default async function LotsPage({
   const owners = ownerRes.error ? null : ((ownerRes.data ?? []) as OwnerRow[]);
 
   const bronnen = assembleOwnership({ units, ownership, owners });
-  if (bronnen.status === "error") return <Fout t={t} />;
+  if (bronnen.status === "error") {
+    const codes: string[] = [];
+    if (unitRes.error) codes.push(`units:${unitRes.error.code}`);
+    if (ownershipRes.error) codes.push(`ownership:${ownershipRes.error.code}`);
+    if (ownerRes.error) codes.push(`owners:${ownerRes.error.code}`);
+    logLotsFout("sources", codes);
+    return <Fout t={t} />;
+  }
 
   const perUnit = groupByUnit(bronnen.ownership);
   const ownerNaam = new Map(bronnen.owners.map((o) => [o.id, o.full_name]));
@@ -236,17 +247,23 @@ export default async function LotsPage({
         </Card>
       </section>
 
+      {/*
+        Drie toestanden, één vorm, DRIE BOODSCHAPPEN. Ze delen nu `Empty` zodat
+        ze als één systeem ogen, maar ze houden elk hun eigen sleutel en hun
+        eigen `role`. Inklappen tot één generieke "leeg" zou de enige vraag
+        wegpoetsen die ertoe doet: weten we dat er niets is, of weten we het
+        niet? De mislukte variant komt hier trouwens nooit langs — die keert
+        al eerder terug via `Fout`.
+      */}
       {bronnen.units.length === 0 ? (
-        <Card>
-          <p className="m-0 font-medium">{t("empty.title")}</p>
-          <p className="mt-1 mb-0 text-[0.875rem] text-ink-soft">{t("empty.body")}</p>
-        </Card>
+        <Empty testId="lots-empty">
+          <EmptyTitle>{t("empty.title")}</EmptyTitle>
+          <EmptyBody>{t("empty.body")}</EmptyBody>
+        </Empty>
       ) : zichtbaar.length === 0 ? (
-        <Card>
-          <p className="m-0 text-[0.875rem] text-ink-soft" role="status">
-            {t("search.none", { term: zoekterm })}
-          </p>
-        </Card>
+        <Empty role="status" testId="lots-no-results">
+          <EmptyBody>{t("search.none", { term: zoekterm })}</EmptyBody>
+        </Empty>
       ) : (
         <Table caption={t("title")}>
           <thead>
@@ -410,7 +427,9 @@ export default async function LotsPage({
             />
           </Card>
         </section>
-      ) : null}
+      ) : (
+        <AlleenLezen t={t} />
+      )}
     </>
   );
 }
@@ -496,11 +515,47 @@ function StatusBadge({ status, label }: { status: LotStatus; label: string }) {
 
 function Fout({ t }: { t: Awaited<ReturnType<typeof getTranslations>> }) {
   return (
-    <Card>
-      <p className="m-0 font-medium text-crit" role="alert">
-        {t("loadError.title")}
-      </p>
-      <p className="mt-1 mb-0 text-[0.875rem] text-ink-soft">{t("loadError.body")}</p>
-    </Card>
+    <Empty toon="fout" role="alert" testId="lots-unavailable">
+      <EmptyTitle toon="fout">{t("loadError.title")}</EmptyTitle>
+      <EmptyBody>{t("loadError.body")}</EmptyBody>
+    </Empty>
   );
+}
+
+/**
+ * Wat een LEZER ziet waar een schrijver het aanmaakformulier krijgt.
+ *
+ * `role="status"`, nadrukkelijk niet `alert`: er is niets mis. Lezen is een
+ * geldige rol en geen storing waar iemand achteraan moet. Hiervoor stond hier
+ * niets — het scherm was voor een lezer stilzwijgend onvolledig, zonder enige
+ * aanwijzing waarom de knoppen ontbraken.
+ *
+ * De conditie is `!mayWrite`, nooit "heeft geen leesrecht": elke rol die deze
+ * pagina bereikt heeft leesrecht, dus die tak zou onbereikbaar zijn.
+ */
+function AlleenLezen({ t }: { t: Awaited<ReturnType<typeof getTranslations>> }) {
+  return (
+    <section className="mt-6">
+      <Card role="status" data-testid="lots-readonly">
+        <p className="m-0 font-medium">{t("readOnly.title")}</p>
+        <p className="mt-1 mb-0 text-[0.875rem] text-ink-soft">{t("readOnly.body")}</p>
+      </Card>
+    </section>
+  );
+}
+
+/**
+ * Wat er in het SERVERLOG terechtkomt als de lijst niet geladen kan worden.
+ *
+ * De gebruiker krijgt bewust één en dezelfde melding, welke query er ook
+ * faalt: welke tabel het was, is interne structuur en hoort niet op het
+ * scherm. Maar wie de storing moet oplossen heeft dat onderscheid wél nodig,
+ * en dat hoort thuis in het log.
+ *
+ * Volgt `reversalErrorFingerprint`: alleen bron en SQLSTATE. GEEN
+ * Postgres-tekst, geen id's, geen gebouwnaam, geen organisatie — dat zijn
+ * klantgegevens en die horen niet in een logregel.
+ */
+function logLotsFout(scope: "building" | "sources", codes: readonly string[]) {
+  console.error(`[lots] load-failed scope=${scope} ${codes.join(" ") || "sqlstate=?"}`);
 }

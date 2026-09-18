@@ -674,6 +674,10 @@ describe("I — vertaalpariteit fr, nl en ar", () => {
 
 describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
   it("D1 — geen vaste pixelbreedtes of fysieke richtingen in de nieuwe schermen", () => {
+    // ELK nieuw presentatiebestand in deze stroom hoort hier bij te komen, en
+    // wel VOORDAT het wordt toegevoegd. Een bestand dat niet in deze lijst
+    // staat wordt niet gescand, en dan valt de RTL-waarborg stil zonder dat
+    // er iets rood wordt — precies het soort gat dat niemand opmerkt.
     const bestanden = [
       join(REPO, "src", "app", "[locale]", "(app)", "owners", "page.tsx"),
       join(REPO, "src", "app", "[locale]", "(app)", "owners", "[owner_id]", "page.tsx"),
@@ -691,14 +695,47 @@ describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
         "lots",
         "OwnershipForms.tsx",
       ),
+      join(REPO, "src", "components", "ui", "Empty.tsx"),
     ];
+    // De oorspronkelijke versie zocht letterlijk naar `className="..."`. Dat
+    // mist ALLES wat via `cn(...)` loopt, en dat is precies hoe elke primitive
+    // onder `components/ui` zijn klassen schrijft. Een bestand aan de lijst
+    // toevoegen zonder dit te repareren zou een lege uitbreiding zijn: het
+    // wordt dan wel ingelezen, maar er valt niets te vinden.
+    //
+    // Daarom: haal commentaar weg (toelichtingen CITEREN deze klassen) en
+    // beoordeel elke losse token uit elke string, waar hij ook staat.
+    const klasseTokens = (bron: string): string[] => {
+      const kaal = bron
+        .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/.*$/gm, "");
+      const uit: string[] = [];
+      // Zowel "..." als `...`: dit scherm schrijft klassen in beide vormen,
+      // en een template literal is even fysiek als een gewone string.
+      const strings = [
+        ...[...kaal.matchAll(/"([^"\n]*)"/g)].map((m) => m[1]),
+        ...[...kaal.matchAll(/`([^`]*)`/g)].map((m) => m[1].replace(/\$\{[^}]*\}/g, " ")),
+      ];
+      for (const str of strings) {
+        for (const token of str.split(/\s+/)) {
+          // Breekpuntprefixen doen er niet toe: `sm:ml-2` is even fysiek.
+          if (token) uit.push(token.slice(token.lastIndexOf(":") + 1));
+        }
+      }
+      return uit;
+    };
+
+    const VASTE_BREEDTE = /^w-\[\d+px\]$/;
+    const FYSIEK = /^(ml|mr|pl|pr)-|^text-(left|right)$|^border-(l|r)$/;
+
     for (const bestand of bestanden) {
       const bron = readFileSync(bestand, "utf8");
-      expect(bron, bestand).not.toMatch(/className="[^"]*\bw-\[\d+px\]/);
       expect(bron, bestand).not.toMatch(/style=\{\{[^}]*width:\s*\d/);
-      expect(bron, bestand).not.toMatch(
-        /className="[^"]*\b(ml-|mr-|pl-|pr-|text-left|text-right|border-l\b|border-r\b)/,
-      );
+
+      const tokens = klasseTokens(bron);
+      expect(tokens.filter((t) => VASTE_BREEDTE.test(t)), `${bestand}: vaste breedte`).toEqual([]);
+      expect(tokens.filter((t) => FYSIEK.test(t)), `${bestand}: fysieke richting`).toEqual([]);
     }
   });
 
