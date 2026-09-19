@@ -369,6 +369,97 @@ export const lotCreateSchema = z.object({
 /** `building_id` blijft meegaan zodat de server de gebouwscope kan verifiëren. */
 export const lotUpdateSchema = lotCreateSchema.extend({ unit_id: uuid });
 
+// ── blokken en bulk-lots ────────────────────────────────────────────────────
+
+/**
+ * Een blokcode. Verplicht en niet-blanco, want `blocks_code_not_blank` weigert
+ * dat toch; hier vangen we het af zodat de gebruiker een leesbare melding
+ * krijgt in plaats van een databasefout.
+ *
+ * De uniciteit is HOOFDLETTERONGEVOELIG per gebouw
+ * (`blocks_building_code_ci_idx` op `lower(btrim(code))`), dus "A" naast "a"
+ * bestaat niet. Dat kan alleen de database weten; de melding daarvoor loopt via
+ * `blockErrorKey`.
+ */
+const blockCode = z
+  .string()
+  .trim()
+  .min(1, "Blokcode is verplicht.")
+  .max(40, "Maximaal 40 tekens.");
+
+/** Blokken worden op `sort_order` getoond; de waarde is een gewoon geheel getal. */
+const sortOrder = z.coerce
+  .number()
+  .int("Volgorde moet een geheel getal zijn.")
+  .min(0)
+  .max(100_000);
+
+export const blockCreateSchema = z.object({
+  building_id: uuid,
+  code: blockCode,
+  name: optionalText(80),
+  sort_order: sortOrder.default(0),
+});
+
+export const blockUpdateSchema = blockCreateSchema.extend({ block_id: uuid });
+
+/**
+ * Archiveren en de-archiveren in één schema.
+ *
+ * Archiveren zet ALLEEN `archived_at`; het laat `units.block_id` staan. De
+ * lots van een gearchiveerd blok blijven daardoor bestaan en verschijnen op het
+ * indelingsscherm in de groep "onbereikbaar" — bewust zichtbaar, niet verstopt.
+ */
+export const blockArchiveSchema = z.object({
+  building_id: uuid,
+  block_id: uuid,
+  archived: z.enum(["true", "false"]),
+});
+
+/** Eén rij uit het bulkformulier. */
+export const bulkLotRowSchema = z.object({
+  label: z.string().trim().min(1, "Label is verplicht.").max(80),
+  unit_type: unitTypeEnum.default("appartement"),
+  tantiemes: z.coerce
+    .number()
+    .int("Tantièmes moeten een geheel getal zijn.")
+    .min(0)
+    .max(10_000_000),
+});
+
+/**
+ * De hele bulkinvoer. Minstens één rij, en een bovengrens zodat één
+ * verkeerde post geen duizenden rijen aanmaakt.
+ */
+export const bulkLotsSchema = z.object({
+  building_id: uuid,
+  /** Leeg betekent: zonder blok. */
+  block_id: z.preprocess(blankToNull, uuid.nullable()),
+  rows: z
+    .array(bulkLotRowSchema)
+    .min(1, "Voeg minstens één lot toe.")
+    .max(200, "Maximaal 200 lots per keer."),
+});
+
+/**
+ * Een lot bewerken vanaf het indelingsscherm: label, type, tantième en de
+ * blokindeling. Bewust GEEN `building_id`-wijziging — dat blokkeert de database
+ * met `fn_guard_unit_building_immutable`, en aanbieden wat zeker faalt is geen
+ * formulier maar een val.
+ */
+export const lotLayoutUpdateSchema = z.object({
+  building_id: uuid,
+  unit_id: uuid,
+  label: z.string().trim().min(1, "Label is verplicht.").max(80),
+  unit_type: unitTypeEnum.default("appartement"),
+  tantiemes: z.coerce
+    .number()
+    .int("Tantièmes moeten een geheel getal zijn.")
+    .min(0)
+    .max(10_000_000),
+  block_id: z.preprocess(blankToNull, uuid.nullable()),
+});
+
 export const linkFirstOwnerSchema = z.object({
   building_id: uuid,
   unit_id: uuid,
