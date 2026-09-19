@@ -5,6 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import fr from "../messages/fr.json";
 import nl from "../messages/nl.json";
 import ar from "../messages/ar.json";
+import { deleteErrorKey } from "@/lib/deleteErrors";
 
 /**
  * De verwijdersectie op de detailpagina van een eigenaar.
@@ -294,6 +295,44 @@ describe("I — de vertalingen van het verwijderen", () => {
       expect(String(d.cascade), `${naam} cascade`).toContain("{count}");
       const m = deel(berichten, ["indeling", "manage"]);
       expect(String(m.deleteLotTitle), `${naam} deleteLotTitle`).toContain("{label}");
+    }
+  });
+
+  it("I11 — ELKE sleutel die deleteErrorKey kan teruggeven bestaat ook echt", () => {
+    /**
+     * De suites hierboven mocken `getTranslations`, dus daar levert een
+     * niet-bestaande sleutel gewoon de sleutelnaam op en blijft alles groen.
+     * Een rename in `deleteErrors.ts` of een verwijderde vertaling zou dus pas
+     * bij een echte gebruiker stuklopen, op het moment dat het misgaat — precies
+     * het slechtste moment. Deze test leest de ECHTE berichtenbestanden.
+     */
+    const GEVALLEN: Array<[string, string[]]> = [
+      // code uit de trigger → het namespace-pad waarin de sleutel moet bestaan
+      ["ALLOC_UNIT_HAS_HISTORY", ["indeling", "errors"]],
+      ["ALLOC_OWNER_HAS_HISTORY", ["owners", "errors"]],
+      ["ALLOC_OWNER_HAS_PAYMENTS", ["owners", "errors"]],
+    ];
+
+    for (const [code, pad] of GEVALLEN) {
+      const sleutel = deleteErrorKey({ code: "23514", message: `${code}: iets` });
+      for (const [taal, berichten] of TALEN) {
+        const ns = deel(berichten, pad);
+        expect(typeof ns[sleutel], `${taal}: ${pad.join(".")}.${sleutel} (voor ${code})`).toBe(
+          "string",
+        );
+      }
+    }
+
+    // En de terugval. Die wordt op BEIDE schermen gebruikt, dus hij moet in
+    // beide namespaces bestaan.
+    const terugval = deleteErrorKey({ code: "23503", message: "iets onbekends" });
+    for (const [taal, berichten] of TALEN) {
+      for (const pad of [["indeling", "errors"], ["owners", "errors"]]) {
+        expect(
+          typeof deel(berichten, pad)[terugval],
+          `${taal}: ${pad.join(".")}.${terugval} (terugval)`,
+        ).toBe("string");
+      }
     }
   });
 
