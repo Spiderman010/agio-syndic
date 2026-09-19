@@ -381,7 +381,8 @@
     "breadcrumb": "Kruimelpad",
     "owners": "Eigenaren",
     "lots": "Lots",
-    "layout": "Indeling"
+    "layout": "Indeling",
+    "setup": "Instellen"
   },
   "shell": {
     "organisation": "Organisatie",
@@ -794,6 +795,86 @@
     "readOnly": {
       "title": "Alleen-lezen",
       "body": "Uw rol geeft inzage in deze indeling, maar geen recht om haar te wijzigen. Vraag een beheerder van uw organisatie om een blok of lot aan te maken."
+    }
+  },
+  "wizard": {
+    "title": "Gebouw instellen",
+    "subtitle": "Hoe staat {building} ervoor?",
+    "notFound": "Dit gebouw bestaat niet binnen deze organisatie",
+    "backToBuildings": "Terug naar gebouwen",
+    "stepLabel": "Stap {nummer}",
+    "progress": {
+      "title": "Voortgang",
+      "count": "{gedaan} van {totaal}",
+      "done": "Alles staat klaar.",
+      "toLayout": "Bekijk de indeling van het gebouw"
+    },
+    "stand": {
+      "klaar": "Klaar",
+      "bezig": "Bezig",
+      "tedoen": "Nog te doen",
+      "optioneel": "Optioneel",
+      "wacht": "Later"
+    },
+    "steps": {
+      "gebouw": {
+        "title": "Gebouw",
+        "klaar": "Het gebouw is aangemaakt. Naam, adres en het verklaarde tantièmetotaal kunt u nog aanpassen.",
+        "bezig": "Het gebouw is aangemaakt.",
+        "tedoen": "Het gebouw is aangemaakt.",
+        "optioneel": "Het gebouw is aangemaakt.",
+        "wacht": "Het gebouw is aangemaakt.",
+        "action": "Gegevens bewerken",
+        "view": "Gegevens bekijken"
+      },
+      "blokken": {
+        "title": "Blokken",
+        "klaar": "{aantal} blok(ken). De lots kunnen erover worden verdeeld.",
+        "bezig": "{aantal} blok(ken).",
+        "tedoen": "{aantal} blok(ken).",
+        "optioneel": "Nog geen blokken — dat hoeft ook niet. Zonder blokken hangen de lots rechtstreeks onder het gebouw.",
+        "wacht": "Nog geen blokken.",
+        "action": "Blokken toevoegen of wijzigen",
+        "view": "Blokken bekijken"
+      },
+      "lots": {
+        "title": "Lots",
+        "klaar": "{aantal} lot(s) vastgelegd.",
+        "bezig": "{aantal} lot(s) vastgelegd.",
+        "tedoen": "Nog geen lots. Zonder lots is er niets te verdelen en niets op te roepen.",
+        "optioneel": "{aantal} lot(s).",
+        "wacht": "Nog geen lots.",
+        "action": "Lots toevoegen",
+        "view": "Lots bekijken"
+      },
+      "eigenaren": {
+        "title": "Eigenaren",
+        "klaar": "{aantal} eigenaar/eigenaren in de organisatie, beschikbaar voor al uw gebouwen.",
+        "bezig": "{aantal} eigenaar/eigenaren in de organisatie.",
+        "tedoen": "Nog geen eigenaren. U maakt ze één keer aan; ze gelden voor al uw gebouwen.",
+        "optioneel": "{aantal} eigenaar/eigenaren.",
+        "wacht": "Nog geen eigenaren.",
+        "action": "Eigenaren aanmaken",
+        "view": "Eigenaren bekijken"
+      },
+      "koppelen": {
+        "title": "Koppelen",
+        "klaar": "Alle {totaal} lots hebben een eigenaar.",
+        "bezig": "{gekoppeld} van {totaal} lots gekoppeld · {vrij} nog vrij.",
+        "tedoen": "Nog geen van de {totaal} lots heeft een eigenaar.",
+        "optioneel": "{gekoppeld} van {totaal} gekoppeld.",
+        "wacht": "Hiervoor zijn eerst lots en minstens één eigenaar nodig.",
+        "action": "Lots aan eigenaren koppelen",
+        "view": "Koppelingen bekijken"
+      }
+    },
+    "readOnly": {
+      "title": "Alleen-lezen",
+      "body": "Uw rol geeft inzage in de voortgang, maar geen recht om haar te wijzigen. De links hierboven openen de schermen ter inzage."
+    },
+    "loadError": {
+      "title": "De voortgang kon niet worden geladen",
+      "body": "Er wordt bewust niets getoond: een onvolledige voortgang zou u gegevens laten invoeren die er al staan. Probeer het opnieuw of neem contact op met support."
     }
   }
 }

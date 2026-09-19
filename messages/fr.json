@@ -381,7 +381,8 @@
     "breadcrumb": "Fil d'Ariane",
     "owners": "Copropriétaires",
     "lots": "Lots",
-    "layout": "Répartition"
+    "layout": "Répartition",
+    "setup": "Configurer"
   },
   "shell": {
     "organisation": "Organisation",
@@ -794,6 +795,86 @@
     "readOnly": {
       "title": "Lecture seule",
       "body": "Votre rôle permet de consulter cette répartition, pas de la modifier. Adressez-vous à un gestionnaire de votre organisation pour créer un bloc ou un lot."
+    }
+  },
+  "wizard": {
+    "title": "Configurer l'immeuble",
+    "subtitle": "Où en est {building} ?",
+    "notFound": "Cet immeuble n'existe pas dans cette organisation",
+    "backToBuildings": "Retour aux immeubles",
+    "stepLabel": "Étape {nummer}",
+    "progress": {
+      "title": "Avancement",
+      "count": "{gedaan} sur {totaal}",
+      "done": "Tout est en place.",
+      "toLayout": "Voir la répartition de l'immeuble"
+    },
+    "stand": {
+      "klaar": "Fait",
+      "bezig": "En cours",
+      "tedoen": "À faire",
+      "optioneel": "Facultatif",
+      "wacht": "Plus tard"
+    },
+    "steps": {
+      "gebouw": {
+        "title": "Immeuble",
+        "klaar": "L'immeuble est créé. Vous pouvez encore corriger le nom, l'adresse ou les tantièmes déclarés.",
+        "bezig": "L'immeuble est créé.",
+        "tedoen": "L'immeuble est créé.",
+        "optioneel": "L'immeuble est créé.",
+        "wacht": "L'immeuble est créé.",
+        "action": "Modifier les données",
+        "view": "Voir les données"
+      },
+      "blokken": {
+        "title": "Blocs",
+        "klaar": "{aantal} bloc(s). Les lots peuvent être répartis entre eux.",
+        "bezig": "{aantal} bloc(s).",
+        "tedoen": "{aantal} bloc(s).",
+        "optioneel": "Aucun bloc — ce n'est pas obligatoire. Sans bloc, les lots se rattachent directement à l'immeuble.",
+        "wacht": "Aucun bloc pour le moment.",
+        "action": "Ajouter ou modifier des blocs",
+        "view": "Voir les blocs"
+      },
+      "lots": {
+        "title": "Lots",
+        "klaar": "{aantal} lot(s) enregistré(s).",
+        "bezig": "{aantal} lot(s) enregistré(s).",
+        "tedoen": "Aucun lot encore. Sans lots, il n'y a rien à répartir ni à appeler.",
+        "optioneel": "{aantal} lot(s).",
+        "wacht": "Aucun lot encore.",
+        "action": "Ajouter des lots",
+        "view": "Voir les lots"
+      },
+      "eigenaren": {
+        "title": "Copropriétaires",
+        "klaar": "{aantal} copropriétaire(s) dans l'organisation, disponibles pour tous vos immeubles.",
+        "bezig": "{aantal} copropriétaire(s) dans l'organisation.",
+        "tedoen": "Aucun copropriétaire encore. Ils sont créés une seule fois et servent à tous vos immeubles.",
+        "optioneel": "{aantal} copropriétaire(s).",
+        "wacht": "Aucun copropriétaire encore.",
+        "action": "Créer des copropriétaires",
+        "view": "Voir les copropriétaires"
+      },
+      "koppelen": {
+        "title": "Attribution",
+        "klaar": "Les {totaal} lots ont un propriétaire.",
+        "bezig": "{gekoppeld} lot(s) sur {totaal} attribué(s) · {vrij} encore libre(s).",
+        "tedoen": "Aucun des {totaal} lots n'a encore de propriétaire.",
+        "optioneel": "{gekoppeld} sur {totaal} attribué(s).",
+        "wacht": "Il faut d'abord des lots et au moins un copropriétaire.",
+        "action": "Attribuer les lots",
+        "view": "Voir les attributions"
+      }
+    },
+    "readOnly": {
+      "title": "Lecture seule",
+      "body": "Votre rôle permet de suivre l'avancement, pas de le modifier. Les liens ci-dessus ouvrent les écrans en consultation."
+    },
+    "loadError": {
+      "title": "L'avancement n'a pas pu être chargé",
+      "body": "Rien n'est affiché volontairement : un avancement incomplet vous ferait ressaisir des données déjà présentes. Réessayez ou contactez le support."
     }
   }
 }

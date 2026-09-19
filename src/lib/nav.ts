@@ -30,7 +30,8 @@ export type NavIcon =
   | "expenses"
   | "owners"
   | "lots"
-  | "layout";
+  | "layout"
+  | "setup";
 
 export type NavItem = {
   /** Stabiele sleutel, ook gebruikt als React-key en als testanker. */
@@ -116,6 +117,16 @@ export function buildingNavItems(buildingId: string): NavItem[] {
       labelKey: "overview",
       icon: "overview",
       exact: true,
+    },
+    {
+      // Instellen: de begeleide checklist. Staat vóór de indeling omdat dit het
+      // scherm is waar je begint bij een nieuw gebouw. Strikt read-only — hij
+      // leest de stand en wijst naar de schermen waar het werk gebeurt.
+      key: "building-setup",
+      href: `${base}/wizard`,
+      labelKey: "setup",
+      icon: "setup",
+      exact: false,
     },
     {
       // De indeling: welke blokken bestaan er en wat hangt eraan. Strikt

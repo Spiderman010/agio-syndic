@@ -27,6 +27,9 @@ describe("navigatiemodel", () => {
     ]);
     expect(buildingNavItems(BID).map((i) => i.key)).toEqual([
       "building-overview",
+      // "Instellen" staat vóór de indeling: het is het scherm waar je bij een
+      // nieuw gebouw begint.
+      "building-setup",
       "building-layout",
       "building-lots",
       "building-fiscal-years",

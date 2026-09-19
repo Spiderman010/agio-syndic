@@ -5,6 +5,7 @@ import {
   Blocks,
   Building2,
   CalendarRange,
+  ClipboardList,
   KeyRound,
   LayoutDashboard,
   LayoutList,
@@ -31,6 +32,7 @@ const ICONS: Record<NavIcon, React.ComponentType<{ className?: string }>> = {
   owners: Users,
   lots: KeyRound,
   layout: Blocks,
+  setup: ClipboardList,
 };
 
 export default function NavList({
