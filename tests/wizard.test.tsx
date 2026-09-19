@@ -517,6 +517,28 @@ describe("P — dit scherm muteert niets", () => {
     }
   });
 
+  it("P22 — er worden geen eigenaarsNAMEN opgehaald, alleen een aantal", () => {
+    /**
+     * Stap 4 toont een getal. `full_name` meelezen zou van elke eigenaar in de
+     * organisatie een persoonsgegeven naar de server halen waar niets mee
+     * gebeurt — en die payload groeit mee met het klantenbestand.
+     *
+     * Structureel getoetst: een kolom die niet wordt opgevraagd, kan ook niet
+     * per ongeluk ergens terechtkomen.
+     */
+    const bron = readFileSync(
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "wizard", "page.tsx"),
+      "utf8",
+    );
+    const ownersQuery = bron.slice(bron.indexOf('.from("owners")'));
+    const select = /\.select\("([^"]*)"\)/.exec(ownersQuery)?.[1];
+    expect(select, "de owners-query hoort een select te hebben").toBeTruthy();
+    expect(select).toBe("id");
+    for (const kolom of ["full_name", "email", "phone"]) {
+      expect(select, `${kolom} wordt niet gebruikt en hoort niet opgehaald`).not.toContain(kolom);
+    }
+  });
+
   it("P15 — een LEZER ziet dezelfde checklist, met een leesmelding", async () => {
     state.rol = "reader";
     await toon();

@@ -6,7 +6,7 @@ import { Link } from "@/navigation";
 import Card, { CardHeader } from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Empty, { EmptyBody, EmptyTitle } from "@/components/ui/Empty";
-import { assembleOwnership, type OwnerRow, type OwnershipRow } from "@/lib/ownership";
+import { assembleOwnership, type OwnershipRow } from "@/lib/ownership";
 import { bouwChecklist, type Stap, type StapStand } from "@/lib/wizard";
 import type { BlockRow, LayoutUnitRow } from "@/lib/layout";
 
@@ -106,11 +106,16 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
 
   // Eigenaren zijn organisatiebreed; de scope is hier de ORGANISATIE, niet het
   // gebouw. Stap 4 vraagt immers "is er iemand om te koppelen".
+  //
+  // ALLEEN `id`. Dit scherm rendert geen enkele eigenaarsnaam — het toont een
+  // AANTAL. Ook `full_name` ophalen zou van elke eigenaar in de organisatie een
+  // persoonsgegeven naar de server halen waar niets mee gebeurt, en die payload
+  // groeit mee met het klantenbestand. Wat je niet nodig hebt, haal je niet op.
   const ownerRes = await supabase
     .from("owners")
-    .select("id, full_name")
+    .select("id")
     .eq("organization_id", org.id);
-  const owners = ownerRes.error ? null : ((ownerRes.data ?? []) as OwnerRow[]);
+  const owners = ownerRes.error ? null : ((ownerRes.data ?? []) as { id: string }[]);
 
   const bronnen = assembleOwnership({ units, ownership, owners });
   if (blocks === null || bronnen.status === "error") {
