@@ -673,6 +673,29 @@ describe("I — vertaalpariteit fr, nl en ar", () => {
 // ── RENDERVORM ──────────────────────────────────────────────────────────────
 
 describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
+  /**
+   * De matchers staan op describe-niveau zodat D1 (die BESTANDEN scant) en D3
+   * (die de MATCHER zelf toetst) dezelfde objecten gebruiken. Een kopie in de
+   * test zou kunnen afdrijven van wat er werkelijk draait — dan bewaakt de
+   * guard een regex die niemand meer uitvoert.
+   */
+
+  /** Breekpuntprefix eraf: `sm:-mr-1` wordt `-mr-1`. */
+  const zonderBreekpunt = (token: string) => token.slice(token.lastIndexOf(":") + 1);
+
+  const VASTE_BREEDTE = /^w-\[\d+px\]$/;
+  // De `-?` is niet cosmetisch: `-ml-2` en `sm:-mr-1` zijn even fysiek als
+  // hun positieve broers, maar beginnen met een koppelteken. Een anker op
+  // `^` zonder die optie liet ze door — terwijl de oudere `\bml-`-variant
+  // ze wél ving. Dat was een regressie, en hij is hier gerepareerd.
+  const FYSIEK = /^-?(ml|mr|pl|pr)-|^text-(left|right)$|^border-(l|r)$/;
+
+  /** Weigert D1 deze klasse? Exact de beslissing die D1 per token neemt. */
+  const wordtGeweigerd = (klasse: string) => {
+    const token = zonderBreekpunt(klasse);
+    return VASTE_BREEDTE.test(token) || FYSIEK.test(token);
+  };
+
   it("D1 — geen vaste pixelbreedtes of fysieke richtingen in de nieuwe schermen", () => {
     // ELK nieuw presentatiebestand in deze stroom hoort hier bij te komen, en
     // wel VOORDAT het wordt toegevoegd. Een bestand dat niet in deze lijst
@@ -720,18 +743,11 @@ describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
       for (const str of strings) {
         for (const token of str.split(/\s+/)) {
           // Breekpuntprefixen doen er niet toe: `sm:ml-2` is even fysiek.
-          if (token) uit.push(token.slice(token.lastIndexOf(":") + 1));
+          if (token) uit.push(zonderBreekpunt(token));
         }
       }
       return uit;
     };
-
-    const VASTE_BREEDTE = /^w-\[\d+px\]$/;
-    // De `-?` is niet cosmetisch: `-ml-2` en `sm:-mr-1` zijn even fysiek als
-    // hun positieve broers, maar beginnen met een koppelteken. Een anker op
-    // `^` zonder die optie liet ze door — terwijl de oudere `\bml-`-variant
-    // ze wél ving. Dat was een regressie, en hij is hier gerepareerd.
-    const FYSIEK = /^-?(ml|mr|pl|pr)-|^text-(left|right)$|^border-(l|r)$/;
 
     for (const bestand of bestanden) {
       const bron = readFileSync(bestand, "utf8");
@@ -740,6 +756,59 @@ describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
       const tokens = klasseTokens(bron);
       expect(tokens.filter((t) => VASTE_BREEDTE.test(t)), `${bestand}: vaste breedte`).toEqual([]);
       expect(tokens.filter((t) => FYSIEK.test(t)), `${bestand}: fysieke richting`).toEqual([]);
+    }
+  });
+
+  it("D3 — de matcher zelf: fysiek eruit, logisch erin", () => {
+    /**
+     * Waarom deze test bestaat.
+     *
+     * D1 scant bestanden. Als de MATCHER stuk is, vindt D1 niets en wordt er
+     * niets rood — de waarborg valt dan stil zonder enig signaal. Dat is in
+     * deze stroom twee keer gebeurd: eerst zag hij alleen `className="..."`
+     * en miste alles wat via `cn(...)` loopt, daarna liet het anker op `^`
+     * de negatieve varianten door.
+     *
+     * Beide keren was het bewijs dat het gerepareerd was een HANDMATIGE
+     * mutatietoets, en die leeft in een rapport, niet in de suite. Hier staat
+     * dat bewijs permanent: wie de matcher versoepelt, krijgt deze test rood.
+     *
+     * Getoetst wordt `wordtGeweigerd` — exact de beslissing die D1 per token
+     * neemt, met dezelfde prefix-stripping. Geen kopie van de regex.
+     */
+    const SLECHT = [
+      "ml-2",
+      "-ml-2",
+      "sm:-mr-1",
+      "pl-3",
+      "pr-4",
+      "sm:pr-4",
+      "text-left",
+      "text-right",
+      "border-l",
+      "border-r",
+      "w-[320px]",
+    ];
+
+    // Logische tegenhangers: die spiegelen mee met de leesrichting en horen
+    // juist NIET geweigerd te worden. Zonder deze helft zou een matcher die
+    // domweg alles afkeurt de test óók halen.
+    const GOED = [
+      "ms-2",
+      "me-2",
+      "ps-4",
+      "pe-4",
+      "text-center",
+      "border",
+      "rounded-l-lg",
+      "w-full",
+    ];
+
+    for (const klasse of SLECHT) {
+      expect(wordtGeweigerd(klasse), `${klasse} hoort geweigerd te worden`).toBe(true);
+    }
+    for (const klasse of GOED) {
+      expect(wordtGeweigerd(klasse), `${klasse} is richtingsneutraal en mag blijven`).toBe(false);
     }
   });
 
