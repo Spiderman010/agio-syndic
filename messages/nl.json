@@ -573,7 +573,20 @@
       "dateNotAfterStart": "De overdrachtsdatum moet ná het begin van de huidige eigendomsperiode liggen.",
       "overlap": "Deze periode overlapt met bestaande eigendomshistorie. Er is niets gewijzigd.",
       "deleteForbidden": "Eigendomshistorie kan niet worden verwijderd zolang de organisatie bestaat.",
-      "generic": "De actie is mislukt. Er is niets gewijzigd."
+      "generic": "De actie is mislukt. Er is niets gewijzigd.",
+      "ownerHasHistory": "Deze eigenaar heeft vastgelegde vorderingen en kan niet worden verwijderd. De gegevens blijven bewaard zodat de boekhouding controleerbaar blijft.",
+      "ownerHasPayments": "Deze eigenaar heeft geregistreerde betalingen en kan niet worden verwijderd. De gegevens blijven bewaard zodat de boekhouding controleerbaar blijft."
+    },
+    "delete": {
+      "heading": "Deze eigenaar verwijderen",
+      "intro": "Een eigenaar zonder vorderingen en zonder betalingen kan worden verwijderd. Zodra er financiële historie is, bewaart de database de gegevens: beëindig dan het eigendom op het betreffende lot om de eigenaar uit het actieve gebruik te halen.",
+      "start": "Deze eigenaar verwijderen…",
+      "title": "{name} verwijderen?",
+      "body": "Dit is definitief.",
+      "cascade": "{count} eigendomskoppeling(en) verdwijnen mee. Vorderingen en betalingen verhinderen het verwijderen juist: in dat geval wordt er niets verwijderd.",
+      "confirm": "Ja, deze eigenaar verwijderen",
+      "cancel": "Annuleren",
+      "pending": "…"
     }
   },
   "lots": {
@@ -762,14 +775,21 @@
       "removeRow": "Rij {nummer} verwijderen",
       "createLots": "Lots aanmaken",
       "bulkTotal": "Nieuwe tantièmes: {nieuw} — totaal na aanmaken: {straks} van {verklaard} verklaard.",
-      "bulkTotalMismatch": "het totaal sluit nog niet"
+      "bulkTotalMismatch": "het totaal sluit nog niet",
+      "deleteLotLink": "Verwijderen",
+      "deleteLotTitle": "Lot {label} verwijderen?",
+      "deleteLotBody": "Dit is definitief. Het lot verschijnt daarna niet meer in de indeling en niet meer in nieuwe lastenoproepen.",
+      "deleteLotCascade": "De eigendomskoppelingen van dit lot en zijn deelname aan verdeelregels verdwijnen mee. Komt het lot voor in een al vastgelegde lastenoproep, dan weigert de database het verwijderen en gaat er niets verloren.",
+      "deleteLotConfirm": "Ja, dit lot verwijderen",
+      "cancel": "Annuleren"
     },
     "errors": {
       "forbidden": "U mag dit gebouw niet wijzigen.",
       "duplicateCode": "Er bestaat al een blok met deze code in dit gebouw.",
       "blankCode": "De blokcode mag niet leeg zijn.",
       "blockNotInBuilding": "Dit blok hoort niet bij dit gebouw.",
-      "generic": "De bewerking is niet gelukt. Probeer het opnieuw of neem contact op met support."
+      "generic": "De bewerking is niet gelukt. Probeer het opnieuw of neem contact op met support.",
+      "lotHasHistory": "Dit lot komt voor in een vastgelegde lastenoproep en kan niet worden verwijderd. Het blijft bewaard zodat de boekhouding controleerbaar blijft."
     },
     "readOnly": {
       "title": "Alleen-lezen",

@@ -545,14 +545,51 @@ describe("A — eigendom loopt uitsluitend via de RPC's", () => {
     expect(formulier).toContain("current.id");
   });
 
-  it("A4 — er zijn geen verwijderknoppen voor eigenaren, lots of eigendom", () => {
-    for (const map of ["owners", join("buildings", "[id]", "lots")]) {
-      const dir = join(REPO, "src", "app", "[locale]", "(app)", ...map.split(/[\\/]/));
-      for (const pad of alleBronnen(dir)) {
+  /**
+   * A4 stond hier oorspronkelijk als "nergens een delete". Dat was juist zolang
+   * er niets verwijderd kon worden; nu kunnen een lot en een eigenaar weg, en
+   * dan is een blanco verbod geen guard meer maar een leugen die vroeg of laat
+   * wordt weggehaald.
+   *
+   * Wat er WEL te bewaken valt is de grens: er mag uit precies twee tabellen
+   * worden verwijderd, en `ownership` staat daar niet bij. Eigendom beëindigen
+   * of overdragen loopt via de RPC's met hun eigen stale-bescherming; een kale
+   * DELETE op `ownership` zou die hele flow omzeilen en de historie stilletjes
+   * uitgummen.
+   */
+  it("A4 — er wordt uit precies twee tabellen verwijderd, en nooit uit ownership", () => {
+    const DIRS = [
+      ["owners"],
+      ["buildings", "[id]", "lots"],
+      ["buildings", "[id]", "indeling"],
+    ];
+    /** Elke `.delete()` met de tabel waar hij bij hoort. */
+    const deletes = (bron: string): string[] => {
+      const uit: string[] = [];
+      for (const m of bron.matchAll(/\.delete\(\)/g)) {
+        const daarvoor = bron.slice(0, m.index);
+        const tabel = [...daarvoor.matchAll(/\.from\("([a-z_]+)"\)/g)].at(-1)?.[1];
+        uit.push(tabel ?? "?");
+      }
+      return uit;
+    };
+
+    const gevonden: string[] = [];
+    for (const map of DIRS) {
+      for (const pad of alleBronnen(join(REPO, "src", "app", "[locale]", "(app)", ...map))) {
         const bron = readFileSync(pad, "utf8");
-        expect(/\.delete\(\)/.test(bron), `${pad} bevat een delete`).toBe(false);
+        for (const tabel of deletes(bron)) gevonden.push(`${tabel} @ ${pad}`);
+        // Het lotsscherm zelf verwijdert niets; daar zit de eigendomsflow.
+        if (map.includes("lots")) {
+          expect(deletes(bron), `${pad}: het lotsscherm verwijdert niets`).toEqual([]);
+        }
       }
     }
+
+    const tabellen = [...new Set(gevonden.map((g) => g.split(" @ ")[0]))].sort();
+    expect(tabellen, `gevonden deletes: ${gevonden.join(", ")}`).toEqual(["owners", "units"]);
+    // En dus zeker niet: ownership.
+    expect(tabellen).not.toContain("ownership");
   });
 });
 
@@ -726,6 +763,9 @@ describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
       join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "indeling", "BlokBeheer.tsx"),
       join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "indeling", "BulkLots.tsx"),
       join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "indeling", "LotBewerken.tsx"),
+      join(REPO, "src", "lib", "deleteErrors.ts"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "indeling", "LotVerwijderen.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "owners", "[owner_id]", "EigenaarVerwijderen.tsx"),
     ];
     // De oorspronkelijke versie zocht letterlijk naar `className="..."`. Dat
     // mist ALLES wat via `cn(...)` loopt, en dat is precies hoe elke primitive

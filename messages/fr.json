@@ -573,7 +573,20 @@
       "dateNotAfterStart": "La date de mutation doit être postérieure au début de la période de propriété actuelle.",
       "overlap": "Cette période chevauche un historique de propriété existant. Rien n'a été modifié.",
       "deleteForbidden": "L'historique de propriété ne peut pas être supprimé tant que l'organisation existe.",
-      "generic": "L'action a échoué. Rien n'a été modifié."
+      "generic": "L'action a échoué. Rien n'a été modifié.",
+      "ownerHasHistory": "Ce copropriétaire a des créances enregistrées et ne peut pas être supprimé. Sa fiche est conservée pour que la comptabilité reste vérifiable.",
+      "ownerHasPayments": "Ce copropriétaire a des paiements enregistrés et ne peut pas être supprimé. Sa fiche est conservée pour que la comptabilité reste vérifiable."
+    },
+    "delete": {
+      "heading": "Supprimer ce copropriétaire",
+      "intro": "Un copropriétaire sans créances ni paiements peut être supprimé. Dès qu'il existe un historique financier, la base de données conserve la fiche : utilisez alors une fin de propriété sur le lot concerné pour le retirer de l'usage courant.",
+      "start": "Supprimer ce copropriétaire…",
+      "title": "Supprimer {name} ?",
+      "body": "Cette action est définitive.",
+      "cascade": "{count} lien(s) de propriété disparaissent avec cette fiche. Les créances et les paiements, eux, empêchent la suppression : dans ce cas rien n'est supprimé.",
+      "confirm": "Oui, supprimer ce copropriétaire",
+      "cancel": "Annuler",
+      "pending": "…"
     }
   },
   "lots": {
@@ -762,14 +775,21 @@
       "removeRow": "Retirer la ligne {nummer}",
       "createLots": "Créer les lots",
       "bulkTotal": "Nouveaux tantièmes : {nieuw} — total après création : {straks} sur {verklaard} déclarés.",
-      "bulkTotalMismatch": "le total ne correspond pas encore"
+      "bulkTotalMismatch": "le total ne correspond pas encore",
+      "deleteLotLink": "Supprimer",
+      "deleteLotTitle": "Supprimer le lot {label} ?",
+      "deleteLotBody": "Cette action est définitive. Le lot n'apparaîtra plus dans la répartition ni dans les appels de charges à venir.",
+      "deleteLotCascade": "Les liens de propriété de ce lot et son appartenance aux règles de répartition disparaissent avec lui. Si le lot figure dans un appel de charges déjà enregistré, la base de données refuse la suppression et rien n'est perdu.",
+      "deleteLotConfirm": "Oui, supprimer ce lot",
+      "cancel": "Annuler"
     },
     "errors": {
       "forbidden": "Vous n'avez pas le droit de modifier cet immeuble.",
       "duplicateCode": "Un bloc portant ce code existe déjà dans cet immeuble.",
       "blankCode": "Le code du bloc ne peut pas être vide.",
       "blockNotInBuilding": "Ce bloc n'appartient pas à cet immeuble.",
-      "generic": "L'opération n'a pas abouti. Réessayez ou contactez le support."
+      "generic": "L'opération n'a pas abouti. Réessayez ou contactez le support.",
+      "lotHasHistory": "Ce lot figure dans un appel de charges enregistré et ne peut pas être supprimé. Il est conservé pour que la comptabilité reste vérifiable."
     },
     "readOnly": {
       "title": "Lecture seule",
