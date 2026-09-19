@@ -2,13 +2,14 @@
 
 import { useTranslations } from "next-intl";
 import {
+  Blocks,
   Building2,
+  CalendarRange,
+  KeyRound,
   LayoutDashboard,
   LayoutList,
-  CalendarRange,
   ReceiptText,
   Users,
-  KeyRound,
 } from "lucide-react";
 import { Link } from "@/navigation";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ const ICONS: Record<NavIcon, React.ComponentType<{ className?: string }>> = {
   expenses: ReceiptText,
   owners: Users,
   lots: KeyRound,
+  layout: Blocks,
 };
 
 export default function NavList({

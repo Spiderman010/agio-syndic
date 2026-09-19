@@ -29,7 +29,8 @@ export type NavIcon =
   | "fiscalYears"
   | "expenses"
   | "owners"
-  | "lots";
+  | "lots"
+  | "layout";
 
 export type NavItem = {
   /** Stabiele sleutel, ook gebruikt als React-key en als testanker. */
@@ -115,6 +116,15 @@ export function buildingNavItems(buildingId: string): NavItem[] {
       labelKey: "overview",
       icon: "overview",
       exact: true,
+    },
+    {
+      // De indeling: welke blokken bestaan er en wat hangt eraan. Strikt
+      // read-only; blokbeheer en lotmutaties zijn andere schermen.
+      key: "building-layout",
+      href: `${base}/indeling`,
+      labelKey: "layout",
+      icon: "layout",
+      exact: false,
     },
     {
       // Lots horen bij exact één gebouw; deze route toont er nooit meer dan dat.

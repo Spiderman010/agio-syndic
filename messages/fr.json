@@ -380,7 +380,8 @@
     "building": "Immeuble",
     "breadcrumb": "Fil d'Ariane",
     "owners": "Copropriétaires",
-    "lots": "Lots"
+    "lots": "Lots",
+    "layout": "Répartition"
   },
   "shell": {
     "organisation": "Organisation",
@@ -679,5 +680,52 @@
       "dateRange": "Choisissez une date entre le {min} et le {max}."
     },
     "primaryDebtor": "Débiteur"
+  },
+  "indeling": {
+    "title": "Répartition de l'immeuble",
+    "subtitle": "Tous les blocs et lots de {building}.",
+    "notFound": "Cet immeuble n'existe pas dans cette organisation",
+    "backToBuildings": "Retour aux immeubles",
+    "summary": {
+      "title": "Synthèse",
+      "blocks": "Blocs",
+      "lots": "Lots",
+      "owners": "Propriétaires",
+      "free": "Lots libres",
+      "tantiemes": "Tantièmes répartis",
+      "tantiemesMismatch": "Les tantièmes répartis ({toegekend}) ne correspondent pas au total déclaré ({verklaard}).",
+      "incomplete": "{count} lot(s) sans tantième exploitable : ils ne participeront à aucun appel de fonds."
+    },
+    "block": {
+      "noBlock": "Sans bloc",
+      "unavailable": "Bloc indisponible",
+      "unavailableHint": "Ces lots renvoient à un bloc archivé ou introuvable. Ils ne sont pas masqués pour autant.",
+      "linked": "{count} rattaché(s)",
+      "free": "{count} libre(s)",
+      "incomplete": "{count} incomplet(s)",
+      "occupancy": "Taux de rattachement",
+      "subtotal": "Sous-total des tantièmes : {tantiemes}",
+      "subtotalIncomplete": "incomplet",
+      "empty": "Aucun lot dans ce bloc."
+    },
+    "status": {
+      "gekoppeld": "Rattaché",
+      "vrij": "Libre",
+      "onvolledig": "Incomplet"
+    },
+    "lot": {
+      "noOwner": "Sans propriétaire",
+      "unknownOwner": "Propriétaire inconnu",
+      "tantiemes": "Tantièmes : {tantiemes}",
+      "noTantiemes": "Sans tantième"
+    },
+    "empty": {
+      "title": "Aucun bloc ni lot",
+      "body": "Ajoutez des lots depuis l'écran Lots ; ils apparaîtront ici."
+    },
+    "loadError": {
+      "title": "La répartition n'a pas pu être chargée",
+      "body": "Rien n'est affiché volontairement : une répartition incomplète serait trompeuse. Réessayez ou contactez le support."
+    }
   }
 }

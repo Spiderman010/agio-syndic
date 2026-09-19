@@ -380,7 +380,8 @@
     "building": "Gebouw",
     "breadcrumb": "Kruimelpad",
     "owners": "Eigenaren",
-    "lots": "Lots"
+    "lots": "Lots",
+    "layout": "Indeling"
   },
   "shell": {
     "organisation": "Organisatie",
@@ -679,5 +680,52 @@
       "dateRange": "Kies een datum tussen {min} en {max}."
     },
     "primaryDebtor": "Debiteur"
+  },
+  "indeling": {
+    "title": "Indeling van het gebouw",
+    "subtitle": "Alle blokken en lots van {building}.",
+    "notFound": "Dit gebouw bestaat niet binnen deze organisatie",
+    "backToBuildings": "Terug naar gebouwen",
+    "summary": {
+      "title": "Samenvatting",
+      "blocks": "Blokken",
+      "lots": "Lots",
+      "owners": "Eigenaren",
+      "free": "Vrije lots",
+      "tantiemes": "Toegekende tantièmes",
+      "tantiemesMismatch": "De toegekende tantièmes ({toegekend}) komen niet overeen met het verklaarde totaal ({verklaard}).",
+      "incomplete": "{count} lot(s) zonder bruikbaar tantième; die doen aan geen enkele lastenoproep mee."
+    },
+    "block": {
+      "noBlock": "Zonder blok",
+      "unavailable": "Blok niet beschikbaar",
+      "unavailableHint": "Deze lots verwijzen naar een gearchiveerd of onbekend blok. Ze worden daarom niet verborgen.",
+      "linked": "{count} gekoppeld",
+      "free": "{count} vrij",
+      "incomplete": "{count} onvolledig",
+      "occupancy": "Koppelingsgraad",
+      "subtotal": "Subtotaal tantièmes: {tantiemes}",
+      "subtotalIncomplete": "onvolledig",
+      "empty": "Geen lots in dit blok."
+    },
+    "status": {
+      "gekoppeld": "Gekoppeld",
+      "vrij": "Vrij",
+      "onvolledig": "Onvolledig"
+    },
+    "lot": {
+      "noOwner": "Zonder eigenaar",
+      "unknownOwner": "Onbekende eigenaar",
+      "tantiemes": "Tantièmes: {tantiemes}",
+      "noTantiemes": "Zonder tantième"
+    },
+    "empty": {
+      "title": "Geen blokken en geen lots",
+      "body": "Voeg lots toe via het lotsscherm; ze verschijnen hier vanzelf."
+    },
+    "loadError": {
+      "title": "De indeling kon niet worden geladen",
+      "body": "Er wordt bewust niets getoond: een onvolledige indeling zou misleidend zijn. Probeer het opnieuw of neem contact op met support."
+    }
   }
 }
