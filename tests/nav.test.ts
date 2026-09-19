@@ -27,6 +27,7 @@ describe("navigatiemodel", () => {
     ]);
     expect(buildingNavItems(BID).map((i) => i.key)).toEqual([
       "building-overview",
+      "building-layout",
       "building-lots",
       "building-fiscal-years",
       "building-expenses",

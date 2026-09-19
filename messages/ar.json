@@ -380,7 +380,8 @@
     "building": "عمارة",
     "breadcrumb": "مسار التنقل",
     "owners": "الملاك",
-    "lots": "الوحدات"
+    "lots": "الوحدات",
+    "layout": "التقسيم"
   },
   "shell": {
     "organisation": "المؤسسة",
@@ -679,5 +680,52 @@
       "dateRange": "اختر تاريخًا بين {min} و{max}."
     },
     "primaryDebtor": "المدين"
+  },
+  "indeling": {
+    "title": "تقسيم المبنى",
+    "subtitle": "جميع كتل ووحدات {building}.",
+    "notFound": "هذا المبنى غير موجود في هذه المؤسسة",
+    "backToBuildings": "العودة إلى المباني",
+    "summary": {
+      "title": "ملخّص",
+      "blocks": "الكتل",
+      "lots": "الوحدات",
+      "owners": "الملاك",
+      "free": "وحدات شاغرة",
+      "tantiemes": "الأنصبة الموزّعة",
+      "tantiemesMismatch": "الأنصبة الموزّعة ({toegekend}) لا تطابق المجموع المعلن ({verklaard}).",
+      "incomplete": "{count} وحدة بدون نصيب صالح؛ لن تشارك في أي استدعاء للأعباء."
+    },
+    "block": {
+      "noBlock": "بدون كتلة",
+      "unavailable": "كتلة غير متاحة",
+      "unavailableHint": "تشير هذه الوحدات إلى كتلة مؤرشفة أو غير موجودة. ومع ذلك لم يتم إخفاؤها.",
+      "linked": "{count} مرتبطة",
+      "free": "{count} شاغرة",
+      "incomplete": "{count} غير مكتملة",
+      "occupancy": "نسبة الارتباط",
+      "subtotal": "المجموع الجزئي للأنصبة: {tantiemes}",
+      "subtotalIncomplete": "غير مكتمل",
+      "empty": "لا توجد وحدات في هذه الكتلة."
+    },
+    "status": {
+      "gekoppeld": "مرتبطة",
+      "vrij": "شاغرة",
+      "onvolledig": "غير مكتملة"
+    },
+    "lot": {
+      "noOwner": "بدون مالك",
+      "unknownOwner": "مالك غير معروف",
+      "tantiemes": "النصيب: {tantiemes}",
+      "noTantiemes": "بدون نصيب"
+    },
+    "empty": {
+      "title": "لا توجد كتل ولا وحدات",
+      "body": "أضف الوحدات من شاشة الوحدات؛ ستظهر هنا بعد ذلك."
+    },
+    "loadError": {
+      "title": "تعذّر تحميل التقسيم",
+      "body": "لا يُعرض شيء عمدًا: تقسيم ناقص قد يكون مضلّلًا. أعد المحاولة أو تواصل مع الدعم."
+    }
   }
 }
