@@ -8,11 +8,13 @@ import { canWrite } from "@/lib/roles";
 import { localeRedirect } from "@/lib/redirect";
 import { assertInOrg, assertUnitInOrg } from "@/lib/guard";
 import { blockErrorFingerprint, blockErrorKey } from "@/lib/blockErrors";
+import { deleteErrorFingerprint, deleteErrorKey } from "@/lib/deleteErrors";
 import {
   blockArchiveSchema,
   blockCreateSchema,
   blockUpdateSchema,
   bulkLotsSchema,
+  lotDeleteSchema,
   lotLayoutUpdateSchema,
   parseForm,
 } from "@/lib/validation";
@@ -30,11 +32,16 @@ import {
  * de grens te trekken. Die ligt in de database. `canWrite` spiegelt `can_write`
  * en is uitdrukkelijk GEEN security boundary — zie `lib/roles.ts`.
  *
- * ── VERWIJDEREN ZIT HIER NIET BIJ ──────────────────────────────────────────
+ * ── LOTS VERWIJDEREN ZIT HIER WEL BIJ, BLOKKEN NIET ────────────────────────
  *
- * Bewust. Blokken en lots verwijderen raakt financiële historie en heeft zijn
- * eigen vangrails in de database (`fn_guard_unit_delete_history`); dat is een
- * aparte, destructieve PR met een eigen review.
+ * Een lot verwijderen mag, want de database heeft er een vangrail voor:
+ * `fn_guard_unit_delete_history` weigert zodra het lot in een vastgelegde
+ * lastenoproep voorkomt. Schoon mag weg, mét historie is onmogelijk — dat is
+ * geen keuze van dit bestand.
+ *
+ * Een BLOK verwijderen blijft er bewust buiten: dat heeft geen guard en kan in
+ * `charge_calls.alloc_block_id` en `allocation_rules.scope_block_id` staan.
+ * Archiveren is daar het antwoord, en dat bestaat al.
  *
  * ── ARCHIVEREN NULT `block_id` NIET ────────────────────────────────────────
  *
@@ -288,4 +295,63 @@ export async function updateLotLayout(formData: FormData) {
     return fout(error);
   }
   return terug(building_id);
+}
+
+/**
+ * Een lot verwijderen.
+ *
+ * ── VIER LAGEN, EN DE LAATSTE IS DE ENIGE HARDE ────────────────────────────
+ *
+ *   1. de knop staat er alleen voor een schrijfrol;
+ *   2. er is een bevestigingspaneel, geen knop die meteen vernietigt;
+ *   3. deze actie controleert rol, bevestiging en gebouwscope;
+ *   4. `trig_00_unit_delete_history` weigert onafhankelijk zodra het lot in
+ *      `charge_allocations` voorkomt.
+ *
+ * Laag 4 is de reden dat dit veilig is. De rest bestaat om een begrijpelijke
+ * melding te kunnen geven in plaats van een databasefout.
+ *
+ * WAT ER MEEVERDWIJNT: de `ownership`-rijen van dit lot (ON DELETE CASCADE) en
+ * zijn lidmaatschap van verdeelregels. Dat is inrichting, geen financiële
+ * historie — die maakt verwijderen juist onmogelijk.
+ */
+export async function deleteLot(formData: FormData) {
+  const { org, role } = await requireOrg();
+  if (!canWrite(role)) return verboden();
+
+  const parsed = parseForm(lotDeleteSchema, formData);
+  if (!parsed.ok) return { error: parsed.error };
+  const { building_id, unit_id } = parsed.data;
+
+  const supabase = await createClient();
+  if (await assertInOrg(supabase, "buildings", building_id, org.id, "Gebouw")) {
+    return verboden();
+  }
+  // Het lot moet bij DIT gebouw én deze organisatie horen. Zonder deze controle
+  // zou een gemanipuleerd formulier een lot uit een ander gebouw verwijderen.
+  if (await assertUnitInOrg(supabase, unit_id, org.id, building_id)) return verboden();
+
+  const { error } = await supabase
+    .from("units")
+    .delete()
+    .eq("id", unit_id)
+    .eq("building_id", building_id);
+
+  if (error) {
+    logVerwijderFout("delete-lot", error);
+    return verwijderFout(error);
+  }
+  return terug(building_id);
+}
+
+/** De melding bij een mislukte verwijdering: altijd een sleutel, nooit DB-tekst. */
+async function verwijderFout(error: unknown): Promise<{ error: string }> {
+  const t = await getTranslations("indeling.errors");
+  return { error: t(deleteErrorKey(error as { code?: string; message?: string })) };
+}
+
+function logVerwijderFout(actie: string, error: unknown) {
+  console.error(
+    `[indeling] ${actie} ${deleteErrorFingerprint(error as { code?: string; message?: string })}`,
+  );
 }

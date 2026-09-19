@@ -413,6 +413,11 @@ vi.mock("../src/app/[locale]/(app)/buildings/[id]/indeling/LotBewerken", () => (
     />
   ),
 }));
+vi.mock("../src/app/[locale]/(app)/buildings/[id]/indeling/LotVerwijderen", () => ({
+  default: ({ lot }: { lot: { id: string } }) => (
+    <div data-testid="stub-lot-verwijderen" data-lot={lot.id} />
+  ),
+}));
 vi.mock("../src/app/[locale]/(app)/buildings/[id]/indeling/BulkLots", () => ({
   default: ({ blokken, reedsToegekend }: { blokken: { id: string }[]; reedsToegekend: number }) => (
     <div
@@ -429,6 +434,7 @@ vi.mock("../src/app/[locale]/(app)/buildings/[id]/indeling/actions", () => ({
   setBlockArchived: async () => undefined,
   createLotsBulk: async () => undefined,
   updateLotLayout: async () => undefined,
+  deleteLot: async () => undefined,
 }));
 
 // De echte `Link` geeft onbekende props door aan het anker. Deze stub moet dat
@@ -449,7 +455,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import IndelingPage from "../src/app/[locale]/(app)/buildings/[id]/indeling/page";
 
-async function toon(zoek: { blok?: string; edit?: string } = {}) {
+async function toon(zoek: { blok?: string; edit?: string; verwijder?: string } = {}) {
   return render(
     await IndelingPage({
       params: Promise.resolve({ id: BLD }),
@@ -859,6 +865,90 @@ describe("M — alleen een echt blok is bewerkbaar", () => {
     expect(screen.queryByTestId("stub-blok-aanmaken")).toBeNull();
     expect(screen.queryByTestId("stub-bulk")).toBeNull();
     expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+});
+
+// ══════════════════════════════════════════════════════ verwijderen
+/**
+ * V* — het verwijderen van een lot, alleen als COMPOSITIE. Wat de actie doet
+ * (en wat de database weigert) staat in `tests/delete-lot-owner.test.ts`.
+ *
+ * Wat hier telt: verwijderen is nooit één klik, nooit voor een lezer, en nooit
+ * voor een lot dat niet aantoonbaar bij dit gebouw hoort.
+ */
+describe("V — verwijderen is een tussenstap, geen knop", () => {
+  it("V20 — een schrijver ziet een verwijderlink per lot, naar het paneel", async () => {
+    await toon();
+    const link = screen.getByTestId("lot-verwijder-u1");
+    expect(link.getAttribute("href")).toBe(
+      `/buildings/${BLD}/indeling?verwijder=u1#indeling-paneel`,
+    );
+    // Zonder de parameter staat er nog géén paneel: de link is de tussenstap.
+    expect(screen.queryByTestId("stub-lot-verwijderen")).toBeNull();
+  });
+
+  it("V21 — een LEZER ziet geen verwijderlink", async () => {
+    state.rol = "reader";
+    await toon();
+    expect(document.querySelector("[data-testid^='lot-verwijder-']")).toBeNull();
+  });
+
+  it("V22 — ?verwijder= opent het bevestigingspaneel voor dát lot", async () => {
+    await toon({ verwijder: "u1" });
+    expect(screen.getByTestId("stub-lot-verwijderen").getAttribute("data-lot")).toBe("u1");
+    // En niet tegelijk het bewerkpaneel: één handeling per keer.
+    expect(screen.queryByTestId("stub-lot-bewerken")).toBeNull();
+  });
+
+  it("V23 — een lot van een ANDER gebouw opent geen bevestiging", async () => {
+    state.tabellen.units = {
+      data: [
+        unit({ id: "u1", block_id: "a", label: "A-01", tantiemes: 1000 }),
+        unit({ id: "vreemd", building_id: ANDER, label: "VREEMD" }),
+      ],
+      error: null,
+    };
+    await toon({ verwijder: "vreemd" });
+    expect(screen.queryByTestId("stub-lot-verwijderen")).toBeNull();
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+
+  it("V24 — een onbestaand id opent geen lege bevestiging", async () => {
+    await toon({ verwijder: "bestaat-niet" });
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+
+  it("V25 — een LEZER krijgt geen paneel, ook niet met de parameter", async () => {
+    state.rol = "reader";
+    await toon({ verwijder: "u1" });
+    expect(screen.queryByTestId("stub-lot-verwijderen")).toBeNull();
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+
+  it("V26 — bij een storing is er niets te bevestigen", async () => {
+    state.tabellen.ownership = { data: null, error: dbFout("42501") };
+    await toon({ verwijder: "u1" });
+    expect(screen.getByTestId("indeling-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("stub-lot-verwijderen")).toBeNull();
+  });
+
+  it("V29 — een openstaande bevestiging verdringt de bewerkpanelen", async () => {
+    // Twee formulieren naast elkaar waarvan er één iets vernietigt, maakt het
+    // toeval welke knop iemand raakt.
+    await toon({ edit: "u1", blok: "a", verwijder: "u1" });
+
+    expect(screen.getByTestId("stub-lot-verwijderen")).toBeTruthy();
+    expect(screen.queryByTestId("stub-lot-bewerken")).toBeNull();
+    expect(screen.queryByTestId("stub-blok-bewerken")).toBeNull();
+  });
+
+  it("V27 — bewerken en verwijderen zijn twee verschillende links", async () => {
+    await toon();
+    const bewerk = screen.getByTestId("lot-bewerk-u1").getAttribute("href");
+    const verwijder = screen.getByTestId("lot-verwijder-u1").getAttribute("href");
+    expect(bewerk).not.toBe(verwijder);
+    expect(bewerk).toContain("edit=");
+    expect(verwijder).toContain("verwijder=");
   });
 });
 

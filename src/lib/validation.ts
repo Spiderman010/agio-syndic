@@ -460,6 +460,33 @@ export const lotLayoutUpdateSchema = z.object({
   block_id: z.preprocess(blankToNull, uuid.nullable()),
 });
 
+// ── verwijderen ─────────────────────────────────────────────────────────────
+
+/**
+ * De bevestiging van een destructieve actie.
+ *
+ * Bewust een schemaveld en geen `confirm()` in de browser: JavaScript kan uit
+ * staan en een `onSubmit`-check is geen grens. Zo is "er is bevestigd" iets dat
+ * de SERVER heeft vastgesteld, en daarmee toetsbaar.
+ */
+const bevestiging = z.literal("ja", { message: "Bevestiging is verplicht." });
+
+/**
+ * Een lot verwijderen. `building_id` gaat mee als scope-bewijs, zodat de server
+ * de gebouwgrens kan controleren zonder die uit het lot zelf te moeten halen.
+ */
+export const lotDeleteSchema = z.object({
+  building_id: uuid,
+  unit_id: uuid,
+  confirm: bevestiging,
+});
+
+/** Een eigenaar verwijderen. Organisatiebreed; de org komt uit de sessie. */
+export const ownerDeleteSchema = z.object({
+  owner_id: uuid,
+  confirm: bevestiging,
+});
+
 export const linkFirstOwnerSchema = z.object({
   building_id: uuid,
   unit_id: uuid,

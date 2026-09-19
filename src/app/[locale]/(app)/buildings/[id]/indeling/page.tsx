@@ -10,6 +10,7 @@ import { assembleOwnership, type OwnerRow, type OwnershipRow } from "@/lib/owner
 import { BlokAanmaken, BlokBewerken } from "./BlokBeheer";
 import BulkLots from "./BulkLots";
 import LotBewerken from "./LotBewerken";
+import LotVerwijderen from "./LotVerwijderen";
 import {
   bouwIndeling,
   heeftTantieme,
@@ -66,10 +67,14 @@ export default async function IndelingPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ blok?: string; edit?: string }>;
+  searchParams: Promise<{ blok?: string; edit?: string; verwijder?: string }>;
 }) {
   const { id: buildingId } = await params;
-  const { blok: gekozenBlokId, edit: gekozenLotId } = await searchParams;
+  const {
+    blok: gekozenBlokId,
+    edit: gekozenLotId,
+    verwijder: teVerwijderenLotId,
+  } = await searchParams;
   const { org, role } = await requireOrg();
   const mayWrite = canWrite(role);
   const t = await getTranslations("indeling");
@@ -184,6 +189,15 @@ export default async function IndelingPage({
           (u) => u.id === gekozenLotId && u.building_id === buildingId,
         ) ?? null)
       : null;
+  // Dezelfde fail-closed controle voor het verwijderpaneel. Een vreemd id opent
+  // hier al helemaal niets: een bevestigingspaneel voor een onbekend lot zou
+  // een gebruiker laten bevestigen wat hij niet kan zien.
+  const paneelVerwijderLot =
+    mayWrite && teVerwijderenLotId
+      ? (bronnen.units.find(
+          (u) => u.id === teVerwijderenLotId && u.building_id === buildingId,
+        ) ?? null)
+      : null;
 
   return (
     <>
@@ -194,8 +208,18 @@ export default async function IndelingPage({
         </p>
       </header>
 
-      {paneelBlok || paneelLot ? (
+      {/*
+        Een openstaande VERWIJDERBEVESTIGING verdringt de bewerkpanelen. Met
+        `?edit=X&verwijder=X` stonden er anders twee formulieren naast elkaar,
+        waarvan er één iets vernietigt — en dan is het toeval welke knop iemand
+        raakt. Eén handeling per keer, en de destructieve krijgt het scherm.
+      */}
+      {paneelVerwijderLot ? (
         <section id="indeling-paneel" className="mb-5">
+          <LotVerwijderen buildingId={buildingId} lot={paneelVerwijderLot} />
+        </section>
+      ) : paneelBlok || paneelLot ? (
+        <section id="indeling-paneel" className="mb-5 flex flex-col gap-4">
           {paneelBlok ? <BlokBewerken buildingId={buildingId} blok={paneelBlok} /> : null}
           {paneelLot ? (
             <LotBewerken buildingId={buildingId} lot={paneelLot} blokken={keuzeBlokken} />
@@ -478,13 +502,24 @@ function Tegel({
       </span>
 
       {mayWrite ? (
-        <Link
-          href={`/buildings/${buildingId}/indeling?edit=${lot.id}#indeling-paneel`}
-          className="text-[0.78rem] text-primary"
-          data-testid={`lot-bewerk-${lot.id}`}
-        >
-          {t("manage.editLotLink")}
-        </Link>
+        <span className="flex flex-wrap items-center gap-3 text-[0.78rem]">
+          <Link
+            href={`/buildings/${buildingId}/indeling?edit=${lot.id}#indeling-paneel`}
+            className="text-primary"
+            data-testid={`lot-bewerk-${lot.id}`}
+          >
+            {t("manage.editLotLink")}
+          </Link>
+          {/* Verwijderen is destructief en staat daarom apart, met een eigen
+              kleur en een tussenstap. Het is geen tweede "bewerken". */}
+          <Link
+            href={`/buildings/${buildingId}/indeling?verwijder=${lot.id}#indeling-paneel`}
+            className="text-crit"
+            data-testid={`lot-verwijder-${lot.id}`}
+          >
+            {t("manage.deleteLotLink")}
+          </Link>
+        </span>
       ) : null}
     </li>
   );

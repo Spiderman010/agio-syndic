@@ -15,6 +15,7 @@ import {
   type OwnershipRow,
 } from "@/lib/ownership";
 import OwnerForm from "../OwnerForm";
+import EigenaarVerwijderen from "./EigenaarVerwijderen";
 import { updateOwner } from "../actions";
 
 /**
@@ -37,10 +38,13 @@ import { updateOwner } from "../actions";
  */
 export default async function OwnerDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ locale: string; owner_id: string }>;
+  searchParams: Promise<{ verwijder?: string }>;
 }) {
   const { locale, owner_id } = await params;
+  const { verwijder } = await searchParams;
   const { org, role } = await requireOrg();
   const t = await getTranslations("owners");
   const supabase = await createClient();
@@ -106,6 +110,12 @@ export default async function OwnerDetailPage({
   const unitById = new Map(units.map((u) => [u.id, u]));
   const historie = sortHistory(ownership);
   const actueel = historie.filter(isCurrent);
+  // De rolpoort staat ÉÉN keer, op de sectie hieronder. Hem hier nog eens
+  // herhalen leverde een tweede voorwaarde op die nooit iets deed: de sectie
+  // rendert al niet voor een lezer. Twee poorten waarvan er één dood is, leest
+  // als bescherming en is het niet. De actie zelf controleert de rol nogmaals —
+  // dát is de laag die wel telt.
+  const bevestigVerwijderen = verwijder === "1";
 
   // Actuele lots gegroepeerd per gebouw. Een lot waarvan het gebouw buiten de
   // organisatie valt kan hier niet voorkomen — de gebouwquery is org-gescoopt —
@@ -249,6 +259,36 @@ export default async function OwnerDetailPage({
             <CardHeader title={<span id="owner-edit-kop">{t("detail.edit")}</span>} />
             <OwnerForm action={updateOwner} submitLabel={t("detail.save")} owner={owner} />
           </Card>
+        </section>
+      ) : null}
+
+      {/*
+        Verwijderen staat het verst naar onderen en achter een tussenstap. Het is
+        geen variant van "opslaan": een eigenaar met vorderingen of betalingen
+        kan de database niet eens kwijt, en dat hoort een uitleg te zijn en geen
+        doodlopende foutmelding.
+      */}
+      {mayWrite ? (
+        <section className="mt-6" id="owner-verwijder-paneel">
+          {bevestigVerwijderen ? (
+            <EigenaarVerwijderen
+              ownerId={owner.id}
+              naam={owner.full_name}
+              aantalKoppelingen={historie.length}
+            />
+          ) : (
+            <Card>
+              <CardHeader title={<span>{t("delete.heading")}</span>} />
+              <p className="mt-0 mb-3 text-[0.8rem] text-ink-soft">{t("delete.intro")}</p>
+              <Link
+                href={`/owners/${owner.id}?verwijder=1#owner-verwijder-paneel`}
+                className="text-[0.85rem] text-crit"
+                data-testid="owner-verwijder-start"
+              >
+                {t("delete.start")}
+              </Link>
+            </Card>
+          )}
         </section>
       ) : null}
     </>
