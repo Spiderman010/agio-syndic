@@ -727,7 +727,11 @@ describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
     };
 
     const VASTE_BREEDTE = /^w-\[\d+px\]$/;
-    const FYSIEK = /^(ml|mr|pl|pr)-|^text-(left|right)$|^border-(l|r)$/;
+    // De `-?` is niet cosmetisch: `-ml-2` en `sm:-mr-1` zijn even fysiek als
+    // hun positieve broers, maar beginnen met een koppelteken. Een anker op
+    // `^` zonder die optie liet ze door — terwijl de oudere `\bml-`-variant
+    // ze wél ving. Dat was een regressie, en hij is hier gerepareerd.
+    const FYSIEK = /^-?(ml|mr|pl|pr)-|^text-(left|right)$|^border-(l|r)$/;
 
     for (const bestand of bestanden) {
       const bron = readFileSync(bestand, "utf8");
