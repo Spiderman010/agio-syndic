@@ -726,6 +726,54 @@
     "loadError": {
       "title": "La répartition n'a pas pu être chargée",
       "body": "Rien n'est affiché volontairement : une répartition incomplète serait trompeuse. Réessayez ou contactez le support."
+    },
+    "manage": {
+      "newBlock": "Créer un bloc",
+      "code": "Code",
+      "codeHint": "Ex. A, B, Garages. Unique par immeuble, sans distinction de casse.",
+      "name": "Nom",
+      "sortOrder": "Ordre",
+      "sortOrderHint": "Plus petit d'abord.",
+      "createBlock": "Créer le bloc",
+      "pending": "…",
+      "save": "Enregistrer",
+      "close": "Fermer",
+      "editBlock": "Modifier le bloc {code}",
+      "editBlockLink": "Modifier",
+      "archivedBlocks": "Blocs archivés",
+      "archive": "Archiver",
+      "unarchive": "Réactiver",
+      "archiveHint": "Archiver retire ce bloc des listes de choix. Les lots qui y sont rattachés restent visibles, dans le groupe « bloc indisponible ».",
+      "archivedHint": "Ce bloc est archivé. Le réactiver le remet dans les listes de choix.",
+      "editLot": "Modifier le lot {label}",
+      "editLotLink": "Modifier",
+      "label": "Libellé",
+      "type": "Type",
+      "tantiemes": "Tantièmes",
+      "tantiemesHint": "Nombre entier ; zéro exclut le lot de toute répartition.",
+      "block": "Bloc",
+      "blockHint": "Uniquement les blocs de cet immeuble.",
+      "noBlock": "Sans bloc",
+      "blockArchivedWarning": "Ce lot est rattaché à un bloc archivé. Enregistrer sans changer le bloc le déplacera vers « sans bloc ».",
+      "bulkTitle": "Ajouter plusieurs lots",
+      "bulkHint": "Tout est créé en une seule fois : une erreur et rien n'est créé.",
+      "addRow": "Ajouter une ligne",
+      "remove": "Retirer",
+      "removeRow": "Retirer la ligne {nummer}",
+      "createLots": "Créer les lots",
+      "bulkTotal": "Nouveaux tantièmes : {nieuw} — total après création : {straks} sur {verklaard} déclarés.",
+      "bulkTotalMismatch": "le total ne correspond pas encore"
+    },
+    "errors": {
+      "forbidden": "Vous n'avez pas le droit de modifier cet immeuble.",
+      "duplicateCode": "Un bloc portant ce code existe déjà dans cet immeuble.",
+      "blankCode": "Le code du bloc ne peut pas être vide.",
+      "blockNotInBuilding": "Ce bloc n'appartient pas à cet immeuble.",
+      "generic": "L'opération n'a pas abouti. Réessayez ou contactez le support."
+    },
+    "readOnly": {
+      "title": "Lecture seule",
+      "body": "Votre rôle permet de consulter cette répartition, pas de la modifier. Adressez-vous à un gestionnaire de votre organisation pour créer un bloc ou un lot."
     }
   }
 }

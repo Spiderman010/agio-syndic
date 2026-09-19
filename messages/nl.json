@@ -726,6 +726,54 @@
     "loadError": {
       "title": "De indeling kon niet worden geladen",
       "body": "Er wordt bewust niets getoond: een onvolledige indeling zou misleidend zijn. Probeer het opnieuw of neem contact op met support."
+    },
+    "manage": {
+      "newBlock": "Blok aanmaken",
+      "code": "Code",
+      "codeHint": "Bijv. A, B, Garages. Uniek per gebouw, ongeacht hoofdletters.",
+      "name": "Naam",
+      "sortOrder": "Volgorde",
+      "sortOrderHint": "Kleinste eerst.",
+      "createBlock": "Blok aanmaken",
+      "pending": "…",
+      "save": "Opslaan",
+      "close": "Sluiten",
+      "editBlock": "Blok {code} bewerken",
+      "editBlockLink": "Bewerken",
+      "archivedBlocks": "Gearchiveerde blokken",
+      "archive": "Archiveren",
+      "unarchive": "Heractiveren",
+      "archiveHint": "Archiveren haalt dit blok uit de keuzelijsten. De lots die eraan hangen blijven zichtbaar, in de groep “blok niet beschikbaar”.",
+      "archivedHint": "Dit blok is gearchiveerd. Heractiveren zet het terug in de keuzelijsten.",
+      "editLot": "Lot {label} bewerken",
+      "editLotLink": "Bewerken",
+      "label": "Label",
+      "type": "Type",
+      "tantiemes": "Tantièmes",
+      "tantiemesHint": "Geheel getal; nul sluit het lot uit van elke verdeling.",
+      "block": "Blok",
+      "blockHint": "Alleen blokken van dit gebouw.",
+      "noBlock": "Zonder blok",
+      "blockArchivedWarning": "Dit lot hangt aan een gearchiveerd blok. Opslaan zonder het blok te wijzigen verplaatst het naar “zonder blok”.",
+      "bulkTitle": "Meerdere lots toevoegen",
+      "bulkHint": "Alles wordt in één keer aangemaakt: één fout en er wordt niets aangemaakt.",
+      "addRow": "Rij toevoegen",
+      "remove": "Verwijderen",
+      "removeRow": "Rij {nummer} verwijderen",
+      "createLots": "Lots aanmaken",
+      "bulkTotal": "Nieuwe tantièmes: {nieuw} — totaal na aanmaken: {straks} van {verklaard} verklaard.",
+      "bulkTotalMismatch": "het totaal sluit nog niet"
+    },
+    "errors": {
+      "forbidden": "U mag dit gebouw niet wijzigen.",
+      "duplicateCode": "Er bestaat al een blok met deze code in dit gebouw.",
+      "blankCode": "De blokcode mag niet leeg zijn.",
+      "blockNotInBuilding": "Dit blok hoort niet bij dit gebouw.",
+      "generic": "De bewerking is niet gelukt. Probeer het opnieuw of neem contact op met support."
+    },
+    "readOnly": {
+      "title": "Alleen-lezen",
+      "body": "Uw rol geeft inzage in deze indeling, maar geen recht om haar te wijzigen. Vraag een beheerder van uw organisatie om een blok of lot aan te maken."
     }
   }
 }

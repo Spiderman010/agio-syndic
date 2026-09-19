@@ -1,11 +1,15 @@
 import { getTranslations } from "next-intl/server";
 import { requireOrg } from "@/lib/org";
+import { canWrite } from "@/lib/roles";
 import { createClient } from "@/lib/supabase/server";
 import { Link } from "@/navigation";
 import Card, { CardHeader } from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Empty, { EmptyBody, EmptyTitle } from "@/components/ui/Empty";
 import { assembleOwnership, type OwnerRow, type OwnershipRow } from "@/lib/ownership";
+import { BlokAanmaken, BlokBewerken } from "./BlokBeheer";
+import BulkLots from "./BulkLots";
+import LotBewerken from "./LotBewerken";
 import {
   bouwIndeling,
   heeftTantieme,
@@ -19,9 +23,17 @@ import {
 /**
  * De INDELING van één gebouw: welke blokken bestaan er en wat hangt eraan.
  *
- * Strikt read-only. Blokken aanmaken, lots toevoegen en eigendom koppelen zijn
- * andere schermen; dit scherm beantwoordt één vraag — wat bevat dit gebouw
- * werkelijk — en mag dat antwoord nooit verzinnen.
+ * Lezen is de kern: dit scherm beantwoordt één vraag — wat bevat dit gebouw
+ * werkelijk — en mag dat antwoord nooit verzinnen. Daar bovenop staat sinds
+ * deze wijziging blok- en lotbeheer voor schrijfrollen. Eigendom koppelen,
+ * overdragen en verwijderen horen er uitdrukkelijk NIET bij; dat zijn andere
+ * schermen met een andere risicoklasse.
+ *
+ * ── BEWERKEN LOOPT VIA DE URL ──────────────────────────────────────────────
+ *
+ * `?blok=<id>` en `?edit=<unit_id>` openen één paneel. Een formulier per rij
+ * zou bij 48 lots 48 formulieren renderen; nu is het er hooguit één. Het werkt
+ * bovendien zonder JavaScript en is deelbaar.
  *
  * ── WAAROM DIT EEN EIGEN ROUTE IS ──────────────────────────────────────────
  *
@@ -51,11 +63,15 @@ const STAAT_TOON: Record<LotStaat, "good" | "warn" | "info"> = {
 
 export default async function IndelingPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ blok?: string; edit?: string }>;
 }) {
   const { id: buildingId } = await params;
-  const { org } = await requireOrg();
+  const { blok: gekozenBlokId, edit: gekozenLotId } = await searchParams;
+  const { org, role } = await requireOrg();
+  const mayWrite = canWrite(role);
   const t = await getTranslations("indeling");
   const supabase = await createClient();
 
@@ -141,6 +157,34 @@ export default async function IndelingPage({
   });
   const { samenvatting } = indeling;
 
+  // Alleen de NIET-gearchiveerde blokken van dit gebouw mogen als doel worden
+  // aangeboden; een gearchiveerd blok kiezen zou het meteen weer in gebruik
+  // nemen zonder dat iemand daarom vroeg.
+  const keuzeBlokken = blocks
+    .filter((b) => b.building_id === buildingId && b.archived_at === null)
+    .sort((a, b) => a.sort_order - b.sort_order);
+
+  // Gearchiveerde blokken staan niet in de indeling — dat is het punt van
+  // archiveren. Maar ze moeten wél bereikbaar blijven, anders is archiveren
+  // eenrichtingsverkeer en is de heractiveerknop in het paneel onbereikbaar.
+  const gearchiveerdeBlokken = blocks
+    .filter((b) => b.building_id === buildingId && b.archived_at !== null)
+    .sort((a, b) => a.sort_order - b.sort_order);
+
+  // FAIL-CLOSED op de paneelkeuze: alleen een blok of lot dat aantoonbaar bij
+  // DIT gebouw hoort. Een id uit de URL is invoer van de gebruiker, en een
+  // vreemd id mag geen paneel openen — ook niet leeg.
+  const paneelBlok =
+    mayWrite && gekozenBlokId
+      ? (blocks.find((b) => b.id === gekozenBlokId && b.building_id === buildingId) ?? null)
+      : null;
+  const paneelLot =
+    mayWrite && gekozenLotId
+      ? (bronnen.units.find(
+          (u) => u.id === gekozenLotId && u.building_id === buildingId,
+        ) ?? null)
+      : null;
+
   return (
     <>
       <header className="mb-5">
@@ -149,6 +193,15 @@ export default async function IndelingPage({
           {t("subtitle", { building: building.name })}
         </p>
       </header>
+
+      {paneelBlok || paneelLot ? (
+        <section id="indeling-paneel" className="mb-5">
+          {paneelBlok ? <BlokBewerken buildingId={buildingId} blok={paneelBlok} /> : null}
+          {paneelLot ? (
+            <LotBewerken buildingId={buildingId} lot={paneelLot} blokken={keuzeBlokken} />
+          ) : null}
+        </section>
+      ) : null}
 
       <section aria-labelledby="indeling-samenvatting-kop" className="mb-5">
         <Card>
@@ -197,11 +250,70 @@ export default async function IndelingPage({
       ) : (
         <div className="flex flex-col gap-4">
           {indeling.groepen.map((groep) => (
-            <Blok key={groep.sleutel} groep={groep} t={t} />
+            <Blok
+              key={groep.sleutel}
+              groep={groep}
+              t={t}
+              buildingId={buildingId}
+              mayWrite={mayWrite}
+            />
           ))}
         </div>
       )}
+
+      {mayWrite && gearchiveerdeBlokken.length > 0 ? (
+        <section className="mt-6">
+          <Card data-testid="indeling-gearchiveerd">
+            <CardHeader title={<span>{t("manage.archivedBlocks")}</span>} />
+            <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+              {gearchiveerdeBlokken.map((b) => (
+                <li key={b.id}>
+                  <Link
+                    href={`/buildings/${buildingId}/indeling?blok=${b.id}#indeling-paneel`}
+                    className="text-[0.8rem] text-primary break-words"
+                    data-testid={`blok-gearchiveerd-${b.id}`}
+                  >
+                    {b.name ? `${b.code} — ${b.name}` : b.code}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </section>
+      ) : null}
+
+      {mayWrite ? (
+        <section aria-labelledby="blok-nieuw-kop" className="mt-6 flex flex-col gap-4">
+          <BlokAanmaken buildingId={buildingId} />
+          <BulkLots
+            buildingId={buildingId}
+            blokken={keuzeBlokken.map((b) => ({ id: b.id, code: b.code, name: b.name }))}
+            totalTantiemes={building.total_tantiemes}
+            reedsToegekend={samenvatting.tantiemesToegekend}
+          />
+        </section>
+      ) : (
+        <AlleenLezen t={t} />
+      )}
     </>
+  );
+}
+
+/**
+ * Wat een LEZER ziet waar een schrijver het beheer krijgt.
+ *
+ * `role="status"`, niet `alert`: lezen is een geldige rol. Zonder deze regel
+ * zou het scherm voor een lezer stilzwijgend onvolledig zijn — dezelfde fout
+ * die op het lotsscherm al is rechtgezet.
+ */
+function AlleenLezen({ t }: { t: Awaited<ReturnType<typeof getTranslations>> }) {
+  return (
+    <section className="mt-6">
+      <Card role="status" data-testid="indeling-readonly">
+        <p className="m-0 font-medium">{t("readOnly.title")}</p>
+        <p className="mt-1 mb-0 text-[0.875rem] text-ink-soft">{t("readOnly.body")}</p>
+      </Card>
+    </section>
   );
 }
 
@@ -231,9 +343,13 @@ function Cijfer({
 function Blok({
   groep,
   t,
+  buildingId,
+  mayWrite,
 }: {
   groep: BlokGroep;
   t: Awaited<ReturnType<typeof getTranslations>>;
+  buildingId: string;
+  mayWrite: boolean;
 }) {
   const kop =
     groep.soort === "blok"
@@ -259,6 +375,17 @@ function Blok({
             <Badge tone="warn">
               {t("block.incomplete", { count: groep.telling.onvolledig })}
             </Badge>
+            {/* Alleen een ECHT blok is bewerkbaar. "Zonder blok" en
+                "onbereikbaar" zijn afgeleide groepen, geen rij in `blocks`. */}
+            {mayWrite && groep.soort === "blok" ? (
+              <Link
+                href={`/buildings/${buildingId}/indeling?blok=${groep.sleutel}#indeling-paneel`}
+                className="text-primary"
+                data-testid={`blok-bewerk-${groep.sleutel}`}
+              >
+                {t("manage.editBlockLink")}
+              </Link>
+            ) : null}
           </span>
         }
       />
@@ -302,7 +429,13 @@ function Blok({
       ) : (
         <ul className="m-0 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2 lg:grid-cols-3">
           {groep.lots.map((lot) => (
-            <Tegel key={lot.id} lot={lot} t={t} />
+            <Tegel
+              key={lot.id}
+              lot={lot}
+              t={t}
+              buildingId={buildingId}
+              mayWrite={mayWrite}
+            />
           ))}
         </ul>
       )}
@@ -313,9 +446,13 @@ function Blok({
 function Tegel({
   lot,
   t,
+  buildingId,
+  mayWrite,
 }: {
   lot: LotTegel;
   t: Awaited<ReturnType<typeof getTranslations>>;
+  buildingId: string;
+  mayWrite: boolean;
 }) {
   return (
     <li
@@ -339,6 +476,16 @@ function Tegel({
           ? t("lot.tantiemes", { tantiemes: lot.tantiemes as number })
           : t("lot.noTantiemes")}
       </span>
+
+      {mayWrite ? (
+        <Link
+          href={`/buildings/${buildingId}/indeling?edit=${lot.id}#indeling-paneel`}
+          className="text-[0.78rem] text-primary"
+          data-testid={`lot-bewerk-${lot.id}`}
+        >
+          {t("manage.editLotLink")}
+        </Link>
+      ) : null}
     </li>
   );
 }

@@ -27,6 +27,10 @@ import type { OwnershipRow } from "@/lib/ownership";
  *       bronnen op, onderdrukt één mislukking werkelijk alles, en lekt er niets
  *       naar scherm of log.
  *
+ *   M*  het BEHEER, alleen als compositie: wie krijgt welk paneel, en met welke
+ *       gegevens. Wat de acties dóen staat in `tests/block-lot-actions.test.ts`,
+ *       waar de echte guards meelopen.
+ *
  * WAT HIER NIET WORDT BEWEZEN: hoe dit eruitziet. jsdom doet geen layout en
  * evalueert geen media queries. Over de bezettingsbalk, de kolommen op 360px
  * of de RTL-spiegeling doet geen enkele assertie hier een uitspraak.
@@ -330,7 +334,7 @@ describe("L — subtotalen en samenvatting", () => {
 // ══════════════════════════════════════════════════════ pagina
 type Resultaat = { data: unknown; error: unknown };
 
-const state: { tabellen: Record<string, Resultaat> } = { tabellen: {} };
+const state: { tabellen: Record<string, Resultaat>; rol: string } = { tabellen: {}, rol: "manager" };
 
 function dbFout(code: string) {
   return {
@@ -375,12 +379,65 @@ vi.mock("next-intl/server", () => ({
 }));
 
 vi.mock("@/lib/org", () => ({
-  requireOrg: async () => ({ role: "manager", org: { id: "org-1", name: "Org" } }),
+  requireOrg: async () => ({ role: state.rol, org: { id: "org-1", name: "Org" } }),
 }));
 
+vi.mock("next-intl", () => ({
+  useTranslations: (ns?: string) => {
+    const fn = (key: string, waarden?: Record<string, unknown>) => {
+      const basis = ns ? `${ns}.${key}` : key;
+      return waarden ? `${basis}(${Object.values(waarden).join(",")})` : basis;
+    };
+    return Object.assign(fn, { rich: fn, markup: fn, raw: fn, has: () => true });
+  },
+  useLocale: () => "fr",
+}));
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+// Async server components kunnen niet rechtstreeks door `render()` heen; en
+// ze hebben hun eigen dekking. Hier gaat het om de COMPOSITIE: wie krijgt
+// welk paneel te zien, en met welke gegevens.
+vi.mock("../src/app/[locale]/(app)/buildings/[id]/indeling/BlokBeheer", () => ({
+  BlokAanmaken: () => <div data-testid="stub-blok-aanmaken" />,
+  BlokBewerken: ({ blok }: { blok: { id: string } }) => (
+    <div data-testid="stub-blok-bewerken" data-blok={blok.id} />
+  ),
+}));
+vi.mock("../src/app/[locale]/(app)/buildings/[id]/indeling/LotBewerken", () => ({
+  default: ({ lot, blokken }: { lot: { id: string }; blokken: { id: string }[] }) => (
+    <div
+      data-testid="stub-lot-bewerken"
+      data-lot={lot.id}
+      data-blokken={blokken.map((b) => b.id).join(",")}
+    />
+  ),
+}));
+vi.mock("../src/app/[locale]/(app)/buildings/[id]/indeling/BulkLots", () => ({
+  default: ({ blokken, reedsToegekend }: { blokken: { id: string }[]; reedsToegekend: number }) => (
+    <div
+      data-testid="stub-bulk"
+      data-blokken={blokken.map((b) => b.id).join(",")}
+      data-toegekend={reedsToegekend}
+    />
+  ),
+}));
+
+vi.mock("../src/app/[locale]/(app)/buildings/[id]/indeling/actions", () => ({
+  createBlock: async () => undefined,
+  updateBlock: async () => undefined,
+  setBlockArchived: async () => undefined,
+  createLotsBulk: async () => undefined,
+  updateLotLayout: async () => undefined,
+}));
+
+// De echte `Link` geeft onbekende props door aan het anker. Deze stub moet dat
+// ook doen, anders verdwijnt `data-testid` en toetsen de M-tests niets.
 vi.mock("@/navigation", () => ({
-  Link: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
+  Link: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   ),
 }));
 
@@ -392,8 +449,13 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import IndelingPage from "../src/app/[locale]/(app)/buildings/[id]/indeling/page";
 
-async function toon() {
-  return render(await IndelingPage({ params: Promise.resolve({ id: BLD }) }));
+async function toon(zoek: { blok?: string; edit?: string } = {}) {
+  return render(
+    await IndelingPage({
+      params: Promise.resolve({ id: BLD }),
+      searchParams: Promise.resolve(zoek),
+    }),
+  );
 }
 
 const tekst = () => (document.body.textContent ?? "").replace(/\s+/g, " ");
@@ -401,6 +463,7 @@ const tekst = () => (document.body.textContent ?? "").replace(/\s+/g, " ");
 let logs: string[] = [];
 
 beforeEach(() => {
+  state.rol = "manager";
   state.tabellen = standaard();
   logs = [];
   vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
@@ -555,6 +618,250 @@ describe("P — het log lekt niets", () => {
   });
 });
 
+// ══════════════════════════════════════════════════════ beheer
+/**
+ * M* — de COMPOSITIE van het beheer. Niet wat de acties doen (dat staat in
+ * `tests/block-lot-actions.test.ts`, waar de echte guards meelopen), maar wie
+ * welk paneel te zien krijgt en met welke gegevens dat paneel wordt gevuld.
+ *
+ * De panelen zelf zijn hier gestubt. Dat is bewust: het enige wat deze laag
+ * kan beslissen is aanbieden-of-niet en welke props eruit gaan, en juist daar
+ * zit de rolgrens en de gebouwscope.
+ */
+describe("M — wie mag beheren", () => {
+  it("M1 — een lezer krijgt geen enkel beheeronderdeel, maar wél uitleg", async () => {
+    state.rol = "reader";
+    await toon();
+
+    expect(screen.queryByTestId("stub-blok-aanmaken")).toBeNull();
+    expect(screen.queryByTestId("stub-bulk")).toBeNull();
+    expect(document.querySelector("[data-testid^='blok-bewerk-']")).toBeNull();
+    expect(document.querySelector("[data-testid^='lot-bewerk-']")).toBeNull();
+
+    // Stilzwijgend weglaten is de fout die we niet nog eens maken.
+    expect(screen.getByTestId("indeling-readonly")).toBeTruthy();
+    expect(screen.getByTestId("indeling-readonly").getAttribute("role")).toBe("status");
+  });
+
+  it("M2 — een schrijver krijgt het beheer en juist géén leesmelding", async () => {
+    // Zonder deze test zou M1 ook slagen als het beheer voor niemand zou
+    // renderen; dan bewijst M1 niets over de rolgrens.
+    await toon();
+
+    expect(screen.getByTestId("stub-blok-aanmaken")).toBeTruthy();
+    expect(screen.getByTestId("stub-bulk")).toBeTruthy();
+    expect(screen.getByTestId("blok-bewerk-a")).toBeTruthy();
+    expect(screen.getByTestId("lot-bewerk-u1")).toBeTruthy();
+    expect(screen.queryByTestId("indeling-readonly")).toBeNull();
+  });
+
+  it("M3 — elke schrijfrol ziet het beheer, elke leesrol niet", async () => {
+    for (const rol of ["owner", "admin", "manager", "accountant"]) {
+      cleanup();
+      state.rol = rol;
+      await toon();
+      expect(screen.queryByTestId("stub-blok-aanmaken"), `${rol} hoort te mogen`).toBeTruthy();
+    }
+    cleanup();
+    state.rol = "reader";
+    await toon();
+    expect(screen.queryByTestId("stub-blok-aanmaken")).toBeNull();
+  });
+});
+
+describe("M — de panelen volgen de URL", () => {
+  it("M4 — ?blok= opent het blokpaneel en niets anders", async () => {
+    await toon({ blok: "a" });
+    const paneel = screen.getByTestId("stub-blok-bewerken");
+    expect(paneel.getAttribute("data-blok")).toBe("a");
+    expect(screen.queryByTestId("stub-lot-bewerken")).toBeNull();
+  });
+
+  it("M5 — ?edit= opent het lotpaneel en niets anders", async () => {
+    await toon({ edit: "u1" });
+    const paneel = screen.getByTestId("stub-lot-bewerken");
+    expect(paneel.getAttribute("data-lot")).toBe("u1");
+    expect(screen.queryByTestId("stub-blok-bewerken")).toBeNull();
+  });
+
+  it("M6 — zonder parameter staat er helemaal geen paneel", async () => {
+    await toon();
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+
+  it("M7 — een blok van een ANDER gebouw opent geen paneel", async () => {
+    // De keten-fake negeert `.eq()`, dus dit is precies de rij die een
+    // ontbrekende serverfilter zou doorlaten. De pagina moet zelf weigeren.
+    state.tabellen.blocks = {
+      data: [blok({ id: "a", code: "A" }), blok({ id: "vreemd", building_id: ANDER })],
+      error: null,
+    };
+    await toon({ blok: "vreemd" });
+    expect(screen.queryByTestId("stub-blok-bewerken")).toBeNull();
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+
+  it("M8 — een lot van een ANDER gebouw opent geen paneel", async () => {
+    state.tabellen.units = {
+      data: [
+        unit({ id: "u1", block_id: "a", label: "A-01", tantiemes: 1000 }),
+        unit({ id: "vreemd", building_id: ANDER, label: "VREEMD" }),
+      ],
+      error: null,
+    };
+    await toon({ edit: "vreemd" });
+    expect(screen.queryByTestId("stub-lot-bewerken")).toBeNull();
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+
+  it("M9 — een onbestaand id opent geen leeg paneel", async () => {
+    await toon({ blok: "bestaat-niet", edit: "bestaat-ook-niet" });
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+
+  it("M10 — een LEZER krijgt geen paneel, ook niet met een geldige parameter", async () => {
+    state.rol = "reader";
+    await toon({ blok: "a", edit: "u1" });
+    expect(screen.queryByTestId("stub-blok-bewerken")).toBeNull();
+    expect(screen.queryByTestId("stub-lot-bewerken")).toBeNull();
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+});
+
+describe("M — welke gegevens de panelen krijgen", () => {
+  function drieBlokken() {
+    state.tabellen.blocks = {
+      data: [
+        blok({ id: "b", code: "B", sort_order: 20 }),
+        blok({ id: "a", code: "A", sort_order: 10 }),
+        blok({ id: "oud", code: "OUD", archived_at: "2026-01-01T00:00:00Z" }),
+        blok({ id: "vreemd", code: "V", building_id: ANDER }),
+      ],
+      error: null,
+    };
+  }
+
+  it("M11 — de bulkkeuze bevat alleen de ACTIEVE blokken van dit gebouw", async () => {
+    drieBlokken();
+    await toon();
+    expect(screen.getByTestId("stub-bulk").getAttribute("data-blokken")).toBe("a,b");
+  });
+
+  it("M12 — het lotpaneel krijgt dezelfde keuze, in dezelfde volgorde", async () => {
+    drieBlokken();
+    await toon({ edit: "u1" });
+    expect(screen.getByTestId("stub-lot-bewerken").getAttribute("data-blokken")).toBe("a,b");
+  });
+
+  it("M13 — de bulkvorm krijgt het al toegekende tantième mee", async () => {
+    state.tabellen.units = {
+      data: [
+        unit({ id: "u1", block_id: "a", label: "A-01", tantiemes: 400 }),
+        unit({ id: "u2", block_id: "a", label: "A-02", tantiemes: 250 }),
+      ],
+      error: null,
+    };
+    await toon();
+    expect(screen.getByTestId("stub-bulk").getAttribute("data-toegekend")).toBe("650");
+  });
+});
+
+describe("M — alleen een echt blok is bewerkbaar", () => {
+  it("M14 — de afgeleide groepen krijgen geen bewerklink", async () => {
+    state.tabellen.blocks = { data: [blok({ id: "a", code: "A" })], error: null };
+    state.tabellen.units = {
+      data: [
+        unit({ id: "u1", block_id: "a", label: "A-01", tantiemes: 500 }),
+        unit({ id: "u2", block_id: null, label: "LOS", tantiemes: 500 }),
+        unit({ id: "u3", block_id: "weg", label: "WEG", tantiemes: 0 }),
+      ],
+      error: null,
+    };
+    await toon();
+
+    // Alle drie de groepen staan er; alleen de echte is bewerkbaar.
+    expect(screen.getByTestId("indeling-blok-a")).toBeTruthy();
+    expect(screen.getByTestId("indeling-blok-zonder-blok")).toBeTruthy();
+    expect(screen.getByTestId("indeling-blok-onbereikbaar")).toBeTruthy();
+
+    expect(screen.getByTestId("blok-bewerk-a")).toBeTruthy();
+    expect(screen.queryByTestId("blok-bewerk-zonder-blok")).toBeNull();
+    expect(screen.queryByTestId("blok-bewerk-onbereikbaar")).toBeNull();
+
+    // Een lot is wél altijd bewerkbaar — óók een los of onbereikbaar lot;
+    // dat is juist het lot dat een blok toegewezen moet krijgen.
+    for (const id of ["u1", "u2", "u3"]) {
+      expect(screen.getByTestId(`lot-bewerk-${id}`), `${id} hoort bewerkbaar`).toBeTruthy();
+    }
+  });
+
+  it("M17 — een GEARCHIVEERD blok blijft bereikbaar, anders is archiveren eenrichtingsverkeer", async () => {
+    // Een gearchiveerd blok staat niet in de indeling; zonder deze lijst zou
+    // het paneel met de heractiveerknop alleen nog via een getypte URL te
+    // bereiken zijn.
+    state.tabellen.blocks = {
+      data: [
+        blok({ id: "a", code: "A" }),
+        blok({ id: "oud", code: "OUD", archived_at: "2026-01-01T00:00:00Z" }),
+        blok({ id: "vreemd", code: "V", building_id: ANDER, archived_at: "2026-01-01T00:00:00Z" }),
+      ],
+      error: null,
+    };
+    await toon();
+
+    const link = screen.getByTestId("blok-gearchiveerd-oud");
+    expect(link.getAttribute("href")).toBe(
+      `/buildings/${BLD}/indeling?blok=oud#indeling-paneel`,
+    );
+    // Actief blok: hoort hier niet. Vreemd gebouw: al helemaal niet.
+    expect(screen.queryByTestId("blok-gearchiveerd-a")).toBeNull();
+    expect(screen.queryByTestId("blok-gearchiveerd-vreemd")).toBeNull();
+  });
+
+  it("M18 — zonder gearchiveerde blokken staat die lijst er niet, en een lezer ziet hem nooit", async () => {
+    await toon();
+    expect(screen.queryByTestId("indeling-gearchiveerd")).toBeNull();
+
+    cleanup();
+    state.rol = "reader";
+    state.tabellen.blocks = {
+      data: [blok({ id: "oud", code: "OUD", archived_at: "2026-01-01T00:00:00Z" })],
+      error: null,
+    };
+    await toon();
+    expect(screen.queryByTestId("indeling-gearchiveerd")).toBeNull();
+  });
+
+  it("M19 — het paneel van een gearchiveerd blok opent wél", async () => {
+    state.tabellen.blocks = {
+      data: [blok({ id: "oud", code: "OUD", archived_at: "2026-01-01T00:00:00Z" })],
+      error: null,
+    };
+    await toon({ blok: "oud" });
+    expect(screen.getByTestId("stub-blok-bewerken").getAttribute("data-blok")).toBe("oud");
+  });
+
+  it("M15 — de bewerklinks wijzen naar het paneel op deze route", async () => {
+    await toon();
+    expect(screen.getByTestId("blok-bewerk-a").getAttribute("href")).toBe(
+      `/buildings/${BLD}/indeling?blok=a#indeling-paneel`,
+    );
+    expect(screen.getByTestId("lot-bewerk-u1").getAttribute("href")).toBe(
+      `/buildings/${BLD}/indeling?edit=u1#indeling-paneel`,
+    );
+  });
+
+  it("M16 — bij een storing verschijnt er geen beheer om iets in te typen", async () => {
+    state.tabellen.units = { data: null, error: dbFout("42501") };
+    await toon({ blok: "a", edit: "u1" });
+
+    expect(screen.getByTestId("indeling-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("stub-blok-aanmaken")).toBeNull();
+    expect(screen.queryByTestId("stub-bulk")).toBeNull();
+    expect(document.querySelector("#indeling-paneel")).toBeNull();
+  });
+});
+
 describe("I — vertalingen", () => {
   const TALEN: Array<[string, Record<string, unknown>]> = [
     ["fr", fr as Record<string, unknown>],
@@ -602,6 +909,10 @@ describe("I — vertalingen", () => {
         expect((w as string).trim().length, `${TALEN[i][0]}.${sleutel} is leeg`).toBeGreaterThan(0);
       }
       const [fr_, nl_, ar_] = waarden as string[];
+      // Een waarde zonder letters draagt geen taal: `manage.pending` is "…"
+      // en hoort in alle drie de talen identiek te zijn. Zo'n token als
+      // "onvertaald" bestempelen zou de test laten piepen om niets.
+      if (!/\p{L}/u.test(fr_)) continue;
       expect(ar_, `ar.${sleutel} is een kopie van het Frans`).not.toBe(fr_);
       expect(ar_, `ar.${sleutel} is een kopie van het Nederlands`).not.toBe(nl_);
       if (fr_.includes(" ")) {
