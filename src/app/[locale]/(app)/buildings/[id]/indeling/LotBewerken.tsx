@@ -19,9 +19,11 @@ import { updateLotLayout } from "./actions";
  * zou dus een val zijn: hij faalt gegarandeerd.
  *
  * Om dezelfde reden bevat de blokkeuze uitsluitend NIET-GEARCHIVEERDE blokken
- * van dit gebouw. Staat het lot nu in een gearchiveerd blok, dan wordt dat blok
- * wél als huidige waarde getoond — anders zou het formulier stilzwijgend een
- * verplaatsing voorstellen die de gebruiker niet vroeg.
+ * van dit gebouw. Hangt het lot nu aan een blok dat daar niet in staat — omdat
+ * het gearchiveerd is of niet meer bestaat — dan valt de keuze op "zonder blok"
+ * en staat er een waarschuwing bij. Dat blok als stille huidige waarde tonen zou
+ * erger zijn: het zou suggereren dat opslaan niets verandert, terwijl het de
+ * verwijzing juist zou herstellen. De gebruiker moet de verplaatsing ZIEN.
  */
 export default async function LotBewerken({
   buildingId,
