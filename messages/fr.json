@@ -580,6 +580,10 @@
     "subtitle": "Tous les lots de {building}.",
     "notFound": "Cet immeuble n'existe pas dans cette organisation",
     "backToBuildings": "Retour aux immeubles",
+    "readOnly": {
+      "title": "Lecture seule",
+      "body": "Votre rôle permet de consulter ces lots, pas de les modifier. Pour ajouter ou corriger un lot, adressez-vous à un gestionnaire de votre organisation."
+    },
     "table": {
       "label": "Lot",
       "type": "Type",
