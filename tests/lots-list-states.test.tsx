@@ -157,6 +157,134 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// ══════════════════════════════════ NA DE SPLITSING: DE WAARSCHUWINGEN
+/**
+ * W* — de tantièmewaarschuwingen, GERENDERD.
+ *
+ * `M14` en `GR3` in `ownership.test.ts` toetsen dat de drie condities los in de
+ * bron staan. Dat is noodzakelijk maar niet voldoende: een mutatie die
+ * `!overzicht.eigendomVeilig` verandert in `false && !overzicht.eigendomVeilig`
+ * laat die tekenreeks intact en blijft daar groen, terwijl de waarschuwing van
+ * het scherm verdwijnt. Deze tests kijken naar wat er werkelijk staat.
+ *
+ * Ze horen ook bij de splitsing zelf: `LotsStats` is nu een eigen component, en
+ * hier wordt bewezen dat de pagina en die component SAMEN dezelfde zichtbare
+ * inhoud opleveren als voorheen.
+ */
+describe("W — de waarschuwingen staan er werkelijk, met hun eigen rol", () => {
+  /** Een gebouw met alle drie de problemen tegelijk. */
+  function drieProblemen() {
+    state.tabellen.buildings = {
+      data: { id: BLD, name: "Résidence Atlas", total_tantiemes: 1000 },
+      error: null,
+    };
+    state.tabellen.units = {
+      data: [unit("1", { tantiemes: 400 }), unit("2", { tantiemes: 0 })],
+      error: null,
+    };
+    // Lot 1 heeft twee actieve eigenaars zonder aangewezen debiteur -> ambigu.
+    state.tabellen.ownership = {
+      data: [
+        { id: "ow1", unit_id: "1", owner_id: "o1", share: 0.5, start_date: "2026-01-01", end_date: null, is_primary_debtor: false },
+        { id: "ow2", unit_id: "1", owner_id: "o2", share: 0.5, start_date: "2026-01-01", end_date: null, is_primary_debtor: false },
+        { id: "ow3", unit_id: "2", owner_id: "o1", share: 1, start_date: "2026-01-01", end_date: null, is_primary_debtor: true },
+      ],
+      error: null,
+    };
+    state.tabellen.owners = {
+      data: [
+        { id: "o1", full_name: "Youssef El Amrani", is_company: false, email: null, phone: null, language: "fr", is_mre: false },
+        { id: "o2", full_name: "Fatima Zahra Bennani", is_company: false, email: null, phone: null, language: "fr", is_mre: false },
+      ],
+      error: null,
+    };
+  }
+
+  it("W1 — alle drie de waarschuwingen staan tegelijk op het scherm", async () => {
+    drieProblemen();
+    await toon();
+
+    // Eén oorzaak oplossen en tegen de volgende aanlopen is precies wat deze
+    // drie onafhankelijke blokken moeten voorkomen.
+    expect(tekst()).toContain("lots.tantiemes.warningOwnership");
+    expect(tekst()).toContain("lots.tantiemes.warningZeroTantieme");
+    expect(tekst()).toContain("lots.tantiemes.warningTantiemes");
+  });
+
+  it("W2 — de twee onvoorwaardelijke waarschuwingen zijn alerts, het controletotaal niet", async () => {
+    drieProblemen();
+    await toon();
+
+    const alerts = [...document.querySelectorAll('[role="alert"]')].map((e) => e.textContent ?? "");
+    const statussen = [...document.querySelectorAll('[role="status"]')].map((e) => e.textContent ?? "");
+
+    expect(alerts.some((x) => x.includes("warningOwnership"))).toBe(true);
+    expect(alerts.some((x) => x.includes("warningZeroTantieme"))).toBe(true);
+    // Het controletotaal kent een gedocumenteerde afwijking in de engine.
+    expect(statussen.some((x) => x.includes("warningTantiemes"))).toBe(true);
+    expect(alerts.some((x) => x.includes("warningTantiemes"))).toBe(false);
+  });
+
+  it("W3 — een gezond gebouw toont GEEN enkele waarschuwing", async () => {
+    // Bewijst dat W1 niet toevallig groen is: dezelfde assertie moet kunnen falen.
+    state.tabellen.buildings = {
+      data: { id: BLD, name: "Résidence Atlas", total_tantiemes: 100 },
+      error: null,
+    };
+    state.tabellen.ownership = {
+      data: [
+        { id: "ow1", unit_id: "1", owner_id: "o1", share: 1, start_date: "2026-01-01", end_date: null, is_primary_debtor: true },
+      ],
+      error: null,
+    };
+    state.tabellen.owners = {
+      data: [{ id: "o1", full_name: "Youssef El Amrani", is_company: false, email: null, phone: null, language: "fr", is_mre: false }],
+      error: null,
+    };
+    await toon();
+
+    for (const sleutel of ["warningOwnership", "warningZeroTantieme", "warningTantiemes"]) {
+      expect(tekst(), sleutel).not.toContain(`lots.tantiemes.${sleutel}`);
+    }
+  });
+
+  it("W4 — geldige mede-eigendom geeft een toelichting, geen waarschuwing", async () => {
+    state.tabellen.buildings = {
+      data: { id: BLD, name: "Résidence Atlas", total_tantiemes: 100 },
+      error: null,
+    };
+    state.tabellen.ownership = {
+      data: [
+        { id: "ow1", unit_id: "1", owner_id: "o1", share: 0.5, start_date: "2026-01-01", end_date: null, is_primary_debtor: true },
+        { id: "ow2", unit_id: "1", owner_id: "o2", share: 0.5, start_date: "2026-01-01", end_date: null, is_primary_debtor: false },
+      ],
+      error: null,
+    };
+    state.tabellen.owners = {
+      data: [
+        { id: "o1", full_name: "Youssef El Amrani", is_company: false, email: null, phone: null, language: "fr", is_mre: false },
+        { id: "o2", full_name: "Fatima Zahra Bennani", is_company: false, email: null, phone: null, language: "fr", is_mre: false },
+      ],
+      error: null,
+    };
+    await toon();
+
+    expect(tekst()).toContain("lots.tantiemes.coOwnershipNote");
+    expect(tekst()).not.toContain("lots.tantiemes.warningOwnership");
+  });
+
+  it("W5 — de tabel en de actielijst tonen hetzelfde lot, uit hetzelfde viewmodel", async () => {
+    drieProblemen();
+    await toon();
+
+    // De tabelrij van lot 1 én zijn actiekaart; twee secties, één bron.
+    expect(screen.getAllByText("A1").length).toBeGreaterThanOrEqual(2);
+    expect(tekst()).toContain("lots.status.ambigu");
+    // De debiteurmarkering hoort NIET bij een ambigu lot zonder primaire rij.
+    expect(tekst()).not.toContain("lots.primaryDebtor");
+  });
+});
+
 // ══════════════════════════════════ BESTAAND GEDRAG VASTLEGGEN
 describe("B — bestaand gedrag vastleggen: mislukt is nooit leeg", () => {
   it("B1 (bestaand) — een mislukte gebouwquery toont de foutmelding, geen lege lijst", async () => {
