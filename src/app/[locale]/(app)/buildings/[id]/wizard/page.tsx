@@ -88,6 +88,7 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
       .select("id, building_id, code, name, sort_order, archived_at", { count: "exact" })
       .eq("building_id", buildingId)
       .eq("organization_id", org.id)
+      .order("id", { ascending: true })
       .range(van, tot),
   );
   const blocks = blockRes.status === "ok" ? blockRes.rijen : null;
@@ -97,6 +98,7 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
       .from("units")
       .select("id, building_id, block_id, label, unit_type, tantiemes", { count: "exact" })
       .eq("building_id", buildingId)
+      .order("id", { ascending: true })
       .range(van, tot),
   );
   const units = unitRes.status === "ok" ? unitRes.rijen : null;
@@ -120,6 +122,7 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
                 count: "exact",
               })
               .in("unit_id", unitIds)
+              .order("id", { ascending: true })
               .range(van, tot),
           );
   const ownership = ownershipRes.status === "ok" ? ownershipRes.rijen : null;
@@ -136,6 +139,7 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
       .from("owners")
       .select("id", { count: "exact" })
       .eq("organization_id", org.id)
+      .order("id", { ascending: true })
       .range(van, tot),
   );
   const owners = ownerRes.status === "ok" ? ownerRes.rijen : null;

@@ -1179,6 +1179,37 @@ describe("T — afkapping is fail-closed", () => {
     expect(log).not.toContain(BLD);
   });
 
+  /**
+   * T9 — de telling bewijst alleen volledigheid bij een STABIELE ordening.
+   *
+   * Zonder ORDER BY laat SQL de rijvolgorde ongespecificeerd, en twee losse
+   * `.range()`-verzoeken zijn twee losse queries: de tweede mag rijen herhalen
+   * die de eerste al gaf en andere overslaan. Het aantal klopt dan nog met
+   * `count` — evenveel rijen, niet dezelfde — en een overgeslagen niet-gekoppeld
+   * lot, vervangen door een dubbel gekoppeld lot, levert alsnog 5/5 op.
+   *
+   * Dat valt niet met een nepserver te bewijzen (die kiest zelf zijn volgorde),
+   * dus wordt hier de VOORWAARDE getoetst: elke gepagineerde bron ordent op een
+   * unieke sleutel voordat hij een bereik neemt.
+   */
+  it("T9 — elke gepagineerde bron ordent op een unieke sleutel vóór .range()", () => {
+    const bron = readFileSync(
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "wizard", "page.tsx"),
+      "utf8",
+    );
+    const lezingen = [...bron.matchAll(/leesVolledig<[^>]*>\(\s*\(van, tot\) =>([\s\S]*?)\),\n/g)];
+    expect(lezingen.length, "geen enkele gepagineerde bron gevonden").toBe(4);
+    for (const [, blok] of lezingen) {
+      const ordening = /\.order\("([^"]+)"/.exec(blok)?.[1];
+      expect(ordening, `bron zonder .order(): ${blok.slice(0, 80)}`).toBeTruthy();
+      // Alleen een unieke kolom maakt de ordening totaal; `label` of `sort_order`
+      // kan dubbelen en laat dezelfde herhaal-en-sla-over-fout bestaan.
+      expect(ordening, "ordening is niet op een unieke sleutel").toBe("id");
+      // En de ordening moet VOOR het bereik staan.
+      expect(blok.indexOf('.order("id"')).toBeLessThan(blok.indexOf(".range("));
+    }
+  });
+
   it("T7 — de foutmelding bestaat in fr, nl en ar", () => {
     for (const [naam, berichten] of [
       ["fr", fr],

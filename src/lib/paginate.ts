@@ -38,6 +38,17 @@
  * De aanroeper vertaalt dat naar `null` en de bestaande fail-closed-afhandeling
  * onderdrukt de hele checklist — dezelfde weg als een harde queryfout.
  *
+ * ── WAT DE AANROEPER MOET DOEN ─────────────────────────────────────────────
+ *
+ * De query MOET op een unieke sleutel geordend zijn (`.order("id", …)`) vóór de
+ * `.range()`. Zonder ORDER BY laat SQL de rijvolgorde ongespecificeerd, en twee
+ * losse `.range()`-verzoeken zijn twee losse queries: de tweede mag rijen
+ * herhalen die de eerste al gaf en andere overslaan. Het totaal klopt dan nog
+ * steeds met `count` — je hebt evenveel rijen, maar niet dezelfde. Voor deze
+ * checklist betekent dat een overgeslagen niet-gekoppeld lot, vervangen door een
+ * dubbel gekoppeld lot, en dus alsnog een onterechte 5/5. De telling bewijst
+ * volledigheid alleen bij een stabiele ordening.
+ *
  * Een gewijzigde `count` tussen twee pagina's is strikt genomen geen
  * afkapping maar gelijktijdige schrijfactie. Ook die telt hier als onbruikbaar:
  * een checklist die half vóór en half ná een import is gelezen, beschrijft geen
