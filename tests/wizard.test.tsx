@@ -788,3 +788,105 @@ describe("I — vertalingen", () => {
     }
   });
 });
+
+/**
+ * C — de checklist belooft niets wat het scherm erachter niet kan.
+ *
+ * Stap 1 verwees naar de gebouwpagina met de tekst "gegevens bewerken" en de
+ * belofte dat naam, adres en het verklaarde tantièmetotaal nog aan te passen
+ * waren. Dat is niet zo: de enige `buildings`-update in de hele applicatie zet
+ * `bank_name` en `bank_rib`. Wie de checklist volgde om een tantièmetotaal te
+ * corrigeren, liep vast.
+ *
+ * C1/C2 sluiten de oude bewering uit, C3 pint de nieuwe betekenis vast en C4
+ * houdt die eerlijk: verandert de bewerkbaarheid ooit, dan valt C4 en is dat
+ * het moment om de tekst mee te veranderen — niet andersom.
+ */
+describe("C — de belofte van stap 1 klopt met de werkelijkheid", () => {
+  const TALEN: Array<[string, Record<string, unknown>]> = [
+    ["fr", fr as Record<string, unknown>],
+    ["nl", nl as Record<string, unknown>],
+    ["ar", ar as Record<string, unknown>],
+  ];
+
+  const stapGebouw = (berichten: Record<string, unknown>) =>
+    ((berichten.wizard as Record<string, unknown>).steps as Record<
+      string,
+      Record<string, string>
+    >).gebouw;
+
+  /** Letterlijk de zinnen zoals ze vóór deze reparatie in de bundel stonden. */
+  const OUD: Record<string, string[]> = {
+    fr: [
+      "Vous pouvez encore corriger le nom, l'adresse ou les tantièmes déclarés.",
+      "Modifier les données",
+    ],
+    nl: [
+      "Naam, adres en het verklaarde tantièmetotaal kunt u nog aanpassen.",
+      "Gegevens bewerken",
+    ],
+    ar: ["ولا يزال بإمكانك تعديل الاسم والعنوان ومجموع الأنصبة المعلَن.", "تعديل البيانات"],
+  };
+
+  it("C1 — de oude, misleidende bewering staat in geen enkele taal meer", () => {
+    for (const [naam, berichten] of TALEN) {
+      const alles = JSON.stringify(stapGebouw(berichten));
+      for (const zin of OUD[naam]) {
+        expect(alles, `${naam}: oude tekst nog aanwezig — "${zin}"`).not.toContain(zin);
+      }
+    }
+  });
+
+  it("C2 — geen enkele stand belooft bewerken van naam, adres of tantièmes", () => {
+    // Per taal het werkwoord dat bewerken belooft, samen met het object dat
+    // niet bewerkbaar is. Beide in één zin is de fout; los van elkaar niet.
+    const VERBODEN: Record<string, { werkwoord: RegExp; object: RegExp }> = {
+      fr: { werkwoord: /modifier|corriger|éditer/i, object: /nom|adresse|tantièmes/i },
+      nl: { werkwoord: /bewerk|aanpass|wijzig/i, object: /naam|adres|tantième/i },
+      ar: { werkwoord: /تعديل|تغيير/, object: /الاسم|العنوان|الأنصبة/ },
+    };
+    for (const [naam, berichten] of TALEN) {
+      const { werkwoord, object } = VERBODEN[naam];
+      for (const [sleutel, waarde] of Object.entries(stapGebouw(berichten))) {
+        if (typeof waarde !== "string") continue;
+        const belooft = werkwoord.test(waarde) && object.test(waarde);
+        expect(
+          belooft,
+          `${naam}: steps.gebouw.${sleutel} belooft bewerken van niet-bewerkbare velden — "${waarde}"`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("C3 — de actie benoemt het enige dat op die pagina wél te wijzigen is", () => {
+    const BANK: Record<string, RegExp> = {
+      fr: /bancaires/i,
+      nl: /bankgegevens/i,
+      ar: /البنكية/,
+    };
+    for (const [naam, berichten] of TALEN) {
+      const stap = stapGebouw(berichten);
+      expect(stap.action, `${naam}: action benoemt de bankgegevens niet`).toMatch(BANK[naam]);
+      expect(stap.klaar, `${naam}: klaar benoemt de bankgegevens niet`).toMatch(BANK[naam]);
+      // De leeslink blijft beschrijven wat er te zien is, zonder bewerkbelofte.
+      expect(typeof stap.view).toBe("string");
+      expect(stap.view.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("C4 — de gebouwpagina kan werkelijk alleen de bankgegevens wijzigen", () => {
+    const bron = readFileSync(
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "actions.ts"),
+      "utf8",
+    );
+    // Elke update op `buildings` in de gebouwacties, met de velden die hij zet.
+    const updates = [
+      ...bron.matchAll(/\.from\(\s*"buildings"\s*\)\s*\.update\(\s*\{([^}]*)\}/g),
+    ].map((m) => m[1].trim());
+    expect(updates.length, "geen enkele buildings-update gevonden").toBe(1);
+    expect(updates[0]).toBe("bank_name, bank_rib");
+    // Zo lang dit klopt, is C3 een eerlijke belofte. Verandert het, dan hoort
+    // de tekst van stap 1 in dezelfde wijziging mee te bewegen.
+    expect(bron).not.toMatch(/\.from\(\s*"buildings"\s*\)[\s\S]{0,120}total_tantiemes/);
+  });
+});

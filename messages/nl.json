@@ -819,13 +819,13 @@
     "steps": {
       "gebouw": {
         "title": "Gebouw",
-        "klaar": "Het gebouw is aangemaakt. Naam, adres en het verklaarde tantièmetotaal kunt u nog aanpassen.",
+        "klaar": "Het gebouw is aangemaakt. De gebouwpagina toont naam, adres en het verklaarde tantièmetotaal; daar vult u ook de bankgegevens in.",
         "bezig": "Het gebouw is aangemaakt.",
         "tedoen": "Het gebouw is aangemaakt.",
         "optioneel": "Het gebouw is aangemaakt.",
         "wacht": "Het gebouw is aangemaakt.",
-        "action": "Gegevens bewerken",
-        "view": "Gegevens bekijken"
+        "action": "Bankgegevens invullen",
+        "view": "Gebouwgegevens bekijken"
       },
       "blokken": {
         "title": "Blokken",

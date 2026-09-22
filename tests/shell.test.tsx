@@ -163,6 +163,47 @@ describe("gebouwcontext", () => {
     // Nooit een ruwe id in de kruimels.
     expect(crumbs.textContent).not.toContain(BID);
   });
+
+  /**
+   * BR1–BR2 — wat de gebruiker en de schermlezer werkelijk krijgen.
+   *
+   * tests/nav.test.ts bewijst de AFLEIDING van de kruimels; deze twee bewijzen
+   * het GEVOLG, en dat is waar het gat zat: zonder eigen kruimel werd de
+   * gebouwnaam de laatste en zette `Breadcrumbs` `aria-current="page"` daarop,
+   * mét verlies van de overzichtslink. Alleen een render laat dat zien.
+   */
+  const SECTIEKRUIMELS: Array<[string, string]> = [
+    ["wizard", "nav.setup"],
+    ["indeling", "nav.layout"],
+    ["lots", "nav.lots"],
+    ["boekjaren", "nav.fiscalYears"],
+    ["expenses", "nav.expenses"],
+  ];
+
+  it.each(SECTIEKRUIMELS)(
+    "BR1 — op /%s draagt de sectiekruimel (%s) aria-current, niet het gebouw",
+    (segment, label) => {
+      renderShell(`/buildings/${BID}/${segment}`);
+      const crumbs = screen.getByTestId("breadcrumbs");
+      const huidig = crumbs.querySelectorAll('[aria-current="page"]');
+      expect(huidig.length).toBe(1);
+      expect(huidig[0].textContent).toBe(label);
+      expect(huidig[0].textContent).not.toBe("Résidence Atlas");
+    },
+  );
+
+  it.each(SECTIEKRUIMELS)(
+    "BR2 — op /%s blijft het gebouw een klikbare kruimel naar zijn overzicht",
+    (segment) => {
+      renderShell(`/buildings/${BID}/${segment}`);
+      const crumbs = screen.getByTestId("breadcrumbs");
+      const gebouw = within(crumbs).getByText("Résidence Atlas");
+      const link = gebouw.closest("a");
+      expect(link, "de gebouwkruimel is geen link").toBeTruthy();
+      expect(link?.getAttribute("href")).toBe(`/buildings/${BID}`);
+      expect(gebouw.getAttribute("aria-current")).toBeNull();
+    },
+  );
 });
 
 describe("gebouwkiezer", () => {

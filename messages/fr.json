@@ -819,13 +819,13 @@
     "steps": {
       "gebouw": {
         "title": "Immeuble",
-        "klaar": "L'immeuble est créé. Vous pouvez encore corriger le nom, l'adresse ou les tantièmes déclarés.",
+        "klaar": "L'immeuble est créé. Sa page affiche le nom, l'adresse et les tantièmes déclarés ; les coordonnées bancaires s'y saisissent.",
         "bezig": "L'immeuble est créé.",
         "tedoen": "L'immeuble est créé.",
         "optioneel": "L'immeuble est créé.",
         "wacht": "L'immeuble est créé.",
-        "action": "Modifier les données",
-        "view": "Voir les données"
+        "action": "Saisir les coordonnées bancaires",
+        "view": "Voir la fiche de l'immeuble"
       },
       "blokken": {
         "title": "Blocs",

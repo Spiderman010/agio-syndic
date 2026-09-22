@@ -168,6 +168,103 @@ describe("broodkruimels", () => {
     });
     expect(crumbs[2]).toEqual({ labelKey: "building", text: null, href: null });
   });
+
+  /**
+   * B1–B4 — elke sectie sluit zijn eigen kruimelketen af.
+   *
+   * Zonder eigen kruimel blijft de gebouwnaam de laatste, en die krijgt in
+   * `Breadcrumbs` `aria-current="page"`: de voorgelezen "waar ben ik" wijst dan
+   * naar het gebouw terwijl de gebruiker op een sectiepagina staat. De
+   * rendertests in tests/shell.test.tsx bewijzen dat gevolg; hier staat de
+   * afleiding zelf.
+   */
+  const SECTIES: Array<[string, string]> = [
+    ["lots", "lots"],
+    ["boekjaren", "fiscalYears"],
+    ["expenses", "expenses"],
+    ["indeling", "layout"],
+    ["wizard", "setup"],
+  ];
+
+  it.each(SECTIES)(
+    "B1 — /%s sluit af met een eigen kruimel (%s)",
+    (segment, labelKey) => {
+      const crumbs = buildBreadcrumbs({
+        ...base,
+        pathname: `/buildings/${BID}/${segment}`,
+      });
+      expect(crumbs.map((c) => c.text ?? c.labelKey)).toEqual([
+        "Syndic Atlas",
+        "buildings",
+        "Résidence Atlas",
+        labelKey,
+      ]);
+    },
+  );
+
+  it.each(SECTIES)(
+    "B2 — op /%s blijft het gebouw een klikbare tussenstap",
+    (segment) => {
+      const crumbs = buildBreadcrumbs({
+        ...base,
+        pathname: `/buildings/${BID}/${segment}`,
+      });
+      const gebouw = crumbs[2];
+      expect(gebouw.text).toBe("Résidence Atlas");
+      expect(gebouw.href).toBe(`/buildings/${BID}`);
+      // En de laatste kruimel is juist géén link.
+      expect(crumbs[crumbs.length - 1].href).toBeNull();
+    },
+  );
+
+  /**
+   * B3 — de blijvende guard. Niet één route met de hand, maar ELK item uit de
+   * gebouwnavigatie: wie later een menu-item toevoegt zonder kruimeltak, laat
+   * deze test vallen in plaats van de gebruiker met een verkeerde
+   * `aria-current` op te zadelen.
+   */
+  it("B3 — elk gebouwnavigatie-item onder het overzicht heeft een eigen kruimel", () => {
+    const overzicht = `/buildings/${BID}`;
+    for (const item of buildingNavItems(BID)) {
+      if (item.href === overzicht) continue;
+      const crumbs = buildBreadcrumbs({ ...base, pathname: item.href });
+      const laatste = crumbs[crumbs.length - 1];
+      expect(crumbs.length, `geen eigen kruimel voor ${item.href}`).toBe(4);
+      expect(laatste.labelKey, `kruimel zonder label voor ${item.href}`).toBeTruthy();
+      expect(laatste.text, `kruimel toont vrije tekst voor ${item.href}`).toBeNull();
+      // De gebouwnaam mag nooit de laatste kruimel zijn op een sectiepagina.
+      expect(laatste.text).not.toBe("Résidence Atlas");
+    }
+  });
+
+  it("B4 — elk kruimellabel dat de afleiding kan opleveren bestaat in fr, nl en ar", () => {
+    const routes = [
+      "/buildings",
+      `/buildings/${BID}`,
+      ...buildingNavItems(BID).map((i) => i.href),
+      "/owners",
+    ];
+    const sleutels = new Set<string>(["building", "breadcrumb"]);
+    for (const pathname of routes) {
+      for (const crumb of buildBreadcrumbs({
+        orgName: "Syndic Atlas",
+        buildingName: null,
+        pathname,
+      })) {
+        if (crumb.labelKey) sleutels.add(crumb.labelKey);
+      }
+    }
+    expect(sleutels.has("layout")).toBe(true);
+    expect(sleutels.has("setup")).toBe(true);
+    for (const [naam, messages] of Object.entries({ fr, nl, ar })) {
+      const nav = (messages as Record<string, unknown>).nav as
+        | Record<string, string>
+        | undefined;
+      for (const sleutel of sleutels) {
+        expect(nav?.[sleutel], `nav.${sleutel} ontbreekt in ${naam}`).toBeTruthy();
+      }
+    }
+  });
 });
 
 describe("geen dode links", () => {

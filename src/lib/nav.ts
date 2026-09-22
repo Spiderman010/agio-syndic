@@ -244,12 +244,20 @@ export function buildBreadcrumbs(args: {
   });
   if (!sub) return crumbs;
 
+  // Elke sectie uit de gebouwnavigatie hoort hier een eigen laatste kruimel te
+  // krijgen. Ontbreekt die, dan blijft de gebouwnaam de laatste kruimel en zet
+  // `Breadcrumbs` daar `aria-current="page"` op terwijl de gebruiker ergens
+  // anders staat; de overzichtslink van het gebouw verdwijnt dan bovendien.
   if (sub === "lots") {
     crumbs.push({ labelKey: "lots", text: null, href: null });
   } else if (sub === "boekjaren") {
     crumbs.push({ labelKey: "fiscalYears", text: null, href: null });
   } else if (sub === "expenses") {
     crumbs.push({ labelKey: "expenses", text: null, href: null });
+  } else if (sub === "indeling") {
+    crumbs.push({ labelKey: "layout", text: null, href: null });
+  } else if (sub === "wizard") {
+    crumbs.push({ labelKey: "setup", text: null, href: null });
   }
   return crumbs;
 }
