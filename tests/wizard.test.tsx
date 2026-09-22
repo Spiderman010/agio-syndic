@@ -285,7 +285,14 @@ describe("W — voortgang", () => {
 });
 
 // ══════════════════════════════════════════════════════ pagina
-type Resultaat = { data: unknown; error: unknown };
+/**
+ * `count` is optioneel in de fixture. Blijft hij weg, dan doet de nepserver wat
+ * een echte doet bij een volledige tabel: hij meldt precies zoveel rijen als hij
+ * levert. Zet een test hem HOGER dan de rijen die hij teruggeeft, dan bootst dat
+ * een afkapping na — de server zegt "er zijn er zeven", levert er twee, en heeft
+ * er daarna geen meer.
+ */
+type Resultaat = { data: unknown; error: unknown; count?: number };
 
 const state: { tabellen: Record<string, Resultaat>; rol: string } = { tabellen: {}, rol: "manager" };
 
@@ -309,16 +316,32 @@ function standaard(): Record<string, Resultaat> {
 }
 
 function keten(resultaat: Resultaat) {
+  // De nepserver snijdt op dezelfde inclusieve grenzen als PostgREST en meldt
+  // altijd zijn `count`. Zonder het snijden zou elke pagina dezelfde rijen
+  // teruggeven en zou de lus nooit iets kunnen bewijzen.
+  let van = 0;
+  let tot = Number.MAX_SAFE_INTEGER;
   const c: Record<string, unknown> = {};
   const zelf = () => c;
+  const lever = (): Resultaat => {
+    if (resultaat.error || !Array.isArray(resultaat.data)) return resultaat;
+    const alles = resultaat.data as unknown[];
+    const count = typeof resultaat.count === "number" ? resultaat.count : alles.length;
+    return { data: alles.slice(van, tot + 1), error: null, count };
+  };
   Object.assign(c, {
     select: zelf,
     eq: zelf,
     in: zelf,
     order: zelf,
+    range: (a: number, b: number) => {
+      van = a;
+      tot = b;
+      return c;
+    },
     maybeSingle: async () => resultaat,
     then: (res: (v: Resultaat) => unknown, rej?: (e: unknown) => unknown) =>
-      Promise.resolve(resultaat).then(res, rej),
+      Promise.resolve(lever()).then(res, rej),
   });
   return c;
 }
@@ -531,7 +554,9 @@ describe("P — dit scherm muteert niets", () => {
       "utf8",
     );
     const ownersQuery = bron.slice(bron.indexOf('.from("owners")'));
-    const select = /\.select\("([^"]*)"\)/.exec(ownersQuery)?.[1];
+    // Niet op `")` eindigen: de select draagt sinds de paginering een tweede
+    // argument (`{ count: "exact" }`). De kolomlijst blijft het eerste.
+    const select = /\.select\("([^"]*)"/.exec(ownersQuery)?.[1];
     expect(select, "de owners-query hoort een select te hebben").toBeTruthy();
     expect(select).toBe("id");
     for (const kolom of ["full_name", "email", "phone"]) {
@@ -888,5 +913,297 @@ describe("C — de belofte van stap 1 klopt met de werkelijkheid", () => {
     // Zo lang dit klopt, is C3 een eerlijke belofte. Verandert het, dan hoort
     // de tekst van stap 1 in dezelfde wijziging mee te bewegen.
     expect(bron).not.toMatch(/\.from\(\s*"buildings"\s*\)[\s\S]{0,120}total_tantiemes/);
+  });
+});
+
+/**
+ * R — de rolpoort van de checklist.
+ *
+ * De grens zelf ligt in de database (`can_write`, SECURITY DEFINER, binnen elke
+ * RPC). `canWrite()` uit `@/lib/roles` spiegelt die lijst en bestaat alleen om
+ * geen belofte te doen waarvan we weten dat de server hem weigert. Deze tests
+ * toetsen dus de BELOFTE, niet de beveiliging: een lezer mag nergens worden
+ * uitgenodigd iets in te vullen.
+ *
+ * Let op R5: de standzin van een stap is rolONafhankelijk — iedereen ziet
+ * dezelfde zin. Staat er "vult u in", dan doet die zin een schrijfbelofte aan
+ * een lezer, hoe keurig de linktekst eronder ook is.
+ */
+describe("R — een lezer wordt nergens tot schrijven uitgenodigd", () => {
+  const SCHRIJFROLLEN = ["owner", "admin", "manager", "accountant"];
+
+  it.each(SCHRIJFROLLEN)("R1 — %s ziet de schrijfactie van stap 1", async (rol) => {
+    state.rol = rol;
+    await toon();
+    expect(tekst()).toContain("steps.gebouw.action");
+    expect(tekst()).not.toContain("steps.gebouw.view");
+  });
+
+  it("R2 — een lezer ziet de schrijfactie van stap 1 NIET", async () => {
+    state.rol = "reader";
+    await toon();
+    expect(tekst()).not.toContain("steps.gebouw.action");
+  });
+
+  it("R3 — een lezer krijgt de neutrale bekijkactie op stap 1", async () => {
+    state.rol = "reader";
+    await toon();
+    expect(tekst()).toContain("steps.gebouw.view");
+  });
+
+  it("R4 — de bestemming van stap 1 is voor beide rollen de gebouwpagina", async () => {
+    state.rol = "reader";
+    await toon();
+    expect(screen.getByTestId("wizard-link-gebouw").getAttribute("href")).toBe(
+      `/buildings/${BLD}`,
+    );
+
+    cleanup();
+    state.rol = "manager";
+    await toon();
+    expect(screen.getByTestId("wizard-link-gebouw").getAttribute("href")).toBe(
+      `/buildings/${BLD}`,
+    );
+  });
+
+  it("R5 — geen enkele standzin doet een schrijfbelofte aan wie niet mag schrijven", () => {
+    // De zin wordt aan ELKE rol getoond, dus hij mag de lezer niet aanspreken
+    // met een handeling die hij niet mag uitvoeren.
+    const BELOFTE: Record<string, RegExp> = {
+      fr: /\bvous (pouvez|saisissez|créez|ajoutez|modifiez|corrigez)\b/i,
+      nl: /\b(vult u|maakt u|voegt u|wijzigt u|past u|u vult|u maakt|u voegt|u wijzigt|u past)\b/i,
+      // GEEN \b hier: Arabische letters zijn voor JS geen \w, dus een
+      // woordgrens matcht er nooit en de hele regex zou stilletjes niets doen.
+      ar: /تُدخِل|تُدخل|تُنشئ|تُضيف|تُعدّل|تُعدل/,
+    };
+    const STANDEN = ["klaar", "bezig", "tedoen", "optioneel", "wacht"];
+    for (const [naam, berichten] of [
+      ["fr", fr],
+      ["nl", nl],
+      ["ar", ar],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const steps = (berichten.wizard as Record<string, unknown>).steps as Record<
+        string,
+        Record<string, string>
+      >;
+      for (const [stap, velden] of Object.entries(steps)) {
+        for (const stand of STANDEN) {
+          const zin = velden[stand];
+          expect(
+            BELOFTE[naam].test(zin),
+            `${naam}: steps.${stap}.${stand} belooft een lezer een handeling — "${zin}"`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("R6 — elke stap heeft in elke taal een eigen schrijf- én bekijktekst", () => {
+    for (const [naam, berichten] of [
+      ["fr", fr],
+      ["nl", nl],
+      ["ar", ar],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const steps = (berichten.wizard as Record<string, unknown>).steps as Record<
+        string,
+        Record<string, string>
+      >;
+      for (const [stap, velden] of Object.entries(steps)) {
+        expect(velden.action?.trim(), `${naam}: steps.${stap}.action`).toBeTruthy();
+        expect(velden.view?.trim(), `${naam}: steps.${stap}.view`).toBeTruthy();
+        // Zijn ze gelijk, dan verandert de rol niets en is de poort schijn.
+        expect(velden.action, `${naam}: steps.${stap} action == view`).not.toBe(velden.view);
+      }
+    }
+  });
+
+  it("R8 — de bekijkteksten beloven zelf geen enkele handeling", () => {
+    // De tegenhanger van R6: die ziet alleen dat action en view verschillen. Deze
+    // pint vast WAT view mag zeggen — anders volstaat een tweede schrijfzin.
+    const SCHRIJFWERKWOORD: Record<string, RegExp> = {
+      fr: /saisir|créer|ajouter|modifier|corriger|attribuer|lier/i,
+      nl: /invullen|aanmaken|toevoegen|wijzigen|bewerken|koppelen|aanpassen/i,
+      ar: /إدخال|إنشاء|إضافة|تعديل|ربط/,
+    };
+    for (const [naam, berichten] of [
+      ["fr", fr],
+      ["nl", nl],
+      ["ar", ar],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const steps = (berichten.wizard as Record<string, unknown>).steps as Record<
+        string,
+        Record<string, string>
+      >;
+      for (const [stap, velden] of Object.entries(steps)) {
+        expect(
+          SCHRIJFWERKWOORD[naam].test(velden.view),
+          `${naam}: steps.${stap}.view belooft een handeling — "${velden.view}"`,
+        ).toBe(false);
+        // En de schrijfactie moet er juist wél een benoemen, anders is het
+        // onderscheid leeg.
+        expect(
+          SCHRIJFWERKWOORD[naam].test(velden.action),
+          `${naam}: steps.${stap}.action benoemt geen handeling — "${velden.action}"`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("R7 — geen technische rolnaam komt op het scherm", async () => {
+    for (const rol of [...SCHRIJFROLLEN, "reader"]) {
+      cleanup();
+      state.rol = rol;
+      await toon();
+      const zichtbaar = tekst();
+      for (const naam of ["owner", "admin", "manager", "accountant", "reader", "can_write"]) {
+        expect(zichtbaar, `rolnaam "${naam}" zichtbaar bij rol ${rol}`).not.toContain(naam);
+      }
+    }
+  });
+});
+
+/**
+ * T — een afgekapte bron mag nooit als complete checklist doorgaan.
+ *
+ * PostgREST kapt af op zijn `max-rows` zonder dat te melden: het verzoek slaagt
+ * en je krijgt een prefix. Voor een lijstscherm is dat hinderlijk, hier is het
+ * gevaarlijk — twintig opgehaalde lots die toevallig allemaal gekoppeld zijn,
+ * zouden "5/5, alles klaar" opleveren terwijl er tachtig zonder eigenaar staan.
+ *
+ * De fixture bootst dat na met een `count` die hoger ligt dan het aantal rijen
+ * dat de nepserver werkelijk levert: de server zegt "er zijn er zeven", levert
+ * er twee, en heeft er daarna geen meer.
+ */
+describe("T — afkapping is fail-closed", () => {
+  const compleet = () => ({
+    buildings: { data: { id: BLD, name: "Résidence Atlas" }, error: null },
+    blocks: { data: [blok({ id: "a" })], error: null },
+    units: { data: [unit({ id: "u1" }), unit({ id: "u2" })], error: null },
+    ownership: {
+      data: [own({ id: "ow1", unit_id: "u1" }), own({ id: "ow2", unit_id: "u2" })],
+      error: null,
+    },
+    owners: { data: [{ id: "o1" }], error: null },
+  });
+
+  it("T1 — een VOLLEDIGE dataset haalt gewoon 5 van 5", async () => {
+    state.tabellen = compleet();
+    await toon();
+    expect(screen.queryByTestId("wizard-unavailable")).toBeNull();
+    expect(tekst()).toContain("progress.count(5,5)");
+    expect(screen.getByTestId("wizard-compleet")).toBeTruthy();
+  });
+
+  // Elke bron apart: telling hoger dan de geleverde rijen = afkapping.
+  for (const bron of ["units", "ownership", "owners", "blocks"]) {
+    it(`T2.${bron} — een afgekapte ${bron}-bron haalt NOOIT 5 van 5`, async () => {
+      state.tabellen = compleet();
+      const huidig = state.tabellen[bron] as { data: unknown[]; error: unknown };
+      state.tabellen[bron] = { ...huidig, count: huidig.data.length + 5 };
+
+      await toon();
+
+      expect(screen.getByTestId("wizard-unavailable")).toBeTruthy();
+      expect(tekst()).not.toContain("progress.count(5,5)");
+      expect(screen.queryByTestId("wizard-compleet")).toBeNull();
+      // En geen enkele stap wordt als stand getoond.
+      expect(screen.queryByTestId("wizard-stap-lots")).toBeNull();
+    });
+  }
+
+  /**
+   * T3 is het afhankelijkheidspunt. De eigendomsquery vraagt de rijen op van de
+   * unit-ids die `units` opleverde. Levert `ownership` dan keurig ALLE rijen van
+   * die halve lotlijst, dan is die bron op zichzelf "compleet" — en toch is het
+   * antwoord onbruikbaar, want de ontbrekende lots zijn juist de niet-gekoppelde.
+   */
+  it("T3 — een volledige ownership over een AFGEKAPTE lotlijst telt niet als compleet", async () => {
+    state.tabellen = compleet();
+    const u = state.tabellen.units as { data: unknown[]; error: unknown };
+    state.tabellen.units = { ...u, count: u.data.length + 3 };
+    // ownership zelf is intern consistent: count == rijen.
+    const o = state.tabellen.ownership as { data: unknown[]; error: unknown };
+    state.tabellen.ownership = { ...o, count: o.data.length };
+
+    await toon();
+    expect(screen.getByTestId("wizard-unavailable")).toBeTruthy();
+    expect(tekst()).not.toContain("progress.count(5,5)");
+  });
+
+  it("T4 — een queryfout blijft fail-closed, net als voorheen", async () => {
+    state.tabellen = compleet();
+    state.tabellen.units = { data: null, error: dbFout("42P01") };
+    await toon();
+    expect(screen.getByTestId("wizard-unavailable")).toBeTruthy();
+    expect(tekst()).not.toContain("progress.count");
+  });
+
+  it("T5 — bij afkapping lekt geen tabelnaam, SQLSTATE of databasetekst naar het scherm", async () => {
+    state.tabellen = compleet();
+    const u = state.tabellen.units as { data: unknown[]; error: unknown };
+    state.tabellen.units = { ...u, count: 99 };
+
+    await toon();
+    const zichtbaar = tekst();
+    for (const verboden of [
+      "units",
+      "ownership",
+      "owners",
+      "blocks",
+      "PGRST",
+      "42P01",
+      "max-rows",
+      "count",
+      "range",
+      "truncat",
+    ]) {
+      expect(zichtbaar, `"${verboden}" staat op het scherm`).not.toContain(verboden);
+    }
+    // Wat de gebruiker wél krijgt is de vertaalde, neutrale melding.
+    expect(zichtbaar).toContain("loadError.title");
+    expect(zichtbaar).toContain("loadError.body");
+  });
+
+  it("T6 — het SERVERLOG benoemt de bron wel, en blijft gesaneerd", async () => {
+    state.tabellen = compleet();
+    const u = state.tabellen.units as { data: unknown[]; error: unknown };
+    state.tabellen.units = { ...u, count: 99 };
+
+    await toon();
+    const log = logs.join(" ");
+    expect(log).toContain("scope=sources");
+    expect(log).toContain("units:incomplete");
+    // Geen Postgres-tekst, geen gebouwnaam, geen id's — zelfde conventie als altijd.
+    expect(log).not.toContain("does not exist");
+    expect(log).not.toContain("Résidence Atlas");
+    expect(log).not.toContain(BLD);
+  });
+
+  it("T7 — de foutmelding bestaat in fr, nl en ar", () => {
+    for (const [naam, berichten] of [
+      ["fr", fr],
+      ["nl", nl],
+      ["ar", ar],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const fout = (berichten.wizard as Record<string, unknown>).loadError as Record<
+        string,
+        string
+      >;
+      expect(fout?.title?.trim(), `${naam}: wizard.loadError.title`).toBeTruthy();
+      expect(fout?.body?.trim(), `${naam}: wizard.loadError.body`).toBeTruthy();
+      for (const verboden of ["SQL", "PGRST", "max-rows", "PostgREST", "null"]) {
+        expect(`${fout.title} ${fout.body}`, `${naam}: technische term`).not.toContain(verboden);
+      }
+    }
+  });
+
+  it("T8 — een gewone kleine dataset gedraagt zich onveranderd", async () => {
+    // Geen expliciete count: de nepserver meldt er precies zoveel als hij levert,
+    // net als een echte server bij een tabel die in één pagina past.
+    state.tabellen = standaard();
+    await toon();
+    expect(screen.queryByTestId("wizard-unavailable")).toBeNull();
+    expect(standVan("lots")).toBe("klaar");
+    expect(standVan("koppelen")).toBe("bezig");
   });
 });

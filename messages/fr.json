@@ -819,7 +819,7 @@
     "steps": {
       "gebouw": {
         "title": "Immeuble",
-        "klaar": "L'immeuble est créé. Sa page affiche le nom, l'adresse et les tantièmes déclarés ; les coordonnées bancaires s'y saisissent.",
+        "klaar": "L'immeuble est créé. Sa page affiche le nom, l'adresse, les tantièmes déclarés et les coordonnées bancaires.",
         "bezig": "L'immeuble est créé.",
         "tedoen": "L'immeuble est créé.",
         "optioneel": "L'immeuble est créé.",

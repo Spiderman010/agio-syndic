@@ -819,7 +819,7 @@
     "steps": {
       "gebouw": {
         "title": "Gebouw",
-        "klaar": "Het gebouw is aangemaakt. De gebouwpagina toont naam, adres en het verklaarde tantièmetotaal; daar vult u ook de bankgegevens in.",
+        "klaar": "Het gebouw is aangemaakt. De gebouwpagina toont naam, adres, het verklaarde tantièmetotaal en de bankgegevens.",
         "bezig": "Het gebouw is aangemaakt.",
         "tedoen": "Het gebouw is aangemaakt.",
         "optioneel": "Het gebouw is aangemaakt.",
@@ -851,7 +851,7 @@
         "title": "Eigenaren",
         "klaar": "{aantal} eigenaar/eigenaren in de organisatie, beschikbaar voor al uw gebouwen.",
         "bezig": "{aantal} eigenaar/eigenaren in de organisatie.",
-        "tedoen": "Nog geen eigenaren. U maakt ze één keer aan; ze gelden voor al uw gebouwen.",
+        "tedoen": "Nog geen eigenaren. Ze worden één keer aangemaakt en gelden voor al uw gebouwen.",
         "optioneel": "{aantal} eigenaar/eigenaren.",
         "wacht": "Nog geen eigenaren.",
         "action": "Eigenaren aanmaken",

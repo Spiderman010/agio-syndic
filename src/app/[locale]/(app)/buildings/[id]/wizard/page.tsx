@@ -8,6 +8,7 @@ import Badge from "@/components/ui/Badge";
 import Empty, { EmptyBody, EmptyTitle } from "@/components/ui/Empty";
 import { assembleOwnership, type OwnershipRow } from "@/lib/ownership";
 import { bouwChecklist, type Stap, type StapStand } from "@/lib/wizard";
+import { leesVolledig } from "@/lib/paginate";
 import type { BlockRow, LayoutUnitRow } from "@/lib/layout";
 
 /**
@@ -81,28 +82,47 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
   }
   const building = buildingRes.data as { id: string; name: string };
 
-  const blockRes = await supabase
-    .from("blocks")
-    .select("id, building_id, code, name, sort_order, archived_at")
-    .eq("building_id", buildingId)
-    .eq("organization_id", org.id);
-  const blocks = blockRes.error ? null : ((blockRes.data ?? []) as BlockRow[]);
+  const blockRes = await leesVolledig<BlockRow>((van, tot) =>
+    supabase
+      .from("blocks")
+      .select("id, building_id, code, name, sort_order, archived_at", { count: "exact" })
+      .eq("building_id", buildingId)
+      .eq("organization_id", org.id)
+      .range(van, tot),
+  );
+  const blocks = blockRes.status === "ok" ? blockRes.rijen : null;
 
-  const unitRes = await supabase
-    .from("units")
-    .select("id, building_id, block_id, label, unit_type, tantiemes")
-    .eq("building_id", buildingId);
-  const units = unitRes.error ? null : ((unitRes.data ?? []) as LayoutUnitRow[]);
+  const unitRes = await leesVolledig<LayoutUnitRow>((van, tot) =>
+    supabase
+      .from("units")
+      .select("id, building_id, block_id, label, unit_type, tantiemes", { count: "exact" })
+      .eq("building_id", buildingId)
+      .range(van, tot),
+  );
+  const units = unitRes.status === "ok" ? unitRes.rijen : null;
 
-  const unitIds = (units ?? []).map((u) => u.id);
+  // De eigendomsquery hangt AF van de lotlijst: hij vraagt de rijen op van deze
+  // unit-ids. Een volledig gelezen `ownership` over een afgekapte lotlijst is
+  // daarom nóg steeds onbruikbaar — je mist dan niet de eigendomsrijen maar de
+  // lots zelf, en juist die ontbrekende lots zijn de niet-gekoppelde. Zodra
+  // `units` niet compleet is, telt deze bron dus meteen als mislukt in plaats
+  // van dat er een "volledige" lijst over een halve lotlijst wordt gelegd.
+  const unitIds = units === null ? null : units.map((u) => u.id);
   const ownershipRes =
-    unitIds.length > 0
-      ? await supabase
-          .from("ownership")
-          .select("id, unit_id, owner_id, share, start_date, end_date, is_primary_debtor")
-          .in("unit_id", unitIds)
-      : { data: [] as OwnershipRow[], error: null };
-  const ownership = ownershipRes.error ? null : ((ownershipRes.data ?? []) as OwnershipRow[]);
+    unitIds === null
+      ? ({ status: "error", reden: "onvolledig" } as const)
+      : unitIds.length === 0
+        ? ({ status: "ok", rijen: [] as OwnershipRow[] } as const)
+        : await leesVolledig<OwnershipRow>((van, tot) =>
+            supabase
+              .from("ownership")
+              .select("id, unit_id, owner_id, share, start_date, end_date, is_primary_debtor", {
+                count: "exact",
+              })
+              .in("unit_id", unitIds)
+              .range(van, tot),
+          );
+  const ownership = ownershipRes.status === "ok" ? ownershipRes.rijen : null;
 
   // Eigenaren zijn organisatiebreed; de scope is hier de ORGANISATIE, niet het
   // gebouw. Stap 4 vraagt immers "is er iemand om te koppelen".
@@ -111,20 +131,23 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
   // AANTAL. Ook `full_name` ophalen zou van elke eigenaar in de organisatie een
   // persoonsgegeven naar de server halen waar niets mee gebeurt, en die payload
   // groeit mee met het klantenbestand. Wat je niet nodig hebt, haal je niet op.
-  const ownerRes = await supabase
-    .from("owners")
-    .select("id")
-    .eq("organization_id", org.id);
-  const owners = ownerRes.error ? null : ((ownerRes.data ?? []) as { id: string }[]);
+  const ownerRes = await leesVolledig<{ id: string }>((van, tot) =>
+    supabase
+      .from("owners")
+      .select("id", { count: "exact" })
+      .eq("organization_id", org.id)
+      .range(van, tot),
+  );
+  const owners = ownerRes.status === "ok" ? ownerRes.rijen : null;
 
   const bronnen = assembleOwnership({ units, ownership, owners });
   if (blocks === null || bronnen.status === "error") {
-    const codes: string[] = [];
-    if (blockRes.error) codes.push(`blocks:${blockRes.error.code}`);
-    if (unitRes.error) codes.push(`units:${unitRes.error.code}`);
-    if (ownershipRes.error) codes.push(`ownership:${ownershipRes.error.code}`);
-    if (ownerRes.error) codes.push(`owners:${ownerRes.error.code}`);
-    logWizardFout("sources", codes);
+    logWizardFout("sources", [
+      ...bronCode("blocks", blockRes),
+      ...bronCode("units", unitRes),
+      ...bronCode("ownership", ownershipRes),
+      ...bronCode("owners", ownerRes),
+    ]);
     return <Fout t={t} />;
   }
 
@@ -267,4 +290,15 @@ function Fout({ t }: { t: Awaited<ReturnType<typeof getTranslations>> }) {
  */
 function logWizardFout(scope: "building" | "sources", codes: readonly string[]) {
   console.error(`[wizard] load-failed scope=${scope} ${codes.join(" ") || "sqlstate=?"}`);
+}
+
+/**
+ * De vingerafdruk van één mislukte bron: de naam plus de SQLSTATE, of
+ * `incomplete` wanneer de query wél slaagde maar geen volledige lijst opleverde.
+ * Dat onderscheid staat alleen in het serverlog — het scherm toont in beide
+ * gevallen dezelfde vertaalde melding, zonder tabelnaam of databasefout.
+ */
+function bronCode(bron: string, res: { status: string; reden?: string; code?: string }): string[] {
+  if (res.status === "ok") return [];
+  return [`${bron}:${res.reden === "query" ? (res.code ?? "?") : "incomplete"}`];
 }
