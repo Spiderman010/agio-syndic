@@ -4,32 +4,20 @@ import { createClient } from "@/lib/supabase/server";
 import { canWrite } from "@/lib/roles";
 import { Link } from "@/navigation";
 import Card, { CardHeader } from "@/components/ui/Card";
-import Badge from "@/components/ui/Badge";
-import Table, { Td, Th } from "@/components/ui/Table";
 import Empty, { EmptyBody, EmptyTitle } from "@/components/ui/Empty";
-import { buttonClasses } from "@/components/ui/Button";
-import { formatDate } from "@/lib/money";
-import {
-  assembleOwnership,
-  classifyOwnership,
-  currentOwnerships,
-  groupByUnit,
-  lotStatus,
-  matchesUnitSearch,
-  tantiemeOverzicht,
-  transferability,
-  type LotStatus,
-  type OwnerRow,
-  type OwnershipRow,
-  type TransferBlockReason,
-  type UnitRow,
-} from "@/lib/ownership";
+import { assembleOwnership, type OwnerRow, type OwnershipRow, type UnitRow } from "@/lib/ownership";
+import { bouwLotsOverzicht } from "@/lib/lots";
 import LotForm from "./LotForm";
-import { LinkFirstOwnerForm, TransferOwnershipForm } from "./OwnershipForms";
-import { createLot, updateLot } from "./actions";
+import LotActions from "./LotActions";
+import LotsStats from "./LotsStats";
+import LotsTable from "./LotsTable";
+import LotsToolbar from "./LotsToolbar";
+import { createLot } from "./actions";
 
 /**
- * Lots van ÉÉN gebouw.
+ * Lots van ÉÉN gebouw. Deze module is de ORKESTRATOR: guards, queries,
+ * foutafhandeling en het samenstellen van één viewmodel. Alles wat daarna
+ * gerenderd wordt, staat in een eigen servercomponent.
  *
  * ── GEBOUWSCOPE ────────────────────────────────────────────────────────────
  *
@@ -64,9 +52,14 @@ import { createLot, updateLot } from "./actions";
  *                                  debiteur is. Zie `classifyOwnership`.
  *
  * Een lot waar niet kan worden overgedragen is dus NIET automatisch financieel
- * onveilig. De vorige versie behandelde die twee als één, waardoor elke geldige
- * mede-eigendom een waarschuwing opleverde over lastenoproepen die in
- * werkelijkheid gewoon slagen.
+ * onveilig.
+ *
+ * ── ÉÉN BEREKENING PER LOT ─────────────────────────────────────────────────
+ *
+ * Tabel en actielijst liepen hiervoor elk hun eigen lus over de zichtbare lots
+ * en riepen beide `classifyOwnership` aan. Dat waren twee onafhankelijke
+ * antwoorden op dezelfde vraag. `bouwLotsOverzicht` berekent het één keer; alle
+ * secties lezen dezelfde rij.
  */
 export default async function LotsPage({
   params,
@@ -149,10 +142,14 @@ export default async function LotsPage({
     return <Fout t={t} />;
   }
 
-  const perUnit = groupByUnit(bronnen.ownership);
-  const ownerNaam = new Map(bronnen.owners.map((o) => [o.id, o.full_name]));
-  const overzicht = tantiemeOverzicht(bronnen.units, perUnit, building.total_tantiemes);
-  const zichtbaar = bronnen.units.filter((u) => matchesUnitSearch(u, zoekterm));
+  const overzicht = bouwLotsOverzicht({
+    units: bronnen.units,
+    ownership: bronnen.ownership,
+    owners: bronnen.owners,
+    verklaard: building.total_tantiemes,
+    zoekterm,
+    vandaag,
+  });
 
   return (
     <>
@@ -163,257 +160,44 @@ export default async function LotsPage({
         </p>
       </header>
 
-      <section aria-labelledby="lots-tantiemes-kop" className="mb-5">
-        <Card>
-          <CardHeader title={<span id="lots-tantiemes-kop">{t("tantiemes.title")}</span>} />
-          <dl className="m-0 grid grid-cols-2 gap-3 text-[0.875rem] lg:grid-cols-4">
-            <Cijfer label={t("tantiemes.assigned")} waarde={overzicht.toegekend} />
-            <Cijfer label={t("tantiemes.declared")} waarde={overzicht.verklaard} />
-            <Cijfer
-              label={t("tantiemes.difference")}
-              waarde={overzicht.verschil}
-              alarm={overzicht.verschil !== 0}
-            />
-            <Cijfer label={t("tantiemes.lots")} waarde={bronnen.units.length} />
-          </dl>
+      <LotsStats
+        overzicht={overzicht.samenvatting}
+        aantalLots={overzicht.alle.length}
+        t={t}
+      />
 
-          {/*
-            Elke conditie krijgt een EIGEN regel. Een ternary toonde er hooguit
-            één, waardoor een gebouw met zowel een eigendomsprobleem als een
-            tantièmeprobleem de tweede oorzaak verzweeg — de gebruiker loste er
-            dan één op en liep tegen dezelfde weigering aan.
-
-            Alle drie zijn geformuleerd als HUIDIGE stand van de basisgegevens.
-            De engine oordeelt over de lots binnen de scope van de gekozen
-            verdeelregel en op de opgegeven oproepdatum; dat weet dit scherm
-            niet, dus het belooft geen geslaagde oproep.
-
-            `role="alert"` alleen waar de weigering onvoorwaardelijk is zodra het
-            lot meedoet: een ontbrekende of ambigue eigenaar (ALLOC_NO_OWNER,
-            ALLOC_AMBIGUOUS_OWNER) en een tantième van nul
-            (ALLOC_WEIGHT_MISSING). Het controletotaal krijgt `role="status"`:
-            de engine kent daar een gedocumenteerde afwijking
-            (`partial_denominator_until_year`), dus die is niet absoluut.
-
-            Geldige mede-eigendom staat hier bewust NIET tussen; die krijgt
-            onderaan een neutrale toelichting.
-          */}
-          {!overzicht.eigendomVeilig ? (
-            <p className="mt-3 mb-0 text-[0.8rem] text-crit" role="alert">
-              {t("tantiemes.warningOwnership")}
-            </p>
-          ) : null}
-
-          {overzicht.zonderTantieme > 0 ? (
-            <p className="mt-2 mb-0 text-[0.8rem] text-warn" role="alert">
-              {t("tantiemes.warningZeroTantieme", { count: overzicht.zonderTantieme })}
-            </p>
-          ) : null}
-
-          {!overzicht.tantiemesKloppen ? (
-            <p className="mt-2 mb-0 text-[0.8rem] text-warn" role="status">
-              {t("tantiemes.warningTantiemes")}
-            </p>
-          ) : null}
-
-          {overzicht.medeEigendom > 0 ? (
-            <p className="mt-2 mb-0 text-[0.8rem] text-ink-soft">
-              {t("tantiemes.coOwnershipNote", { count: overzicht.medeEigendom })}
-            </p>
-          ) : null}
-        </Card>
-      </section>
-
-      <section aria-labelledby="lots-zoek-kop" className="mb-5">
-        <Card>
-          <form method="get" className="flex flex-wrap items-end gap-2">
-            <div className="min-w-0 grow">
-              <label className="label" htmlFor="lots-q">
-                <span id="lots-zoek-kop">{t("search.label")}</span>
-              </label>
-              <input
-                id="lots-q"
-                name="q"
-                type="search"
-                defaultValue={zoekterm}
-                placeholder={t("search.placeholder")}
-                className="input w-full"
-              />
-            </div>
-            <button type="submit" className={buttonClasses("secondary")}>
-              {t("search.submit")}
-            </button>
-          </form>
-        </Card>
-      </section>
+      <LotsToolbar zoekterm={zoekterm} t={t} />
 
       {/*
-        Drie toestanden, één vorm, DRIE BOODSCHAPPEN. Ze delen nu `Empty` zodat
-        ze als één systeem ogen, maar ze houden elk hun eigen sleutel en hun
-        eigen `role`. Inklappen tot één generieke "leeg" zou de enige vraag
-        wegpoetsen die ertoe doet: weten we dat er niets is, of weten we het
-        niet? De mislukte variant komt hier trouwens nooit langs — die keert
-        al eerder terug via `Fout`.
+        Drie toestanden, één vorm, DRIE BOODSCHAPPEN. Ze delen `Empty` zodat ze
+        als één systeem ogen, maar ze houden elk hun eigen sleutel en hun eigen
+        `role`. Inklappen tot één generieke "leeg" zou de enige vraag wegpoetsen
+        die ertoe doet: weten we dat er niets is, of weten we het niet? De
+        mislukte variant komt hier trouwens nooit langs — die keert al eerder
+        terug via `Fout`.
       */}
-      {bronnen.units.length === 0 ? (
+      {overzicht.alle.length === 0 ? (
         <Empty testId="lots-empty">
           <EmptyTitle>{t("empty.title")}</EmptyTitle>
           <EmptyBody>{t("empty.body")}</EmptyBody>
         </Empty>
-      ) : zichtbaar.length === 0 ? (
+      ) : overzicht.zichtbaar.length === 0 ? (
         <Empty role="status" testId="lots-no-results">
           <EmptyBody>{t("search.none", { term: zoekterm })}</EmptyBody>
         </Empty>
       ) : (
-        <Table caption={t("title")}>
-          <thead>
-            <tr>
-              <Th>{t("table.label")}</Th>
-              <Th>{t("table.type")}</Th>
-              <Th>{t("table.floor")}</Th>
-              <Th align="end">{t("table.area")}</Th>
-              <Th align="end">{t("table.tantiemes")}</Th>
-              <Th>{t("table.owner")}</Th>
-              <Th>{t("table.status")}</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {zichtbaar.map((unit) => {
-              const rijen = perUnit.get(unit.id) ?? [];
-              const lopend = currentOwnerships(rijen);
-              const klassering = classifyOwnership(rijen);
-              const status = lotStatus(unit, rijen);
-              return (
-                <tr key={unit.id}>
-                  <Td>
-                    <span className="font-medium">{unit.label}</span>
-                  </Td>
-                  <Td>{t(`unitType.${unit.unit_type}` as never)}</Td>
-                  <Td>{unit.floor ?? "—"}</Td>
-                  <Td align="end">{unit.area_m2 == null ? "—" : String(unit.area_m2)}</Td>
-                  <Td align="end">{unit.tantiemes}</Td>
-                  <Td>
-                    {klassering.nActive === 0 ? (
-                      <span className="text-[0.8rem] text-ink-soft">{t("noOwner")}</span>
-                    ) : (
-                      <span className="flex flex-col gap-0.5">
-                        {lopend.map((rij) => (
-                          <span key={rij.id} className="flex flex-wrap items-center gap-1">
-                            <Link
-                              href={`/owners/${rij.owner_id}`}
-                              className="text-[0.85rem] text-primary"
-                            >
-                              {ownerNaam.get(rij.owner_id) ?? t("unknownOwner")}
-                            </Link>
-                            {/*
-                              Bij gedeelde eigendom moet zichtbaar zijn WIE de
-                              vordering krijgt. De statuskolom toont dan niet
-                              altijd "mede-eigendom" — een tantième van nul weegt
-                              zwaarder — dus deze markering staat hier, waar hij
-                              onafhankelijk van die precedentie blijft staan.
-                            */}
-                            {klassering.nActive > 1 && rij.is_primary_debtor ? (
-                              <Badge tone="info">{t("primaryDebtor")}</Badge>
-                            ) : null}
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                  </Td>
-                  <Td>
-                    <StatusBadge status={status} label={t(`status.${status}` as never)} />
-                  </Td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
+        <LotsTable regels={overzicht.zichtbaar} t={t} />
       )}
 
-      {mayWrite && zichtbaar.length > 0 ? (
-        <section aria-labelledby="lots-acties-kop" className="mt-6">
-          <h2 id="lots-acties-kop" className="mb-2 text-[1rem] font-semibold">
-            {t("actions.title")}
-          </h2>
-          <div className="flex flex-col gap-3">
-            {zichtbaar.map((unit) => {
-              const rijen = perUnit.get(unit.id) ?? [];
-              const klassering = classifyOwnership(rijen);
-              const heeftHistorie = rijen.length > 0;
-              // Alle vooraf kenbare precondities van transfer_ownership in één
-              // geteste beslissing, inclusief het datumvenster. Eerder stond
-              // hier alleen `nActive === 1`, waardoor een formulier verscheen
-              // dat gegarandeerd faalde bij een niet-primaire eigenaar, een
-              // gedeeltelijk aandeel, of een eigendom die vandaag begon.
-              const overdracht = transferability(rijen, vandaag);
-
-              return (
-                <Card key={unit.id}>
-                  <details>
-                    <summary className="cursor-pointer text-[0.9rem] font-medium">
-                      {unit.label}
-                    </summary>
-
-                    <div className="mt-3 flex flex-col gap-4">
-                      <div>
-                        <h3 className="mt-0 mb-2 text-[0.85rem] font-semibold text-ink-soft">
-                          {t("form.editTitle")}
-                        </h3>
-                        <LotForm
-                          action={updateLot}
-                          buildingId={buildingId}
-                          submitLabel={t("form.save")}
-                          lot={unit}
-                        />
-                      </div>
-
-                      <div>
-                        <h3 className="mt-0 mb-2 text-[0.85rem] font-semibold text-ink-soft">
-                          {t("ownership.title")}
-                        </h3>
-                        {!heeftHistorie ? (
-                          <LinkFirstOwnerForm
-                            buildingId={buildingId}
-                            unitId={unit.id}
-                            owners={bronnen.owners}
-                            today={vandaag}
-                          />
-                        ) : overdracht.allowed ? (
-                          <TransferOwnershipForm
-                            buildingId={buildingId}
-                            unitId={unit.id}
-                            current={overdracht.current}
-                            currentOwnerName={
-                              ownerNaam.get(overdracht.current.owner_id) ?? t("unknownOwner")
-                            }
-                            owners={bronnen.owners}
-                            minDate={overdracht.minDate}
-                            maxDate={overdracht.maxDate}
-                            defaultDate={overdracht.defaultDate}
-                            periodLabel={t("ownership.since", {
-                              date: formatDate(overdracht.current.start_date, locale),
-                            })}
-                          />
-                        ) : (
-                          <Blokkade
-                            reason={overdracht.reason}
-                            t={t}
-                            debiteur={
-                              klassering.debiteur
-                                ? (ownerNaam.get(klassering.debiteur.owner_id) ??
-                                  t("unknownOwner"))
-                                : t("unknownOwner")
-                            }
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </details>
-                </Card>
-              );
-            })}
-          </div>
-        </section>
+      {mayWrite && overzicht.zichtbaar.length > 0 ? (
+        <LotActions
+          buildingId={buildingId}
+          locale={locale}
+          regels={overzicht.zichtbaar}
+          owners={bronnen.owners}
+          vandaag={vandaag}
+          t={t}
+        />
       ) : null}
 
       {mayWrite ? (
@@ -434,85 +218,6 @@ export default async function LotsPage({
   );
 }
 
-function Cijfer({
-  label,
-  waarde,
-  alarm = false,
-}: {
-  label: string;
-  waarde: number;
-  alarm?: boolean;
-}) {
-  return (
-    <div className="min-w-0">
-      <dt className="m-0 text-[0.72rem] text-ink-soft">{label}</dt>
-      <dd
-        className={`m-0 text-[1.05rem] font-semibold [font-variant-numeric:tabular-nums] ${
-          alarm ? "text-warn" : "text-ink"
-        }`}
-      >
-        {waarde}
-      </dd>
-    </div>
-  );
-}
-
-/**
- * Waarom de eenvoudige overdrachtsflow hier niet beschikbaar is.
- *
- * Alleen `ambigu` is een echte blokkade voor lastenoproepen en krijgt daarom
- * `role="alert"`. De overige redenen zijn grenzen van DEZE flow: het lot is
- * financieel gewoon in orde, er kan hier alleen niet worden overgedragen. Die
- * krijgen een neutrale statusmelding, zodat een beheerder niet gaat zoeken naar
- * een probleem dat er niet is.
- *
- * Geen RPC-, tabel- of foutcodenamen in de teksten; de sleutels verwijzen naar
- * de vertaling.
- */
-const BLOKKADE_TEKST: Record<TransferBlockReason, string> = {
-  geenEigenaar: "ownership.historyOnly",
-  medeEigendom: "ownership.coOwned",
-  ambigu: "ownership.ambiguous",
-  nietPrimair: "ownership.notPrimary",
-  gedeeltelijkAandeel: "ownership.partialShare",
-  vandaagBegonnen: "ownership.tooRecent",
-};
-
-function Blokkade({
-  reason,
-  t,
-  debiteur,
-}: {
-  reason: TransferBlockReason;
-  t: Awaited<ReturnType<typeof getTranslations>>;
-  debiteur: string;
-}) {
-  const blokkerend = reason === "ambigu";
-  const sleutel = BLOKKADE_TEKST[reason];
-  return (
-    <p
-      className={`m-0 text-[0.8rem] ${blokkerend ? "text-crit" : "text-ink-soft"}`}
-      role={blokkerend ? "alert" : "status"}
-    >
-      {reason === "medeEigendom" ? t(sleutel as never, { debiteur }) : t(sleutel as never)}
-    </p>
-  );
-}
-
-const STATUS_TONE: Record<LotStatus, "good" | "warn" | "crit" | "info"> = {
-  compleet: "good",
-  zonderEigenaar: "crit",
-  // Blokkeert de oproep net zo hard als een lot zonder eigenaar.
-  ambigu: "crit",
-  // GEEN waarschuwing: een aangewezen debiteur maakt dit een geldige toestand.
-  medeEigendom: "info",
-  zonderTantieme: "warn",
-};
-
-function StatusBadge({ status, label }: { status: LotStatus; label: string }) {
-  return <Badge tone={STATUS_TONE[status]}>{label}</Badge>;
-}
-
 function Fout({ t }: { t: Awaited<ReturnType<typeof getTranslations>> }) {
   return (
     <Empty toon="fout" role="alert" testId="lots-unavailable">
@@ -526,9 +231,7 @@ function Fout({ t }: { t: Awaited<ReturnType<typeof getTranslations>> }) {
  * Wat een LEZER ziet waar een schrijver het aanmaakformulier krijgt.
  *
  * `role="status"`, nadrukkelijk niet `alert`: er is niets mis. Lezen is een
- * geldige rol en geen storing waar iemand achteraan moet. Hiervoor stond hier
- * niets — het scherm was voor een lezer stilzwijgend onvolledig, zonder enige
- * aanwijzing waarom de knoppen ontbraken.
+ * geldige rol en geen storing waar iemand achteraan moet.
  *
  * De conditie is `!mayWrite`, nooit "heeft geen leesrecht": elke rol die deze
  * pagina bereikt heeft leesrecht, dus die tak zou onbereikbaar zijn.

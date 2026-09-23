@@ -769,6 +769,11 @@ describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
       join(REPO, "src", "lib", "wizard.ts"),
       join(REPO, "src", "lib", "paginate.ts"),
       join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "wizard", "page.tsx"),
+      join(REPO, "src", "lib", "lots.ts"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsStats.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsToolbar.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsTable.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotActions.tsx"),
     ];
     // De oorspronkelijke versie zocht letterlijk naar `className="..."`. Dat
     // mist ALLES wat via `cn(...)` loopt, en dat is precies hoe elke primitive
@@ -1223,7 +1228,7 @@ describe("M — mede-eigendom: de app spiegelt de engine exact", () => {
     expect(uit.medeEigendom).toBe(1);
 
     const bron = readFileSync(
-      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsStats.tsx"),
       "utf8",
     );
     // Drie ONAFHANKELIJKE condities, elk met een eigen blok; geen ternary die er
@@ -1463,7 +1468,7 @@ describe("GR — gebouwbrede gereedheid", () => {
     // De pagina rendert deze drie als ONAFHANKELIJKE blokken; een ternary zou er
     // maar één kunnen tonen en de andere twee verzwijgen.
     const bron = readFileSync(
-      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsStats.tsx"),
       "utf8",
     );
     expect(bron).not.toMatch(/overzicht\.eigendomVeilig\s*\n?\s*\?\s*t\("tantiemes/);
@@ -1478,7 +1483,7 @@ describe("GR — gebouwbrede gereedheid", () => {
 
   it("GR4 — role=alert alleen voor de onvoorwaardelijk blokkerende meldingen", () => {
     const bron = readFileSync(
-      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsStats.tsx"),
       "utf8",
     );
     // Het controletotaal kent in de engine een gedocumenteerde afwijking
@@ -1551,7 +1556,7 @@ describe("BL — blokkadeteksten", () => {
 
   it("BL4 — elke blokkadereden heeft een tekst en het formulier krijgt grenzen", () => {
     const bron = readFileSync(
-      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "page.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotActions.tsx"),
       "utf8",
     );
     for (const reden of [
