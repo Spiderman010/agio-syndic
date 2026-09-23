@@ -30,7 +30,8 @@ export type NavIcon =
   | "expenses"
   | "owners"
   | "lots"
-  | "layout";
+  | "layout"
+  | "setup";
 
 export type NavItem = {
   /** Stabiele sleutel, ook gebruikt als React-key en als testanker. */
@@ -116,6 +117,16 @@ export function buildingNavItems(buildingId: string): NavItem[] {
       labelKey: "overview",
       icon: "overview",
       exact: true,
+    },
+    {
+      // Instellen: de begeleide checklist. Staat vóór de indeling omdat dit het
+      // scherm is waar je begint bij een nieuw gebouw. Strikt read-only — hij
+      // leest de stand en wijst naar de schermen waar het werk gebeurt.
+      key: "building-setup",
+      href: `${base}/wizard`,
+      labelKey: "setup",
+      icon: "setup",
+      exact: false,
     },
     {
       // De indeling: welke blokken bestaan er en wat hangt eraan. Strikt
@@ -233,12 +244,20 @@ export function buildBreadcrumbs(args: {
   });
   if (!sub) return crumbs;
 
+  // Elke sectie uit de gebouwnavigatie hoort hier een eigen laatste kruimel te
+  // krijgen. Ontbreekt die, dan blijft de gebouwnaam de laatste kruimel en zet
+  // `Breadcrumbs` daar `aria-current="page"` op terwijl de gebruiker ergens
+  // anders staat; de overzichtslink van het gebouw verdwijnt dan bovendien.
   if (sub === "lots") {
     crumbs.push({ labelKey: "lots", text: null, href: null });
   } else if (sub === "boekjaren") {
     crumbs.push({ labelKey: "fiscalYears", text: null, href: null });
   } else if (sub === "expenses") {
     crumbs.push({ labelKey: "expenses", text: null, href: null });
+  } else if (sub === "indeling") {
+    crumbs.push({ labelKey: "layout", text: null, href: null });
+  } else if (sub === "wizard") {
+    crumbs.push({ labelKey: "setup", text: null, href: null });
   }
   return crumbs;
 }
