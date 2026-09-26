@@ -16,8 +16,19 @@ import type { LotStatus } from "@/lib/ownership";
  * ding staat dat er financieel toe doet: geldige mede-eigendom is `info`, GEEN
  * waarschuwing. Een aangewezen debiteur maakt dat een ondersteunde toestand,
  * en de allocation engine weigert zo'n lot niet.
+ *
+ * Hij wordt hier GEËXPORTEERD en niet naar een eigen module verplaatst: de
+ * mobiele kaarten hebben dezelfde tonen nodig, en één import is beter dan een
+ * tweede tabel die kan gaan afwijken. Deze plek is bovendien waar de blijvende
+ * test (`S8`) hem controleert.
+ *
+ * ── DESKTOP ────────────────────────────────────────────────────────────────
+ *
+ * Deze component is de DESKTOPweergave. De pagina verbergt hem onder `md` en
+ * toont daar `LotsCards`; beide krijgen exact dezelfde viewmodelregels, zodat er
+ * geen tweede lezing van dezelfde data ontstaat.
  */
-const STATUS_TONE: Record<LotStatus, "good" | "warn" | "crit" | "info"> = {
+export const STATUS_TONE: Record<LotStatus, "good" | "warn" | "crit" | "info"> = {
   compleet: "good",
   zonderEigenaar: "crit",
   // Blokkeert de oproep net zo hard als een lot zonder eigenaar.
@@ -49,16 +60,27 @@ export default function LotsTable({
       </thead>
       <tbody>
         {regels.map((regel) => (
-          <tr key={regel.unit.id}>
-            <Td>
-              <span className="font-medium">{regel.unit.label}</span>
+          // Hoverachtergrond: met zeven kolommen is het over een rij heen lezen
+          // de moeilijkste beweging, en dit houdt de rij visueel bij elkaar.
+          // `transition-colors` blijft weg — een tabel die nakleurt leest traag.
+          <tr key={regel.unit.id} className="hover:bg-surface-2">
+            <Td className="whitespace-nowrap">
+              <span className="font-medium text-ink">{regel.unit.label}</span>
             </Td>
             <Td>{t(`unitType.${regel.unit.unit_type}` as never)}</Td>
-            <Td>{regel.unit.floor ?? "—"}</Td>
-            <Td align="end">
-              {regel.unit.area_m2 == null ? "—" : String(regel.unit.area_m2)}
+            <Td>
+              {regel.unit.floor ?? <span className="text-ink-soft">—</span>}
             </Td>
-            <Td align="end">{regel.unit.tantiemes}</Td>
+            <Td align="end">
+              {regel.unit.area_m2 == null ? (
+                <span className="text-ink-soft">—</span>
+              ) : (
+                String(regel.unit.area_m2)
+              )}
+            </Td>
+            <Td align="end" className="font-medium">
+              {regel.unit.tantiemes}
+            </Td>
             <Td>
               {regel.aantalActief === 0 ? (
                 <span className="text-[0.8rem] text-ink-soft">{t("noOwner")}</span>

@@ -641,6 +641,28 @@
       "submit": "Zoeken",
       "none": "Geen lot gevonden voor “{term}”."
     },
+    "filters": {
+      "type": "Type",
+      "status": "Status",
+      "sort": "Sorteren op",
+      "direction": "Sorteerrichting",
+      "allTypes": "Alle types",
+      "allStatuses": "Alle statussen",
+      "apply": "Toepassen",
+      "activeTitle": "Actieve filters",
+      "clearAll": "Alles wissen",
+      "remove": "Filter {filter} verwijderen",
+      "none": "Geen lot komt overeen met de actieve filters.",
+      "count": "{zichtbaar} van {totaal} lots",
+      "sortBy": {
+        "label": "Lotnummer",
+        "tantiemes": "Tantièmes"
+      },
+      "dir": {
+        "asc": "Oplopend",
+        "desc": "Aflopend"
+      }
+    },
     "empty": {
       "title": "Nog geen lots",
       "body": "Voeg hieronder het eerste lot toe. Daarna kunt u er een eigenaar aan koppelen."

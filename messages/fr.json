@@ -641,6 +641,28 @@
       "submit": "Rechercher",
       "none": "Aucun lot trouvé pour « {term} »."
     },
+    "filters": {
+      "type": "Type",
+      "status": "Statut",
+      "sort": "Trier par",
+      "direction": "Sens du tri",
+      "allTypes": "Tous les types",
+      "allStatuses": "Tous les statuts",
+      "apply": "Appliquer",
+      "activeTitle": "Filtres actifs",
+      "clearAll": "Tout effacer",
+      "remove": "Retirer le filtre {filter}",
+      "none": "Aucun lot ne correspond aux filtres actifs.",
+      "count": "{zichtbaar} sur {totaal} lots",
+      "sortBy": {
+        "label": "Numéro de lot",
+        "tantiemes": "Tantièmes"
+      },
+      "dir": {
+        "asc": "Croissant",
+        "desc": "Décroissant"
+      }
+    },
     "empty": {
       "title": "Aucun lot",
       "body": "Ajoutez le premier lot ci-dessous. Vous pourrez ensuite y rattacher un propriétaire."

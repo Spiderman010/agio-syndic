@@ -7,8 +7,16 @@ import Card, { CardHeader } from "@/components/ui/Card";
 import Empty, { EmptyBody, EmptyTitle } from "@/components/ui/Empty";
 import { assembleOwnership, type OwnerRow, type OwnershipRow, type UnitRow } from "@/lib/ownership";
 import { bouwLotsOverzicht } from "@/lib/lots";
+import {
+  heeftActieveFilters,
+  leesLotsFilters,
+  typesUitData,
+  type LotsZoekParams,
+} from "@/lib/lotsFilters";
 import LotForm from "./LotForm";
 import LotActions from "./LotActions";
+import LotsCards from "./LotsCards";
+import LotsFilterChips from "./LotsFilterChips";
 import LotsStats from "./LotsStats";
 import LotsTable from "./LotsTable";
 import LotsToolbar from "./LotsToolbar";
@@ -66,15 +74,14 @@ export default async function LotsPage({
   searchParams,
 }: {
   params: Promise<{ locale: string; id: string }>;
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<LotsZoekParams>;
 }) {
   const { locale, id: buildingId } = await params;
-  const { q } = await searchParams;
+  const zoekParams = await searchParams;
   const { org, role } = await requireOrg();
   const t = await getTranslations("lots");
   const supabase = await createClient();
   const mayWrite = canWrite(role);
-  const zoekterm = (q ?? "").trim();
   const vandaag = new Date().toISOString().slice(0, 10);
 
   const buildingRes = await supabase
@@ -142,12 +149,19 @@ export default async function LotsPage({
     return <Fout t={t} />;
   }
 
+  // De filters worden pas hier gelezen: welke lottypes GELDIG zijn volgt uit de
+  // data van dit gebouw, niet uit een lijst in de code. `units.unit_type` heeft
+  // geen check-constraint, dus een vaste lijst zou een aanname zijn die de
+  // database niet afdwingt.
+  const types = typesUitData(bronnen.units);
+  const filters = leesLotsFilters(zoekParams, types);
+
   const overzicht = bouwLotsOverzicht({
     units: bronnen.units,
     ownership: bronnen.ownership,
     owners: bronnen.owners,
     verklaard: building.total_tantiemes,
-    zoekterm,
+    filters,
     vandaag,
   });
 
@@ -166,7 +180,9 @@ export default async function LotsPage({
         t={t}
       />
 
-      <LotsToolbar zoekterm={zoekterm} t={t} />
+      <LotsToolbar filters={filters} types={types} t={t} />
+
+      <LotsFilterChips buildingId={buildingId} filters={filters} t={t} />
 
       {/*
         Drie toestanden, één vorm, DRIE BOODSCHAPPEN. Ze delen `Empty` zodat ze
@@ -175,6 +191,11 @@ export default async function LotsPage({
         die ertoe doet: weten we dat er niets is, of weten we het niet? De
         mislukte variant komt hier trouwens nooit langs — die keert al eerder
         terug via `Fout`.
+
+        Sinds er ook op type en status gefilterd kan worden, is "niets gevonden"
+        niet meer per definitie een ZOEKresultaat. Staat er een zoekterm, dan
+        blijft de bestaande zin met die term staan; filtert iemand alleen op type
+        of status, dan zou die zin een term tonen die hij nooit heeft ingetypt.
       */}
       {overzicht.alle.length === 0 ? (
         <Empty testId="lots-empty">
@@ -183,10 +204,36 @@ export default async function LotsPage({
         </Empty>
       ) : overzicht.zichtbaar.length === 0 ? (
         <Empty role="status" testId="lots-no-results">
-          <EmptyBody>{t("search.none", { term: zoekterm })}</EmptyBody>
+          <EmptyBody>
+            {filters.zoekterm !== ""
+              ? t("search.none", { term: filters.zoekterm })
+              : t("filters.none")}
+          </EmptyBody>
         </Empty>
       ) : (
-        <LotsTable regels={overzicht.zichtbaar} t={t} />
+        <>
+          {/* Dezelfde regels, twee vormen. De zichtbaarheid loopt uitsluitend via
+              de bestaande Tailwind-breakpoint `md`; er is geen JavaScript en geen
+              media-query in code die de twee uit elkaar kan laten lopen. */}
+          <div className="md:hidden">
+            <LotsCards regels={overzicht.zichtbaar} t={t} />
+          </div>
+          <div className="hidden md:block">
+            <LotsTable regels={overzicht.zichtbaar} t={t} />
+          </div>
+          {heeftActieveFilters(filters) ? (
+            <p
+              className="mt-2 mb-0 text-[0.8rem] text-ink-soft [font-variant-numeric:tabular-nums]"
+              role="status"
+              data-testid="lots-count"
+            >
+              {t("filters.count", {
+                zichtbaar: overzicht.zichtbaar.length,
+                totaal: overzicht.alle.length,
+              })}
+            </p>
+          ) : null}
+        </>
       )}
 
       {mayWrite && overzicht.zichtbaar.length > 0 ? (

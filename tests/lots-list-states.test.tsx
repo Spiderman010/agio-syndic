@@ -100,8 +100,17 @@ vi.mock("@/lib/org", () => ({
 }));
 
 vi.mock("@/navigation", () => ({
-  Link: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
+  // De rest van de props MOET mee: zonder spread verdwijnt `data-testid` en
+  // lijkt een chip die er wel staat afwezig. Dat kostte eerder al een
+  // foutdiagnose op een ander scherm.
+  Link: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: React.ReactNode } & Record<string, unknown>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   ),
 }));
 
@@ -133,6 +142,15 @@ async function toon(q?: string) {
   const el = await LotsPage({
     params: Promise.resolve({ locale: "fr", id: BLD }),
     searchParams: Promise.resolve(q === undefined ? {} : { q }),
+  });
+  return render(el);
+}
+
+/** Fase B: dezelfde pagina, maar met het volledige filtercontract in de URL. */
+async function toonMet(params: Record<string, string>) {
+  const el = await LotsPage({
+    params: Promise.resolve({ locale: "fr", id: BLD }),
+    searchParams: Promise.resolve(params),
   });
   return render(el);
 }
@@ -504,5 +522,294 @@ describe("N — nieuw: alleen-lezen en het gesaneerde log", () => {
 
     const arLots = (ar as Record<string, unknown>).lots as Record<string, unknown>;
     expect((arLots.readOnly as Record<string, string>).title).toMatch(/[؀-ۿ]/);
+  });
+});
+
+// ══════════════════════════════════════════════ FASE B: TWEE WEERGAVEN, ÉÉN LIJST
+/**
+ * D* — desktop en mobiel tonen DEZELFDE lots.
+ *
+ * Dit is de kern van de responsive stap. Er zijn nu twee weergaven van dezelfde
+ * data, en het risico is niet dat één van de twee stuk is — het is dat ze
+ * langzaam uit elkaar gaan lopen. Daarom wordt hier niet getoetst "de kaart
+ * bestaat", maar: dezelfde lots, dezelfde statussen, dezelfde eigenaars.
+ *
+ * jsdom evalueert geen media queries, dus BEIDE weergaven staan hier in de DOM.
+ * Dat is geen tekortkoming van de test maar precies wat hem mogelijk maakt: de
+ * twee zijn naast elkaar te vergelijken. Welke van de twee een echte browser
+ * verbergt, hoort bij de browser-QA.
+ */
+describe("D — desktoptabel en mobiele kaarten dragen dezelfde regels", () => {
+  function drieLots() {
+    return {
+      buildings: { data: { id: BLD, name: "Résidence Atlas", total_tantiemes: 600 }, error: null },
+      units: {
+        data: [
+          unit("1", { label: "A-01", unit_type: "appartement", tantiemes: 300, floor: "1", area_m2: 80 }),
+          unit("2", { label: "B-02", unit_type: "parking", tantiemes: 100, floor: null, area_m2: null }),
+          unit("3", { label: "C-03", unit_type: "cave", tantiemes: 200, floor: "-1", area_m2: 12 }),
+        ],
+        error: null,
+      },
+      ownership: {
+        data: [
+          {
+            id: "ow1",
+            unit_id: "1",
+            owner_id: "o1",
+            share: 1,
+            start_date: "2026-01-01",
+            end_date: null,
+            is_primary_debtor: true,
+          },
+        ],
+        error: null,
+      },
+      owners: { data: [{ id: "o1", full_name: "Youssef El Amrani" }], error: null },
+    };
+  }
+
+  it("D1 — beide weergaven bestaan en bevatten exact dezelfde lotlabels", async () => {
+    state.tabellen = drieLots();
+    await toon();
+
+    const kaarten = screen.getByTestId("lots-cards");
+    const tabel = screen.getByRole("region", { name: "lots.title" });
+
+    for (const label of ["A-01", "B-02", "C-03"]) {
+      expect(kaarten.textContent, `kaart ${label}`).toContain(label);
+      expect(tabel.textContent, `tabel ${label}`).toContain(label);
+    }
+    // Eén kaart per lot, niet meer en niet minder.
+    expect(kaarten.querySelectorAll("article")).toHaveLength(3);
+  });
+
+  it("D2 — de statusbadge per lot is in beide weergaven dezelfde", async () => {
+    state.tabellen = drieLots();
+    await toon();
+
+    const kaarten = screen.getByTestId("lots-cards");
+    const tabel = screen.getByRole("region", { name: "lots.title" });
+    // Lot 1 heeft een eigenaar, 2 en 3 niet.
+    expect(kaarten.textContent).toContain("lots.status.compleet");
+    expect(tabel.textContent).toContain("lots.status.compleet");
+    expect(kaarten.textContent).toContain("lots.status.zonderEigenaar");
+    expect(tabel.textContent).toContain("lots.status.zonderEigenaar");
+  });
+
+  it("D3 — de eigenaar staat in beide weergaven, met dezelfde link", async () => {
+    state.tabellen = drieLots();
+    await toon();
+
+    const kaarten = screen.getByTestId("lots-cards");
+    const tabel = screen.getByRole("region", { name: "lots.title" });
+    for (const waar of [kaarten, tabel]) {
+      expect(waar.textContent).toContain("Youssef El Amrani");
+      const link = Array.from(waar.querySelectorAll("a")).find((a) =>
+        a.textContent?.includes("Youssef"),
+      );
+      expect(link?.getAttribute("href")).toBe("/owners/o1");
+    }
+    // En "geen eigenaar" staat er ook in beide.
+    expect(kaarten.textContent).toContain("lots.noOwner");
+    expect(tabel.textContent).toContain("lots.noOwner");
+  });
+
+  it("D4 — de kaart toont de zakelijke kern: type, tantièmes, status, eigenaar", async () => {
+    state.tabellen = drieLots();
+    await toon();
+
+    const kaart = screen.getByTestId("lots-card-1");
+    expect(kaart.tagName).toBe("ARTICLE");
+    expect(kaart.textContent).toContain("A-01");
+    expect(kaart.textContent).toContain("lots.unitType.appartement");
+    expect(kaart.textContent).toContain("300");
+    expect(kaart.textContent).toContain("lots.status.compleet");
+    expect(kaart.textContent).toContain("Youssef El Amrani");
+  });
+
+  it("D5 — een lot zonder verdieping of oppervlakte laat die velden WEG", async () => {
+    // Op een telefoon kost een rij met "—" plaats zonder iets te zeggen.
+    state.tabellen = drieLots();
+    await toon();
+
+    const zonder = screen.getByTestId("lots-card-2");
+    expect(zonder.textContent).not.toContain("lots.table.floor");
+    expect(zonder.textContent).not.toContain("lots.table.area");
+    // Terwijl het lot dat ze wél heeft, ze ook toont.
+    const met = screen.getByTestId("lots-card-3");
+    expect(met.textContent).toContain("lots.table.floor");
+    expect(met.textContent).toContain("lots.table.area");
+  });
+});
+
+// ══════════════════════════════════════════════ FASE B: FILTERS OP DE PAGINA
+describe("P — filters, chips en de lege toestanden", () => {
+  function tweeTypes() {
+    return {
+      buildings: { data: { id: BLD, name: "Résidence Atlas", total_tantiemes: 400 }, error: null },
+      units: {
+        data: [
+          unit("1", { label: "A-01", unit_type: "appartement", tantiemes: 300 }),
+          unit("2", { label: "P-01", unit_type: "parking", tantiemes: 100 }),
+        ],
+        error: null,
+      },
+      ownership: { data: [], error: null },
+      owners: { data: [], error: null },
+    };
+  }
+
+  it("PB1 — het typefilter perkt beide weergaven in", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ type: "parking" });
+
+    const kaarten = screen.getByTestId("lots-cards");
+    expect(kaarten.textContent).toContain("P-01");
+    expect(kaarten.textContent).not.toContain("A-01");
+    expect(screen.getByTestId("lots-cards").querySelectorAll("article")).toHaveLength(1);
+  });
+
+  it("PB2 — het statusfilter werkt op de pagina", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ status: "zonderEigenaar" });
+    // Beide lots zijn zonder eigenaar, dus beide blijven staan.
+    expect(screen.getByTestId("lots-cards").querySelectorAll("article")).toHaveLength(2);
+
+    cleanup();
+    await toonMet({ status: "compleet" });
+    expect(screen.getByTestId("lots-no-results")).toBeTruthy();
+  });
+
+  it("PB3 — een ONBEKENDE URL-waarde toont de volledige lijst, niet een lege", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ type: "bestaatniet", status: "ooknietbestaand", sort: "raar", dir: "zijwaarts" });
+
+    expect(screen.queryByTestId("lots-no-results")).toBeNull();
+    expect(screen.getByTestId("lots-cards").querySelectorAll("article")).toHaveLength(2);
+    // En er verschijnt geen chip voor een filter dat niet filtert.
+    expect(screen.queryByTestId("lots-chips")).toBeNull();
+  });
+
+  it("PB4 — sorteren verandert de volgorde in beide weergaven", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ sort: "tantiemes", dir: "asc" });
+
+    const labels = Array.from(
+      screen.getByTestId("lots-cards").querySelectorAll("article h3"),
+    ).map((h) => h.textContent);
+    expect(labels).toEqual(["P-01", "A-01"]);
+  });
+
+  it("PB5 — actieve filters krijgen chips, elk met een href die alleen die ene weghaalt", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ q: "P", type: "parking" });
+
+    const zoekChip = screen.getByTestId("lots-chip-q");
+    const typeChip = screen.getByTestId("lots-chip-type");
+    // De zoekchip laat het type staan, en omgekeerd.
+    expect(zoekChip.getAttribute("href")).toContain("type=parking");
+    expect(zoekChip.getAttribute("href")).not.toContain("q=");
+    expect(typeChip.getAttribute("href")).toContain("q=P");
+    expect(typeChip.getAttribute("href")).not.toContain("type=");
+    // Beide houden het gebouw vast.
+    expect(zoekChip.getAttribute("href")).toContain(`/buildings/${BLD}/lots`);
+  });
+
+  it("PB6 — alles wissen leidt naar de lijst zonder één lotsparameter", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ q: "P", type: "parking", status: "zonderEigenaar", sort: "tantiemes", dir: "desc" });
+
+    const wis = screen.getByTestId("lots-chips-clear");
+    expect(wis.getAttribute("href")).toBe(`/buildings/${BLD}/lots`);
+  });
+
+  it("PB7 — chips zijn links en geen knoppen", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ type: "parking" });
+    expect(screen.getByTestId("lots-chip-type").tagName).toBe("A");
+    expect(screen.getByTestId("lots-chips").querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("PB8 — geen filters, geen chips en geen teller", async () => {
+    state.tabellen = tweeTypes();
+    await toon();
+    expect(screen.queryByTestId("lots-chips")).toBeNull();
+    expect(screen.queryByTestId("lots-count")).toBeNull();
+  });
+
+  it("PB9 — met filters verschijnt hoeveel van hoeveel er staat", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ type: "parking" });
+    const teller = screen.getByTestId("lots-count");
+    expect(teller.getAttribute("role")).toBe("status");
+    expect(teller.textContent).toContain("1");
+    expect(teller.textContent).toContain("2");
+  });
+
+  it("PB10 — LEGE DATABASE, GEEN RESULTAAT en FOUT blijven drie verschillende dingen", async () => {
+    // Leeg gebouw.
+    state.tabellen = {
+      ...tweeTypes(),
+      units: { data: [], error: null },
+    };
+    await toon();
+    expect(screen.getByTestId("lots-empty")).toBeTruthy();
+    expect(screen.queryByTestId("lots-no-results")).toBeNull();
+    expect(screen.queryByTestId("lots-unavailable")).toBeNull();
+
+    // Wel lots, filter sluit alles uit.
+    cleanup();
+    state.tabellen = tweeTypes();
+    await toonMet({ q: "bestaatniet" });
+    expect(screen.getByTestId("lots-no-results")).toBeTruthy();
+    expect(screen.queryByTestId("lots-empty")).toBeNull();
+    expect(screen.queryByTestId("lots-unavailable")).toBeNull();
+
+    // Mislukte bron.
+    cleanup();
+    state.tabellen = { ...tweeTypes(), units: { data: null, error: dbFout("42P01") } };
+    await toon();
+    expect(screen.getByTestId("lots-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("lots-empty")).toBeNull();
+    expect(screen.queryByTestId("lots-no-results")).toBeNull();
+  });
+
+  it("PB11 — zonder zoekterm zegt 'niets gevonden' NIET dat er op een term is gezocht", async () => {
+    // Anders staat er een term op het scherm die de gebruiker nooit intypte.
+    state.tabellen = tweeTypes();
+    await toonMet({ status: "compleet" });
+    const melding = screen.getByTestId("lots-no-results");
+    expect(melding.textContent).toContain("lots.filters.none");
+    expect(melding.textContent).not.toContain("lots.search.none");
+  });
+
+  it("PB12 — MET zoekterm blijft de bestaande zin met die term staan", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ q: "bestaatniet" });
+    const melding = screen.getByTestId("lots-no-results");
+    expect(melding.textContent).toContain("lots.search.none");
+    expect(melding.textContent).toContain("bestaatniet");
+  });
+
+  it("PB13 — de toolbar biedt alleen de types die in dit gebouw voorkomen", async () => {
+    state.tabellen = tweeTypes();
+    await toon();
+    const typeSelect = document.getElementById("lots-type") as HTMLSelectElement;
+    const waarden = Array.from(typeSelect.querySelectorAll("option")).map((o) => o.getAttribute("value"));
+    expect(waarden).toEqual(["", "appartement", "parking"]);
+    // `cave` bestaat in de vertalingen maar niet in dit gebouw.
+    expect(waarden).not.toContain("cave");
+  });
+
+  it("PB14 — de toolbar houdt de actieve keuzes vast na navigatie", async () => {
+    state.tabellen = tweeTypes();
+    await toonMet({ q: "P-0", type: "parking", status: "zonderEigenaar", sort: "tantiemes", dir: "desc" });
+
+    expect((document.getElementById("lots-q") as HTMLInputElement).value).toBe("P-0");
+    expect((document.getElementById("lots-type") as HTMLSelectElement).value).toBe("parking");
+    expect((document.getElementById("lots-status") as HTMLSelectElement).value).toBe("zonderEigenaar");
+    expect((document.getElementById("lots-sort") as HTMLSelectElement).value).toBe("tantiemes");
+    expect((document.getElementById("lots-dir") as HTMLSelectElement).value).toBe("desc");
   });
 });

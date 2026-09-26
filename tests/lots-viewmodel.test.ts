@@ -6,6 +6,7 @@ import fr from "../messages/fr.json";
 import nl from "../messages/nl.json";
 import ar from "../messages/ar.json";
 import { bouwLotsOverzicht, type LotsOverzichtBronnen } from "@/lib/lots";
+import { leesLotsFilters, type LotsFilters } from "@/lib/lotsFilters";
 import {
   classifyOwnership,
   lotStatus,
@@ -78,15 +79,34 @@ const EIGENAARS = [
   { id: "o2", full_name: "Fatima Zahra Bennani" },
 ] as unknown as OwnerRow[];
 
-function bronnen(over: Partial<LotsOverzichtBronnen> = {}): LotsOverzichtBronnen {
+/**
+ * De standaardfilters: niets gefilterd, queryvolgorde.
+ *
+ * Gaat door `leesLotsFilters` heen en wordt niet met de hand opgeschreven, zodat
+ * de tests met dezelfde standaarden werken als de pagina.
+ */
+function standaardFilters(): LotsFilters {
+  return leesLotsFilters({}, []);
+}
+
+/**
+ * `zoekterm` blijft hier bestaan als afkorting voor `filters.zoekterm`. Dat is
+ * bewust: de bestaande V-tests over zoeken blijven daardoor LETTERLIJK
+ * ongewijzigd, en dat is precies het bewijs dat fase B de zoeksemantiek niet
+ * heeft aangeraakt.
+ */
+function bronnen(
+  over: Partial<LotsOverzichtBronnen> & { zoekterm?: string } = {},
+): LotsOverzichtBronnen {
+  const { zoekterm, filters, ...rest } = over;
   return {
     units: [],
     ownership: [],
     owners: EIGENAARS,
     verklaard: 1000,
-    zoekterm: "",
+    filters: filters ?? { ...standaardFilters(), zoekterm: zoekterm ?? "" },
     vandaag: VANDAAG,
-    ...over,
+    ...rest,
   };
 }
 

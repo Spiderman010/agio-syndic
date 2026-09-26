@@ -21,6 +21,14 @@ import type { TantiemeOverzicht } from "@/lib/ownership";
  *
  * Geldige mede-eigendom staat hier bewust NIET tussen de waarschuwingen: die is
  * ondersteund en krijgt een neutrale toelichting zonder rol.
+ *
+ * ── WAT FASE B HIER VERANDERDE ─────────────────────────────────────────────
+ *
+ * Alleen de PRESENTATIE van de vier cijfers: elk staat nu op een eigen vlak met
+ * een rand, en het afwijkende verschil kleurt zijn hele tegel in plaats van
+ * alleen het getal. De vier condities, hun onderlinge ORDE en hun `role` zijn
+ * niet aangeraakt — `M14`, `GR3` en `GR4` lezen dit bestand letterlijk, en
+ * `W1`..`W5` renderen het.
  */
 export default function LotsStats({
   overzicht,
@@ -38,7 +46,7 @@ export default function LotsStats({
     <section aria-labelledby="lots-tantiemes-kop" className="mb-5">
       <Card>
         <CardHeader title={<span id="lots-tantiemes-kop">{t("tantiemes.title")}</span>} />
-        <dl className="m-0 grid grid-cols-2 gap-3 text-[0.875rem] lg:grid-cols-4">
+        <dl className="m-0 grid grid-cols-2 gap-2 text-[0.875rem] sm:gap-3 lg:grid-cols-4">
           <Cijfer label={t("tantiemes.assigned")} waarde={overzicht.toegekend} />
           <Cijfer label={t("tantiemes.declared")} waarde={overzicht.verklaard} />
           <Cijfer
@@ -87,10 +95,14 @@ function Cijfer({
   alarm?: boolean;
 }) {
   return (
-    <div className="min-w-0">
-      <dt className="m-0 text-[0.72rem] text-ink-soft">{label}</dt>
+    <div
+      className={`min-w-0 rounded-lg border px-3 py-2 ${
+        alarm ? "border-warn-soft bg-warn-soft" : "border-line bg-surface-2"
+      }`}
+    >
+      <dt className="m-0 text-[0.7rem] leading-tight text-ink-soft">{label}</dt>
       <dd
-        className={`m-0 text-[1.05rem] font-semibold [font-variant-numeric:tabular-nums] ${
+        className={`m-0 mt-0.5 text-[1.15rem] leading-tight font-semibold [font-variant-numeric:tabular-nums] ${
           alarm ? "text-warn" : "text-ink"
         }`}
       >

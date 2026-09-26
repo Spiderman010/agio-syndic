@@ -774,6 +774,9 @@ describe("D — geen overflowgevoelige of richtingsgebonden opmaak", () => {
       join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsToolbar.tsx"),
       join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsTable.tsx"),
       join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotActions.tsx"),
+      join(REPO, "src", "lib", "lotsFilters.ts"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsCards.tsx"),
+      join(REPO, "src", "app", "[locale]", "(app)", "buildings", "[id]", "lots", "LotsFilterChips.tsx"),
     ];
     // De oorspronkelijke versie zocht letterlijk naar `className="..."`. Dat
     // mist ALLES wat via `cn(...)` loopt, en dat is precies hoe elke primitive

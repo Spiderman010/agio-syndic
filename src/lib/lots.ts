@@ -1,4 +1,9 @@
 import {
+  STANDAARD_DIR,
+  STANDAARD_SORT,
+  type LotsFilters,
+} from "@/lib/lotsFilters";
+import {
   classifyOwnership,
   currentOwnerships,
   groupByUnit,
@@ -37,10 +42,21 @@ import {
  *
  * ── VOLGORDE ───────────────────────────────────────────────────────────────
  *
- * De lots komen in de volgorde binnen die de query oplegt (`order("label")`) en
- * gaan er in DIEZELFDE volgorde weer uit. Hier wordt niet gesorteerd. Zou deze
- * module zelf sorteren, dan zou de zichtbare volgorde stilzwijgend kunnen
+ * De lots komen binnen in de volgorde die de query oplegt (`order("label")`).
+ * ZONDER expliciete sortering blijft die volgorde ONAANGERAAKT: er wordt dan
+ * geen enkele sorteerfunctie aangeroepen. Dat is met opzet, want de collatie van
+ * Postgres is niet die van JavaScript — `A10` vóór of ná `A9` kan per taal
+ * verschillen, en een JS-sortering op label zou de zichtbare volgorde stil laten
  * afwijken van wat de database teruggaf.
+ *
+ * Daarom:
+ *
+ *   label + asc   (standaard) -> queryvolgorde, niets aangeraakt
+ *   label + desc              -> die volgorde OMGEKEERD; exact de inverse van de
+ *                                databasecollatie, dus nog steeds niet zelf
+ *                                vergeleken
+ *   tantiemes                 -> numeriek, met de queryvolgorde als tie-break,
+ *                                zodat gelijke tantièmes stabiel blijven staan
  *
  * ── AFGELEIDE PRESENTATIEDATA, MEER NIET ───────────────────────────────────
  *
@@ -85,7 +101,7 @@ export type LotRegel = {
 export type LotsOverzicht = {
   /** Alle lots van het gebouw, in queryvolgorde. */
   alle: readonly LotRegel[];
-  /** De lots die aan de zoekterm voldoen, in dezelfde volgorde. */
+  /** De lots die aan ALLE actieve filters voldoen, in de gevraagde volgorde. */
   zichtbaar: readonly LotRegel[];
   /** Ongewijzigd doorgegeven uit `tantiemeOverzicht`. */
   samenvatting: TantiemeOverzicht;
@@ -97,8 +113,8 @@ export type LotsOverzichtBronnen = {
   owners: readonly OwnerRow[];
   /** `buildings.total_tantiemes`, de declaratieve controlewaarde. */
   verklaard: number;
-  /** Al getrimde zoekterm; leeg betekent: alles zichtbaar. */
-  zoekterm: string;
+  /** Het volledige filter- en sorteercontract uit de URL. */
+  filters: LotsFilters;
   /** Vandaag in ISO, voor het overdrachtsvenster. */
   vandaag: string;
 };
@@ -108,7 +124,7 @@ export function bouwLotsOverzicht({
   ownership,
   owners,
   verklaard,
-  zoekterm,
+  filters,
   vandaag,
 }: LotsOverzichtBronnen): LotsOverzicht {
   const perUnit = groupByUnit(ownership);
@@ -147,9 +163,37 @@ export function bouwLotsOverzicht({
 
   return {
     alle,
-    // Filteren op de UNIT, precies zoals voorheen; de zoekfunctie kijkt niet
-    // naar eigendom. Geen sortering: de queryvolgorde blijft staan.
-    zichtbaar: alle.filter((regel) => matchesUnitSearch(regel.unit, zoekterm)),
+    zichtbaar: sorteer(alle.filter((regel) => hoortErbij(regel, filters)), filters),
     samenvatting: tantiemeOverzicht(units, perUnit, verklaard),
   };
+}
+
+/**
+ * Voldoet dit lot aan alle actieve filters?
+ *
+ * De zoekterm loopt nog steeds door `matchesUnitSearch` — ongewijzigd, dus
+ * zoeken doet precies wat het vóór deze stap deed. Het type komt van de unit en
+ * de status uit `regel.status`, die al door `lotStatus()` is bepaald: hier wordt
+ * geen eigendomsregel herhaald, alleen een al berekende uitkomst vergeleken.
+ */
+function hoortErbij(regel: LotRegel, filters: LotsFilters): boolean {
+  if (!matchesUnitSearch(regel.unit, filters.zoekterm)) return false;
+  if (filters.type !== null && regel.unit.unit_type !== filters.type) return false;
+  if (filters.status !== null && regel.status !== filters.status) return false;
+  return true;
+}
+
+function sorteer(lijst: readonly LotRegel[], filters: LotsFilters): readonly LotRegel[] {
+  if (filters.sort === STANDAARD_SORT) {
+    // Queryvolgorde, of exact de inverse daarvan. Geen eigen vergelijking.
+    return filters.dir === STANDAARD_DIR ? lijst : [...lijst].reverse();
+  }
+
+  // Alleen `tantiemes` blijft over: een getal dat elk lot heeft. De index is de
+  // tie-break, zodat gelijke tantièmes de queryvolgorde houden.
+  const teken = filters.dir === "desc" ? -1 : 1;
+  return lijst
+    .map((regel, index) => ({ regel, index }))
+    .sort((a, b) => teken * (a.regel.unit.tantiemes - b.regel.unit.tantiemes) || a.index - b.index)
+    .map(({ regel }) => regel);
 }
